@@ -745,8 +745,9 @@ proc rebuildVision*(world: World) {.measure.} =
   if sameVisionKeys(visionSkipNow, world.visionSkipKeys):
     return
   world.visionBlockers.setLen(sightTerrain.blockerHeights.len)
-  for i, value in sightTerrain.blockerHeights:
-    world.visionBlockers[i] = value
+  if world.visionBlockers.len > 0:
+    copyMem(world.visionBlockers[0].addr, sightTerrain.blockerHeights[0].addr,
+      world.visionBlockers.len * sizeof(int16))
   for tower in world.buildings:
     if tower.hp > 0:
       world.addVisionBlocker(tower.position, 28)

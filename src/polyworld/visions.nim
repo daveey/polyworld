@@ -357,6 +357,11 @@ proc revealVision*(
       ):
         visible[index] = 255
 
+proc sameHeights(a, b: seq[int16]): bool =
+  ## Compares two height grids with one memory comparison.
+  a.len == b.len and (a.len == 0 or
+    equalMem(a[0].unsafeAddr, b[0].unsafeAddr, a.len * sizeof(int16)))
+
 proc revealVisionCached*(
     cache: var VisionCache,
     visible: var seq[uint8],
@@ -367,7 +372,8 @@ proc revealVisionCached*(
   ## Retains only the previous frame's source rays. Terrain or blocker changes
   ## invalidate every entry, including height changes without moving a source.
   if cache.width != width or cache.height != height or
-      cache.terrain != terrainHeights or cache.blockers != blockerHeights:
+      not sameHeights(cache.terrain, terrainHeights) or
+      not sameHeights(cache.blockers, blockerHeights):
     cache.sources.clear()
     cache.width = width
     cache.height = height
