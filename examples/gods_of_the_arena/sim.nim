@@ -796,11 +796,22 @@ proc rebuildVision*(world: World) {.measure.} =
 
 proc visible*(world: World, team: Team, position: WorldPoint): bool =
   ## Returns whether a position is currently visible to one team.
-  if world.teamVisible[team.ord].len != mapTiles() * mapTiles():
+  ## Same cells as sightTiles, unrolled because this runs per unit pair.
+  let tiles = mapTiles()
+  if world.teamVisible[team.ord].len != tiles * tiles:
     return false
-  for tile in sightTiles(position):
-    if world.teamVisible[team.ord][tile.z * mapTiles() + tile.x] != 0:
-      return true
+  let
+    x = floorWorldTile(position.x) + tiles div 2
+    z = floorWorldTile(position.z) + tiles div 2
+    firstX = max(0, x - int(position.x mod WorldScale == 0))
+    firstZ = max(0, z - int(position.z mod WorldScale == 0))
+    lastX = min(tiles - 1, x)
+    lastZ = min(tiles - 1, z)
+  for tileZ in firstZ .. lastZ:
+    let row = tileZ * tiles
+    for tileX in firstX .. lastX:
+      if world.teamVisible[team.ord][row + tileX] != 0:
+        return true
 
 proc enemyFort(team: Team): int =
   ## Returns the opposing fort index for a team.
