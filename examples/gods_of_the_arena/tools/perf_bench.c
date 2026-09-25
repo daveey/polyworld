@@ -147,19 +147,17 @@ static int digest(const char *mode, int64_t seed0, int nseeds, int max_ticks) {
   return 0;
 }
 
-typedef struct { const char *mode; int worlds; double seconds; int id; long steps; double elapsed; } job_t;
+typedef struct { const char *mode; int worlds; double seconds; int id; long steps; double elapsed; void **ws; int64_t next_seed; } job_t;
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 
 static void *bench_worker(void *arg) {
   job_t *j = arg;
   uint32_t mask = mode_mask(j->mode);
-  void **ws = malloc(sizeof(void *) * j->worlds);
-  int64_t next_seed = 1000 + 100000ll * j->id;
-  for (int k = 0; k < j->worlds; k++) {
-    ws[k] = make_world(j->mode, next_seed, 28800, 0);
-    g_reset(ws[k], next_seed++);
-  }
+  /* gota_create is not thread-safe (process-wide preset check), so handles
+   * are created on the main thread (make_worlds) as a trainer does. */
+  void **ws = j->ws;
+  int64_t next_seed = j->next_seed;
   float *obs = malloc(sizeof(float) * SEATS * OBS);
   float resets[SEATS], acting[SEATS], rewards[SEATS], terms[SEATS];
   int32_t acts[SEATS * HEADS];
@@ -176,8 +174,17 @@ static void *bench_worker(void *arg) {
   } while (t - t0 < j->seconds);
   j->steps = steps; j->elapsed = t - t0;
   for (int k = 0; k < j->worlds; k++) g_destroy(ws[k]);
-  free(ws); free(obs);
+  free(ws); free(obs); j->ws = NULL;
   return NULL;
+}
+
+static void make_worlds(job_t *j) {
+  j->ws = malloc(sizeof(void *) * j->worlds);
+  j->next_seed = 1000 + 100000ll * j->id;
+  for (int k = 0; k < j->worlds; k++) {
+    j->ws[k] = make_world(j->mode, j->next_seed, 28800, 0);
+    g_reset(j->ws[k], j->next_seed++);
+  }
 }
 
 static int bench(const char *mode, int workers, int worlds, double seconds, const char *kind) {
@@ -185,9 +192,10 @@ static int bench(const char *mode, int workers, int worlds, double seconds, cons
   if (!strcmp(kind, "threads")) {
     pthread_t th[256]; job_t jobs[256];
     for (int i = 0; i < workers; i++) {
-      jobs[i] = (job_t){mode, worlds, seconds, i, 0, 0};
-      pthread_create(&th[i], NULL, bench_worker, &jobs[i]);
+      jobs[i] = (job_t){mode, worlds, seconds, i, 0, 0, NULL, 0};
+      make_worlds(&jobs[i]);
     }
+    for (int i = 0; i < workers; i++) pthread_create(&th[i], NULL, bench_worker, &jobs[i]);
     for (int i = 0; i < workers; i++) { pthread_join(th[i], NULL); total += jobs[i].steps; el += jobs[i].elapsed; }
   } else {
     int fds[256][2]; pid_t pids[256];
@@ -195,7 +203,8 @@ static int bench(const char *mode, int workers, int worlds, double seconds, cons
       if (pipe(fds[i])) return 5;
       pids[i] = fork();
       if (pids[i] == 0) {
-        job_t j = {mode, worlds, seconds, i, 0, 0};
+        job_t j = {mode, worlds, seconds, i, 0, 0, NULL, 0};
+        make_worlds(&j);
         bench_worker(&j);
         if (write(fds[i][1], &j, sizeof j) != sizeof j) _exit(1);
         _exit(0);

@@ -341,6 +341,9 @@ type
     teamVisible*: array[2, seq[uint8]]
     teamExplored*: array[2, seq[uint8]]
     visionCache: array[2, VisionTally]
+    when defined(gotaVisionCheck):
+      visionCheck: array[2, VisionCache]
+      visionCheckVisible, visionCheckExplored: array[2, seq[uint8]]
     visionSkipKeys: seq[int32]
     visionBlockers: seq[int16]
       ## Occluder heights of the last rebuild of THIS world (camp sight reads
@@ -813,6 +816,21 @@ proc rebuildVision*(world: World) {.measure.} =
     )
     for i in visionRevealed:
       world.teamExplored[team.ord][i] = 255
+    when defined(gotaVisionCheck):
+      # Reference: the previous full rebuild must agree cell for cell.
+      revealVisionCached(world.visionCheck[team.ord],
+        world.visionCheckVisible[team.ord], mapTiles().int32,
+        mapTiles().int32, sightTerrain.terrainHeights, visionBlockers,
+        visionSources)
+      world.visionCheckExplored[team.ord].setLen(
+        world.visionCheckVisible[team.ord].len)
+      for i, value in world.visionCheckVisible[team.ord]:
+        if value != 0:
+          world.visionCheckExplored[team.ord][i] = 255
+      doAssert world.visionCheckVisible[team.ord] == world.teamVisible[team.ord],
+        "vision tally diverged from revealVisionCached"
+      doAssert world.visionCheckExplored[team.ord] == world.teamExplored[team.ord],
+        "explored diverged from the full rebuild"
   copyVisionKeys(world.visionSkipKeys, visionSkipNow)
 
 proc visible*(world: World, team: Team, position: WorldPoint): bool =
@@ -2558,6 +2576,12 @@ proc nearestNavTile(
     nav.navTileCache.clear()
   let key: NavTileKey = (mapX, mapY, referenceY, reverseSearch)
   nav.navTileCache.withValue(key, cached):
+    when defined(gotaNavCheck):
+      var fresh: NavTile
+      let found = searchNavTile(mapX, mapY, referenceY, fresh, excluded,
+        reverseSearch)
+      doAssert found == cached.found and (not found or fresh == cached.tile),
+        "nearestNavTile memo diverged from a fresh search"
     if cached.found:
       value = cached.tile
     return cached.found
@@ -2619,6 +2643,10 @@ proc navigationTilePath(query: PathQuery, tiles: var seq[PathTile]) =
     query.finishLayer, query.finishX, query.finishZ, query.tieOrder)
   nav.pathCache.withValue(key, cached):
     tiles = cached[]
+    when defined(gotaNavCheck):
+      var fresh: seq[PathTile]
+      discard fillTilePath(query, fresh)
+      doAssert fresh == tiles, "A* memo diverged from a fresh search"
     return
   discard fillTilePath(query, tiles)
   nav.pathCache[key] = tiles
@@ -3496,6 +3524,8 @@ proc returnCamp(world: World, index: int) =
     world.emit GameEvent(kind: CampReturning, detail: index.int32,
       cause: CampReset, related: -1)
 
+var campMembers {.threadvar.}: seq[int]
+
 proc provokeCamp(world: World, index: int) =
   ## Starts group combat when a visible hero or lane creep gets too close.
   let camp = world.camps[index]
@@ -3503,12 +3533,18 @@ proc provokeCamp(world: World, index: int) =
     targetId, memberId: int32
     targetPoint, memberPoint: WorldPoint
     best = int64.high
+  # The living members, in slot order, gathered once instead of per intruder.
+  campMembers.setLen(0)
+  for slot in 0 ..< world.footmen.len:
+    let unit {.byaddr.} = world.footmen[slot]
+    if unit.camp != index + 1 or unit.hp <= 0 or unit.state == Dying:
+      continue
+    campMembers.add slot
   template consider(candidateId: int32, point: WorldPoint) =
     ## Finds the closest visible intruder to any living camp member.
     if within(point, camp.center, NeutralLeash):
-      for unit in world.footmen:
-        if unit.camp != index + 1 or unit.hp <= 0 or unit.state == Dying:
-          continue
+      for member in campMembers:
+        let unit {.byaddr.} = world.footmen[member]
         let distance = distanceSquared(unit.position, point)
         if distance > best or
           not world.campCanSee(unit, point, NeutralAggroTiles):
