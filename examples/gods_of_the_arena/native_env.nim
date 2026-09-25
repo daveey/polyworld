@@ -290,16 +290,16 @@ proc resetReplay(env: Env): int =
           if world.heroAvailable(int32(c)):
             extra = extra or (1'i32 shl c)
       elif action.kind == ActionLevelAbility:
-        extra = hero.abilityPoints
+        extra = int32(hero.abilityPoints)
       e.pending = [int32(world.tick), world.battleTick(), int32(i), int32(action.kind),
-        action.first, action.slot, 0'i32, hero.gold, 0'i32, int32(hero.level),
+        action.first, action.slot, 0'i32, int32(hero.gold), 0'i32, int32(hero.level),
         int32(world.draftedClass(action.heroId)), extra]
   game.playbackApplied = proc(action: ReplayAction, accepted: bool) =
     if action.kind in {ActionBuyItem, ActionLevelAbility, ActionBuyback, ActionDraft}:
       let world = e.game.world
       var ev = e.pending
       ev[6] = int32(accepted)
-      ev[8] = world.heroes[world.heroIndex(action.heroId)].gold
+      ev[8] = int32(world.heroes[world.heroIndex(action.heroId)].gold)
       if action.kind == ActionDraft:
         ev[10] = int32(world.draftedClass(action.heroId))
       e.events.add ev
