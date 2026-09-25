@@ -39,6 +39,12 @@ type
     decisions*, invalid*: int
     telemetry*: bool
     lastTelemetry: int
+    shadow*: HeroVm
+      ## Learner seats only: an expert script run on the same frame whose
+      ## commands become labels and are never executed (DAgger).
+
+var shadowRunning {.threadvar.}: bool
+  ## True while a shadow expert script runs: its host calls change nothing.
 
 var neuralTelemetryEnabled* = true
 
@@ -172,7 +178,10 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
     if seat.mode == NeuralCapture:
       seat.captured.setLen(0)
   of NeuralLearner:
-    discard
+    if seat.shadow != nil:
+      seat.lastLabel = seat.label
+      seat.label = default(typeof(seat.label))
+      seat.labelInstant = false
 
 proc setLearnerHeads*(seat: NeuralSeat, heads: Heads) =
   ## The native trainer's action for the paused decision.
@@ -223,6 +232,10 @@ proc interceptCommand*(game: Game, heroId: int32, command: NeuralCommand): bool 
     return false
   var tagged = command
   tagged.tick = game.world.tick
+  if shadowRunning:
+    if seat.frameTick >= 0:
+      seat.writeLabel(game.world, tagged)
+    return true
   case seat.mode
   of NeuralOverride:
     seat.captured.add tagged

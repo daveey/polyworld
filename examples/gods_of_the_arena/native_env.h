@@ -106,6 +106,8 @@ int gota_action_contract_hash(char *out, int32_t capacity);
  *   "data_root":       directory the relative defaults resolve against
  *                      (default: the examples/gods_of_the_arena directory
  *                      compiled into the library).
+ *   "record":          record a replay (default false; gota_save_replay).
+ *   "capture":         label scripted seats' commands (default true).
  * Returns NULL on failure with the reason in error (may be NULL). The match is
  * not started: call gota_reset. */
 void *gota_create(const char *config_json, char *error, int32_t capacity);
@@ -221,6 +223,23 @@ int gota_seat_orders(void *handle, int seat, int32_t *out);
  * calls return 1 and leave lastActionError unchanged. Kept across reset.
  * 0 = off (default, byte-identical). */
 int gota_set_seat_override(void *handle, int seat, int32_t enabled);
+
+/* DAgger shadow expert. On a LEARNER seat, runs this .bas every tick on the
+ * learner's own hero and frames, with every host call that would change the
+ * world absorbed (contract commands, buyItem, levelAbility, buyback, draft,
+ * chat, mailbox reads): nothing it does executes; the caller's action still
+ * does. Its contract commands are labeled exactly as a scripted seat's and
+ * gota_seat_orders(seat) then returns those labels instead of the learner's
+ * own action. Compiled now (0 ok, 1 compile failed), instantiated at every
+ * gota_reset; length 0 = off (default; byte-identical). */
+int gota_set_seat_shadow(void *handle, int seat, const char *source, int32_t length);
+
+/* Replays and diagnostics (config "record": true records every tick's hash
+ * and command; "capture": false turns BC labeling of scripted seats off for
+ * speed). gota_save_replay writes the replay (0, -1 not recording).
+ * gota_last_error copies the calling thread's last -3 error text. */
+int gota_save_replay(void *handle, const char *path);
+int gota_last_error(char *message, int32_t capacity);
 
 /* Hosted-seat parity: installs a neural package (ZIP bytes: manifest.json,
  * policy.bas, model.bin) on the seat; the seat then runs exactly as on the

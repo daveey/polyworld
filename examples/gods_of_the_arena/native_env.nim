@@ -33,6 +33,7 @@ type
     scripts: array[10, string]
     packages: array[10, string]
     overrides: array[10, bool]
+    shadows: array[10, string]
     goals: array[10, array[GoalSize, float32]]
     status: array[10, SeatStatus]
     game: Game
@@ -185,6 +186,16 @@ proc resetEnv(env: Env, seed: int64): int =
         seat.goal = env.goals[i]
         seat.resetEpisode(int32(seed), i)
         game.heroVms[i].neural = seat
+        if env.shadows[i].len > 0:
+          let heroId = game.world.heroes[i].id
+          try:
+            let program = compile(env.shadows[i], initHeroHost(0), heroVmLimits())
+            seat.shadow = HeroVm(runtime: initRuntime(program,
+              initHeroHost(heroId), heroVmLimits()), limits: heroVmLimits(),
+              ready: true)
+          except BasicError as error:
+            env.status[i] = SeatStatus(code: 2, message: "shadow: " & error.msg)
+            result = -2
       else:
         result = -2
       continue
@@ -539,6 +550,10 @@ proc gota_seat_orders(handle: pointer, seat: cint, output: ptr UncheckedArray[in
     for i in 0 ..< OrderSize:
       output[i] = s.lastLabel[i]
   of NeuralLearner, NeuralPackage:
+    if s.shadow != nil:
+      for i in 0 ..< OrderSize:
+        output[i] = s.lastLabel[i]
+      return 0
     output[0] = int32(s.headsReady and s.acting and s.heads[0] != 0)
     for h in 0 ..< ActionHeads:
       output[1 + h] = s.heads[h]
@@ -548,6 +563,21 @@ proc gota_seat_orders(handle: pointer, seat: cint, output: ptr UncheckedArray[in
     output[9] = s.command.ability
     output[10] = s.command.item
     output[15] = s.frameTick
+  0
+
+proc gota_set_seat_shadow(handle: pointer, seat: cint, source: cstring, length: int32): cint {.exportc, dynlib, cdecl.} =
+  ## DAgger: on a learner seat, runs `source` on the same frames without
+  ## executing anything; gota_seat_orders then reports its labels.
+  let env = toEnv(handle)
+  if env == nil or seat notin 0..9 or length < 0 or (length > 0 and source == nil): return -1
+  if length == 0:
+    env.shadows[seat] = ""
+    return 0
+  var text = newString(length)
+  copyMem(addr text[0], source, length)
+  let (ok, _) = checkCompile(text, false)
+  if not ok: return 1
+  env.shadows[seat] = text
   0
 
 proc gota_set_seat_override(handle: pointer, seat: cint, enabled: int32): cint {.exportc, dynlib, cdecl.} =

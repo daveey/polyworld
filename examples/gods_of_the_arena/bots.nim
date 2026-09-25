@@ -378,11 +378,15 @@ proc initHeroHost(heroId: int32): Host =
   result.addNeuralFunctions()
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Sends script text through the game's routing rules.
+    if shadowRunning:
+      return toValue(0'i32)
     let player = activeGame.world.heroIndex(heroId)
     activeGame.heroVms[player].runtime.withString(args[1], text):
       result = activeGame.sendChat(player, int(args[0].asInt), text)
   let pullMailboxProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Copies the oldest message into BASIC and consumes it on success.
+    if shadowRunning:
+      return activeGame.neuralSeat(activeGame.world.heroIndex(heroId)).shadow.runtime.putString("")
     let
       player = activeGame.world.heroIndex(heroId)
       inbox = activeGame.inboxes[player]
@@ -433,6 +437,8 @@ proc initHeroHost(heroId: int32): Host =
 
   let draftHeroProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and validates the active player's hero choice.
+    if shadowRunning:
+      return 1
     try:
       activeGame.recorder.record ReplayAction(
         tick: uint32(activeGame.world.tick), heroId: heroId,
@@ -613,6 +619,8 @@ proc initHeroHost(heroId: int32): Host =
   let buyItemProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
+    if shadowRunning:
+      return 1
     try:
       if activeGame.recorder != nil:
         activeGame.recorder.recordBuyItem(
@@ -639,6 +647,8 @@ proc initHeroHost(heroId: int32): Host =
     activeGame.world.buybackPrice(heroId)
   let buybackProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and attempts a buyback using only this hero's gold.
+    if shadowRunning:
+      return 1
     try:
       activeGame.recorder.recordBuyback(
         uint32(activeGame.world.tick), heroId
@@ -673,6 +683,8 @@ proc initHeroHost(heroId: int32): Host =
 
   let levelAbilityProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and spends a point through the shared upgrade validator.
+    if shadowRunning:
+      return 1
     try:
       activeGame.recorder.recordLevelAbility(
         uint32(activeGame.world.tick), heroId, arguments[0]
@@ -918,13 +930,10 @@ proc loadBots*(
     when defined(coworld):
       game.heroVms[i].output = playerPrinter(int(i))
 
-proc runHeroScript(game: Game, index: int) =
+proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
   ## Runs one bounded BASIC decision, including while awaiting respawn.
-  if index < 0 or index >= game.heroVms.len:
-    return
-  let
-    hero = game.world.heroes[index]
-    vm = game.heroVms[index]
+  ## `primary` is false only for a learner seat's shadow expert script.
+  let hero = game.world.heroes[index]
   if vm == nil or vm.failed:
     return
   try:
@@ -984,7 +993,7 @@ proc runHeroScript(game: Game, index: int) =
     vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
     discard vm.runtime.run(vm.output)
     inc vm.decisions
-    if vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
+    if primary and vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
       game.runOverride(index, NeuralSeat(vm.neural))
   except BasicError as error:
     vm.failed = true
@@ -995,10 +1004,26 @@ proc runHeroScript(game: Game, index: int) =
       echo "hero ", hero.id, " BASIC error: ", error.msg
   vm.lastWork = vm.runtime.workUsed
   vm.lastInstructions = vm.runtime.instructionsUsed
-  game.metrics.decision(
-    index, game.world.tick, vm.lastInstructions,
-    heroVmLimits().maxInstructions
-  )
+  if primary:
+    game.metrics.decision(
+      index, game.world.tick, vm.lastInstructions,
+      heroVmLimits().maxInstructions
+    )
+
+proc runHeroScript(game: Game, index: int) =
+  ## Runs one hero's BASIC decision (and a learner's shadow expert, if any).
+  if index < 0 or index >= game.heroVms.len:
+    return
+  let vm = game.heroVms[index]
+  game.runHeroVm(index, vm, true)
+  if vm != nil and vm.neural != nil:
+    let shadow = NeuralSeat(vm.neural).shadow
+    if shadow != nil and not shadow.failed:
+      shadowRunning = true
+      try:
+        game.runHeroVm(index, shadow, false)
+      finally:
+        shadowRunning = false
 
 proc runBotDecisions*(game: Game) {.measure.} =
   ## Runs every VM in seeded cyclic order and advances the first slot.

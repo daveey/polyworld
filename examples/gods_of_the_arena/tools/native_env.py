@@ -29,6 +29,7 @@ class Lib:
         L.gota_set_seat_script.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_seat_orders.argtypes = [vp, ctypes.c_int, i32p]
         L.gota_set_seat_override.argtypes = [vp, ctypes.c_int, ctypes.c_int32]
+        L.gota_set_seat_shadow.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_set_seat_package.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int64]
         L.gota_seat_script_status.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_set_learner_seats.argtypes = [vp, ctypes.c_uint32]
@@ -38,6 +39,7 @@ class Lib:
         L.gota_net_load.restype = vp
         L.gota_net_load.argtypes = [ctypes.c_char_p, ctypes.c_int64, ctypes.c_char_p, ctypes.c_int32]
         L.gota_net_infer.argtypes = [vp, f32p, f32p, f32p]
+        L.gota_net_destroy.argtypes = [vp]
         L.gota_net_info.argtypes = [vp, i64p]
         L.gota_observation_contract_hash.argtypes = [ctypes.c_char_p, ctypes.c_int32]
         L.gota_action_contract_hash.argtypes = [ctypes.c_char_p, ctypes.c_int32]
