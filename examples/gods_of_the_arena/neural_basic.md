@@ -112,7 +112,7 @@ BASIC surface for `policy.bas`, registered only for neural seats:
 
 Package seats get `neuralVmLimits`: the hero limits with 160 host functions, 40,000 instructions and
 100,000 work units per decision. These were raised for neural seats only, as Amendment 1 allows.
-`policy.bas` is small, but the headroom lets a glue script add routines. Plain seats keep
+The shipped `policy.bas` peaks at 1,065 instructions per tick (10 learner seats, a full match), so the headroom is for richer glue scripts. Plain seats keep
 `heroVmLimits` (20,000 / 50,000 / 128).
 
 ## Observation contract v1 (1407 float32)
