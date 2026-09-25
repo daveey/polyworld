@@ -344,6 +344,12 @@ type
     hashCheck*: ReplayHashCheck
     historyPlayback*: bool
     replayMode*: bool
+    playbackPrelude*: proc() {.closure.}
+      ## Replay capture (native_env replay mode): called on every playback
+      ## battle tick after the observation frame is frozen and before the
+      ## tick's recorded actions apply. nil (the default) changes nothing.
+    playbackAction*: proc(action: ReplayAction) {.closure.}
+      ## Replay capture: called before each recorded battle action applies.
     recordingError*: string
     heroVms*: seq[HeroVm]
     inboxes*: seq[Mailbox]
@@ -5562,8 +5568,12 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
   if game.historyPlayback:
     if game.recorder != nil:
       game.replayPlayer.data = game.recorder.data
+    if game.playbackPrelude != nil:
+      game.playbackPrelude()
     var action: ReplayAction
     while game.replayPlayer.takeActionAt(uint32(world.tick), action):
+      if game.playbackAction != nil:
+        game.playbackAction(action)
       if applyReplayAction(world, action):
         game.metrics.command(heroIndex(world, action.heroId), world.tick)
   dec world.heroTurnTicks

@@ -9,7 +9,7 @@
 ## every handle of the process must stay on one thread.)
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
-import std/[json, locks, os], jsony, scores, polyworld/visions
+import std/[json, locks, os, strutils], jsony, scores, polyworld/visions
 include bots
 
 const
@@ -48,6 +48,11 @@ type
     prevScore: array[10, int64]
     pushDepth: array[10, int64]
     scratch: seq[float32]
+    replayPath: string
+      ## Replay capture mode (config "replay_path"): gota_reset re-simulates
+      ## this replay (uncompressed .replay) and every seat is a capture seat.
+    replay: ReplayData
+    decided: bool
 
 var
   presetKey: string
@@ -156,7 +161,116 @@ proc pauseOrFinish(env: Env) =
       game.tickWorldFinish()
       env.tickDone()
 
+proc replayAdvance(env: Env) =
+  ## Replay mode: plays recorded ticks until the next decision tick (whose
+  ## frame the playback prelude captured, then the tick completes) or the end.
+  let game = env.game
+  activeGame = game
+  env.paused = false
+  while true:
+    if game.finished() or game.world.tick >= env.replay.hashes.len:
+      env.over = true
+      return
+    env.decided = false
+    let stage = game.tickWorldBegin(nil)
+    case stage
+    of TickSkipped:
+      env.over = true
+      return
+    of TickDone:
+      env.tickDone()
+    of TickNoTurn, TickHeroTurn:
+      game.tickWorldFinish()
+      env.tickDone()
+    if env.decided:
+      env.paused = true
+      return
+
+proc replayCommand(action: ReplayAction, command: var NeuralCommand): bool =
+  ## The contract command a BASIC host function passed for this recorded
+  ## action (the inverse of splitTilePoint), or false for non-contract
+  ## actions (buy, level, buyback, draft).
+  let point = fixedVec2(
+    Fixed(int32(int64(action.first) * FixedScale + int64(int32(action.offset.x)))),
+    Fixed(int32(int64(action.second) * FixedScale + int64(int32(action.offset.y)))))
+  result = true
+  case action.kind
+  of ActionWalkTo: command = NeuralCommand(kind: WalkCommand, point: point)
+  of ActionAttackMove: command = NeuralCommand(kind: AttackMoveCommand, point: point)
+  of ActionAttackTarget:
+    command = NeuralCommand(kind: AttackTargetCommand, objectId: action.first)
+  of ActionUseItem: command = NeuralCommand(kind: UseItemCommand, item: action.first)
+  of ActionUseItemAt:
+    command = NeuralCommand(kind: UseItemAtCommand, item: action.slot, point: point)
+  of ActionCastTarget:
+    command = NeuralCommand(kind: CastTargetCommand, ability: action.slot,
+      objectId: action.first)
+  of ActionCastPoint:
+    command = NeuralCommand(kind: CastPointCommand, ability: action.slot, point: point)
+  else: result = false
+
+proc resetReplay(env: Env): int =
+  ## Replay capture: rebuilds the recorded match in playback. Every seat is a
+  ## NeuralCapture seat fed by the tape: at each decision tick the prelude
+  ## captures the frame (observation, mask, standing label) and each recorded
+  ## contract action is folded into its seat's label exactly as the live
+  ## capture path folds the BASIC host call that recorded it.
+  activeGame = nil
+  neuralTelemetryEnabled = false
+  let data = loadReplay(env.replayPath)
+  var game: Game
+  withLock processLock:
+    let gameMap = generateMap(data.config.seed, data.config.mapPreset)
+    if not mapReady:
+      warmEdgeLinks()
+      initVisionKernel()
+      mapReady = true
+    game = newGame(gameMap, data.config.spawnIntervalTicks, 0, true, data)
+  env.replay = data
+  env.config = data.config
+  env.maxTicks = data.config.maxTicks
+  game.replayPlayer = initReplayPlayer(data)
+  game.historyPlayback = true
+  activeGame = game
+  env.game = game
+  let n = game.world.heroes.len
+  game.heroVms.setLen(n)
+  game.inboxes.setLen(n)
+  for inbox in game.inboxes.mitems:
+    inbox = newMailbox()
+  for i in 0 ..< n:
+    env.status[i] = SeatStatus(code: 1)
+    env.prevScore[i] = 0
+    env.pushDepth[i] = 0
+    let seat = newNeuralSeat(NeuralCapture, env.period, env.maxTicks)
+    seat.goal = env.goals[i]
+    seat.standingMode = env.standing
+    seat.resetEpisode(data.config.seed, i)
+    game.heroVms[i] = HeroVm(neural: seat)
+  let e = env
+  game.playbackPrelude = proc() =
+    let world = e.game.world
+    if not world.isDecisionTick(e.period):
+      return
+    e.game.neuralPrelude()
+    for i in 0 ..< e.game.heroVms.len:
+      let seat = e.game.neuralSeat(i)
+      if seat != nil and seat.frameTick == world.tick:
+        seat.mask = actionMask(world, i, seat.frame)
+    e.updatePush()
+    e.decided = true
+  game.playbackAction = proc(action: ReplayAction) =
+    var command: NeuralCommand
+    if replayCommand(action, command):
+      discard e.game.interceptCommand(action.heroId, command)
+  env.over = false
+  env.started = true
+  env.replayAdvance()
+  0
+
 proc resetEnv(env: Env, seed: int64): int =
+  if env.replayPath.len > 0:
+    return env.resetReplay()
   activeGame = nil
   neuralTelemetryEnabled = false
   var gameMap: MapData
@@ -288,7 +402,7 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
       for key in node.keys:
         if key notin ["config_path", "seed", "max_ticks", "decision_period",
             "learner_seats", "script_path", "policy_path", "data_root",
-            "record", "capture", "standing_labels"]:
+            "record", "capture", "standing_labels", "replay_path"]:
           raise newException(ValueError, "unknown config key " & key)
       let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
       let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
@@ -323,6 +437,8 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
       env.policyScript = readFile(resolve(root,
         if node.hasKey("policy_path"): node["policy_path"].getStr else: "neural/policy.bas"))
       env.seeds = if node.hasKey("seed"): node["seed"].getInt else: 0
+      if node.hasKey("replay_path"):
+        env.replayPath = resolve(root, node["replay_path"].getStr)
       for i in 0 ..< 10:
         env.goals[i] = defaultGoal()
       let key = env.config.mapPreset.toJson()
@@ -419,6 +535,20 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
   if env.over: return -2
   if not env.paused: return -1
   let game = env.game
+  if env.replayPath.len > 0:
+    try:
+      for i in 0 ..< 10:
+        env.prevScore[i] = game.seatScore(i)
+      env.replayAdvance()
+    except CatchableError as e:
+      lastError = e.msg
+      return -3
+    for i in 0 ..< 10:
+      if rewards != nil:
+        rewards[i] = float32(game.seatScore(i) - env.prevScore[i]) / 1000
+      if terminals != nil:
+        terminals[i] = float32(env.over)
+    return (if env.over: 1 else: 0)
   try:
     for i in 0 ..< 10:
       env.prevScore[i] = game.seatScore(i)
@@ -654,7 +784,8 @@ proc gota_action_mask(handle: pointer, seat: cint, output: ptr UncheckedArray[ui
   let s = game.neuralSeat(seat)
   var mask: ActionMask
   if s != nil and s.frameTick == game.world.tick:
-    mask = if s.mode == NeuralPackage and s.maskTargets: s.mask
+    mask = if (s.mode == NeuralPackage and s.maskTargets) or
+        env.replayPath.len > 0: s.mask
       else: actionMask(game.world, seat, s.frame)
     if not s.acting or env.over:
       mask = default(ActionMask)
@@ -772,3 +903,47 @@ proc gota_net_infer(net: pointer, observation, state, logits: ptr UncheckedArray
     0
   except CatchableError:
     -2
+
+proc gota_replay_label(handle: pointer, seat: cint, output: ptr UncheckedArray[int32]): cint {.exportc, dynlib, cdecl.} =
+  ## Replay mode, after the last gota_step: the final (still open) decision
+  ## window's label, which gota_seat_orders cannot report (it reports the
+  ## window before). Same 16-int layout as gota_seat_orders.
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or seat notin 0..9 or output == nil: return -1
+  let s = env.game.neuralSeat(seat)
+  for i in 0 ..< OrderSize:
+    output[i] = (if s == nil: 0'i32 else: s.label[i])
+  0
+
+proc gota_replay_info(handle: pointer, output: ptr char, capacity: int32): cint {.exportc, dynlib, cdecl.} =
+  ## Replay mode: JSON verification report and match setup. Returns the JSON
+  ## length (call again with a larger buffer when it is >= capacity).
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or env.replayPath.len == 0: return -1
+  let game = env.game
+  let data = env.replay
+  var heroes = newJArray()
+  for i, hero in data.header.setup.heroes:
+    heroes.add %*{"id": hero.id, "team": hero.team, "slot": hero.slot,
+      "lane": hero.lane, "setup_class": hero.class,
+      "drafted_class": game.world.draftedClass(hero.id)}
+  let recordedFinal = if data.hashes.len > 0: data.hashes[^1] else: 0'u64
+  let node = %*{
+    "format_version": data.header.formatVersion,
+    "game_version": data.header.gameVersion,
+    "seed": data.config.seed, "max_ticks": data.config.maxTicks,
+    "drafting": data.header.setup.drafting,
+    "map_hash": toHex(data.header.setup.mapHash),
+    "recorded_ticks": data.hashes.len, "actions": data.actions.len,
+    "ticks": game.world.tick, "battle_ticks": game.world.battleTick(),
+    "over": env.over,
+    "hash_mismatches": game.hashCheck.mismatches,
+    "first_mismatch_tick": (if game.hashCheck.mismatches > 0: game.hashCheck.firstTick else: -1'i32),
+    "final_hash": toHex(game.stateHash()),
+    "recorded_final_hash": toHex(recordedFinal),
+    "actions_consumed": game.replayPlayer.finished,
+    "heroes": heroes,
+    "players": parseJson(data.config.players.toJson())}
+  let text = $node
+  copyText(text, output, capacity)
+  cint(text.len)
