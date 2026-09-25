@@ -53,6 +53,10 @@ type
       ## this replay (uncompressed .replay) and every seat is a capture seat.
     replay: ReplayData
     decided: bool
+    snap: array[10, array[StatCount, int64]]
+      ## Replay mode: every seat's stats at the paused decision frame (the
+      ## live env reports them before the heroes' turn; replay mode has
+      ## already finished that tick when it returns).
 
 var
   presetKey: string
@@ -161,6 +165,8 @@ proc pauseOrFinish(env: Env) =
       game.tickWorldFinish()
       env.tickDone()
 
+proc fillStats(env: Env, seat: int, output: ptr UncheckedArray[int64])
+
 proc replayAdvance(env: Env) =
   ## Replay mode: plays recorded ticks until the next decision tick (whose
   ## frame the playback prelude captured, then the tick completes) or the end.
@@ -258,6 +264,8 @@ proc resetReplay(env: Env): int =
       if seat != nil and seat.frameTick == world.tick:
         seat.mask = actionMask(world, i, seat.frame)
     e.updatePush()
+    for i in 0 ..< min(10, e.game.world.heroes.len):
+      e.fillStats(i, cast[ptr UncheckedArray[int64]](addr e.snap[i][0]))
     e.decided = true
   game.playbackAction = proc(action: ReplayAction) =
     var command: NeuralCommand
@@ -593,9 +601,7 @@ proc gota_state_hash(handle: pointer): uint64 {.exportc, dynlib, cdecl.} =
   let env = toEnv(handle)
   if env == nil or env.game == nil: 0'u64 else: env.game.stateHash()
 
-proc gota_seat_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int64]): cint {.exportc, dynlib, cdecl.} =
-  let env = toEnv(handle)
-  if env == nil or env.game == nil or seat notin 0..9 or output == nil: return -1
+proc fillStats(env: Env, seat: int, output: ptr UncheckedArray[int64]) =
   let
     game = env.game
     world = game.world
@@ -636,6 +642,15 @@ proc gota_seat_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int
   let vm = game.heroVms[seat]
   if vm != nil:
     output[22] = vm.lastInstructions
+
+proc gota_seat_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int64]): cint {.exportc, dynlib, cdecl.} =
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or seat notin 0..9 or output == nil: return -1
+  if env.replayPath.len > 0 and env.paused and not env.over:
+    for i in 0 ..< StatCount:
+      output[i] = env.snap[seat][i]
+    return 0
+  env.fillStats(seat, output)
   0
 
 proc gota_set_seat_goal(handle: pointer, seat: cint, w: ptr UncheckedArray[float32]): cint {.exportc, dynlib, cdecl.} =
