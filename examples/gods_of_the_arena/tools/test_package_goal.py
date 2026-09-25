@@ -61,15 +61,22 @@ def main():
         hh = re.search(r"hash: ([0-9A-Fa-f]+)", out).group(1).lower().rjust(16, "0")
         nat = os.path.join(tmp, f"native-{seed}.replay")
         goal_ok, nh = native(a.lib, seed, seat, pkg, nat)
-        same_replay = open(nat, "rb").read() == open(hosted, "rb").read()
+        nb, hb = open(nat, "rb").read(), open(hosted, "rb").read()
+        same_replay = nb == hb
+        first_diff = next((i for i in range(min(len(nb), len(hb))) if nb[i] != hb[i]), None) if not same_replay else None
+        v = subprocess.run([a.bin, "--replay", nat], cwd=REPO, capture_output=True, text=True).stdout
+        vm = re.search(r"replay hashes: ([0-9]+) mismatches", v)
+        vh = re.search(r"hash: ([0-9A-Fa-f]+)", v)
+        verified = vm is None and vh is not None and vh.group(1).lower().rjust(16, "0") == hh
         row = dict(seed=seed, seat=seat, obs_goal=goal_ok, native_final=nh, hosted_final=hh,
-                   finals_equal=nh == hh, replay_bytes_equal=same_replay)
+                   finals_equal=nh == hh, replay_bytes_equal=same_replay, first_diff=first_diff,
+                   sizes=(len(nb), len(hb)), native_replay_verified_by_binary=verified)
         if a.old_lib:
             _, oh = native(a.old_lib, seed, seat, pkg, os.path.join(tmp, f"old-{seed}.replay"))
             row["old_lib_final"] = oh
             old_diff += oh != hh
         print(row, flush=True)
-        ok_all += goal_ok and nh == hh and same_replay
+        ok_all += goal_ok and nh == hh and same_replay and verified
     print(f"package goal: native == hosted-style {ok_all}/{a.seeds} (obs goal, final hash, replay bytes)"
           + (f"; pre-fix lib differs from hosted on {old_diff}/{a.seeds}" if a.old_lib else ""))
     print("GOAL OK" if ok_all == a.seeds else "GOAL FAIL")
