@@ -12,7 +12,7 @@ import
   std/algorithm,
   bassy, fixxy,
   polyworld/[bodies, hashes, metrics, noises, pathing, profiles, rngs, tapes,
-    visions],
+    visions, mailboxes],
   content, events, motions,
   maps,
   replays
@@ -237,6 +237,12 @@ type
     ends*: int32
     resolved*: bool
 
+  TowerShot* = object
+    sourceId*, targetId*, damage*: int32
+    team*: Team
+    previous*, position*: WorldPoint
+    started*, impact*: int32
+
   HitKind = enum UnitHit, StructureHit, GodHit
   HitKey = tuple[kind, class, x, y, z, spawnX, spawnY, spawnZ: int32]
   CombatHit = object
@@ -261,6 +267,7 @@ type
       eventTick: int32
     heroSpawns*: array[2, WorldPoint]
     casts*: seq[SpellCast]
+    towerShots*: seq[TowerShot]
     stats*: CombatStats
     ## One match. A ref so `a = b` aliases and a second world is `clone()`.
     footmen*: seq[Footman]
@@ -320,6 +327,7 @@ type
     replayMode*: bool
     recordingError*: string
     heroVms*: seq[HeroVm]
+    inboxes*: seq[Mailbox]
     nextFootmen: seq[Footman]
     nextHeroes: seq[Hero]
     collisionUnits: seq[CollisionUnit]
@@ -343,16 +351,14 @@ const
   TowerDamages*: array[TowerTier, int32] = [36'i32, 48, 60]
   BarracksHitPoints* = 950'i32
   TowerAttackRanges*: array[TowerTier, int32] = [
-    300_000'i32,
-    330_000,
-    360_000
+    540_000'i32,
+    570_000,
+    600_000
   ]
   TowerAttackTicks* = TickRate
+  TowerShotStep* = 18 * WorldScale div TickRate
+  TowerImpactTicks* = TickRate div 2
   TowerSiegeRange* = 105_000'i32
-
-proc towerSightTiles*(tier: TowerTier): int32 =
-  ## Shares a tower's reveal radius with portal destinations.
-  TowerAttackRanges[tier] div WorldScale + 2
 
 proc config*(game: Game): GotaConfig =
   ## Reads the match configuration owned by the live or loaded replay.
@@ -735,7 +741,17 @@ proc rebuildVision*(world: World) {.measure.} =
         addVisionSource(footman.position, FootmanSightRadius div WorldScale, 12)
     for tower in world.buildings:
       if tower.team == team and tower.hp > 0:
-        addVisionSource(tower.position, tower.tier.towerSightTiles, 24)
+        let range = TowerAttackRanges[tower.tier]
+        for tile in sightTiles(tower.position):
+          visionSources.add VisionSource(
+            x: tile.x, z: tile.z,
+            radius: (range + WorldScale - 1) div WorldScale + 1,
+            eyeHeight: 24, units: WorldScale, range: range,
+            offsetX: tower.position.x -
+              (tile.x - mapTiles().int32 div 2) * WorldScale - WorldScale div 2,
+            offsetZ: tower.position.z -
+              (tile.z - mapTiles().int32 div 2) * WorldScale - WorldScale div 2
+          )
     for fort in world.forts:
       if fort.team == team and fort.hp > 0:
         addVisionSource(fort.center, FortSightRadius, 28)
@@ -2672,7 +2688,7 @@ proc portalLanding*(
   towerId: var int32,
   anchorId = 0'i32
 ): bool =
-  ## Finds the closest visible, open landing within a living allied tower's sight.
+  ## Finds the closest visible, open landing within an allied tower's range.
   navigationWorld = world
   let orientation = if team == RedTeam: -1'i64 else: 1'i64
   var best = (int64.high, int64.high, int64.high,
@@ -2682,7 +2698,8 @@ proc portalLanding*(
       (anchorId != 0 and tower.id != anchorId):
         continue
     let
-      radius = tower.tier.towerSightTiles.int
+      range = TowerAttackRanges[tower.tier]
+      radius = int((range + WorldScale - 1) div WorldScale)
       centerX = floorWorldTile(tower.position.x, team) + GridTiles div 2
       centerZ = floorWorldTile(tower.position.z, team) + GridTiles div 2
     for layerIndex, layer in layers:
@@ -2700,7 +2717,7 @@ proc portalLanding*(
                   point.x = aim.x
                   point.z = aim.z
                   discard layerFixedHeight(layerIndex, point, point.y, team)
-              if not within(point, tower.position, radius.int32 * WorldScale) or
+              if not within(point, tower.position, range) or
                 not world.visible(team, point) or not inWalkMargin(toPlanar(point)):
                   continue
               let rank = (
@@ -3034,11 +3051,12 @@ proc startSwing(world: World, hero: Hero) =
   hero.damageLanded = false
 
 proc updateTower*(world: World, tower: var Building) =
-  ## Acquires one nearby enemy and applies a deterministic periodic attack.
+  ## Reloads independently of acquisition and fires a homing shot when ready.
   if tower.kind == BarracksBuilding or tower.hp <= 0:
     tower.targetId = 0
     tower.attackTicks = 0
     return
+  tower.attackTicks = min(TowerAttackTicks, tower.attackTicks + 1)
   let attackRange = TowerAttackRanges[tower.tier]
   var
     targetFootman = footmanIndex(world, tower.targetId)
@@ -3096,21 +3114,57 @@ proc updateTower*(world: World, tower: var Building) =
     if targetFootman >= 0: world.footmen[targetFootman].id
     elif targetHero >= 0: world.heroes[targetHero].id
     else: 0'i32
-  if tower.targetId != targetId:
-    tower.targetId = targetId
-    tower.attackTicks = 0
-  if targetId == 0:
+  tower.targetId = targetId
+  if targetId == 0 or tower.attackTicks < TowerAttackTicks:
     return
-  inc tower.attackTicks
-  if tower.attackTicks < TowerAttackTicks:
-    return
-  tower.attackTicks -= TowerAttackTicks
-  let damage = TowerDamages[tower.tier]
-  if targetFootman >= 0:
-    world.hitTarget(UnitHit, world.footmen[targetFootman].id,
-      damage, tower.id)
-  else:
-    world.hitTarget(UnitHit, world.heroes[targetHero].id, damage, tower.id)
+  tower.attackTicks = 0
+  var origin = tower.position
+  origin.y += 2 * WorldScale
+  world.towerShots.add TowerShot(
+    sourceId: tower.id, targetId: targetId, team: tower.team,
+    damage: TowerDamages[tower.tier], previous: origin, position: origin,
+    started: world.tick
+  )
+
+proc advanceTowerShots*(world: World) =
+  ## Tracks the original living target, ignoring range and vision after firing.
+  var write = 0
+  for original in world.towerShots:
+    var shot = original
+    if shot.impact > 0:
+      if world.tick - shot.impact >= TowerImpactTicks:
+        continue
+    elif shot.started < world.tick:
+      var target: WorldPoint
+      let
+        hero = world.heroIndex(shot.targetId)
+        creep = world.footmanIndex(shot.targetId)
+      if hero >= 0:
+        if world.heroes[hero].hp <= 0 or world.heroes[hero].state == Dying:
+          continue
+        target = world.heroes[hero].position
+      elif creep >= 0:
+        if world.footmen[creep].hp <= 0 or world.footmen[creep].state == Dying:
+          continue
+        target = world.footmen[creep].position
+      else:
+        continue
+      target.y += WorldScale
+      shot.previous = shot.position
+      if within(shot.position, target, TowerShotStep):
+        shot.position = target
+        shot.impact = world.tick
+        world.hitTarget(UnitHit, shot.targetId, shot.damage, shot.sourceId)
+      else:
+        let
+          offset = target - shot.position
+          distance = integerSqrt(distanceSquared(shot.position, target))
+        shot.position.x += int32(int64(offset.x) * TowerShotStep div distance)
+        shot.position.y += int32(int64(offset.y) * TowerShotStep div distance)
+        shot.position.z += int32(int64(offset.z) * TowerShotStep div distance)
+    world.towerShots[write] = shot
+    inc write
+  world.towerShots.setLen(write)
 
 proc spellTarget*(world: World, id: int32, value: var WorldObject): bool
   ## Resolves one live unit or structure for spells and camp leashes.
@@ -5335,6 +5389,16 @@ proc stateHash*(game: Game): uint64 =
     hash.addHashy(spell.impact)
     hash.addHashy(spell.ends)
     hash.addHashy(spell.resolved)
+  hash.addHashy(world.towerShots.len)
+  for shot in world.towerShots:
+    hash.addHashy(shot.sourceId)
+    hash.addHashy(shot.targetId)
+    hash.addHashy(shot.damage)
+    hash.addHashy(shot.team.ord)
+    hash.addHashy(shot.previous)
+    hash.addHashy(shot.position)
+    hash.addHashy(shot.started)
+    hash.addHashy(shot.impact)
   hash.addHashy(world.stats)
   uint64(hash)
 
@@ -5467,6 +5531,7 @@ proc tickWorld*(game: Game, onHeroTurn: proc() {.closure.}) {.measure.} =
     world.heroes[i][] = hero[]
 
   world.advanceSpells()
+  world.advanceTowerShots()
   world.resolveCombat()
   world.updateCamps()
 

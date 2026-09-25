@@ -1,0 +1,74 @@
+{
+  "date": "2026-09-24",
+  "version": "2026.9.24.2",
+  "url": "https://softmax.com/gods-of-the-arena",
+  "coworld_id": "cow_e282a46f-31c4-43b1-a9e2-aaa31d3aaed4",
+  "canonical": true,
+  "source_commit": "f4456bea13d967cb3f188df357656e1410cb0a40",
+  "asset_commit": "32946b35b92e2b33f38945e96b293eb6e2c98ac9",
+  "replay_version": 64,
+  "changes": [
+    "Increase tower attack, vision, and portal range together to 9, 9.5, and 10 tiles.",
+    "Keep tower reload progress when targets leave range or change.",
+    "Make tower fireballs track their original target beyond range and into fog, dealing damage on arrival.",
+    "Restore in-flight projectiles during replay seeking and support only gameplay replay version 64.",
+    "Include the mailbox changes already merged on main."
+  ],
+  "checks": [
+    "Nim checks and the complete test suite passed after rebasing onto current main.",
+    "Tower range, reload, homing, target death, and mid-flight snapshot regressions passed.",
+    "Native and WASM replay verification matched, including four backward seeks and a mid-flight snapshot.",
+    "All ten local certification checks and hosted certification passed.",
+    "All five hosted smoke games completed with verified integer scores.",
+    "Served JavaScript, WASM, and data SHA-256 hashes match the production build.",
+    "The Linux certification replay and a replay from the forced league round reproduced exactly on the native client."
+  ],
+  "browser_verification": {
+    "episode_id": "08e742c8-c109-448d-b580-0ca8edfb3e19",
+    "replay_version": 64,
+    "end_tick": 30049,
+    "visible_tick_label": "Tick 30049 / 30049",
+    "browser_errors": [],
+    "method": "Deployed viewer rendered combat, sought through the final tick, and displayed the final scoreboard.",
+    "verified_at": "2026-09-24T22:58:15.877536+00:00"
+  },
+  "league_settings_preserved": true,
+  "known_issues": [],
+  "native_league_replay": {
+    "round_number": 742,
+    "id": "ereq_64ec48a7-6c9b-4816-a536-f3ab3fea3aff",
+    "episode_id": "08e742c8-c109-448d-b580-0ca8edfb3e19",
+    "replay_version": 64,
+    "sha256": "70e00c59901c88151b72806e2560ab29b3c3553c16c7ac981e02769a995ae906",
+    "ticks": 30049,
+    "outcome": "time_limit"
+  },
+  "verification_round": {
+    "round_id": "round_d745770e-56e3-4c76-bcfc-6c70df21ffc8",
+    "round_number": 742,
+    "status": "completed",
+    "games": 24,
+    "completed_games": 24,
+    "failed_games": 0,
+    "failures": [],
+    "coworld_id": "cow_e282a46f-31c4-43b1-a9e2-aaa31d3aaed4",
+    "version": "2026.9.24.2",
+    "integer_scores_verified": 240,
+    "outcomes": {
+      "time_limit": 22,
+      "BlueTeam": 1,
+      "RedTeam": 1
+    },
+    "replay_version": 64,
+    "watch_url": "https://softmax.com/gods-of-the-arena?e=90f3176a-9090-40ff-b1c2-9430401fb6a6",
+    "verified_at": "2026-09-24T23:00:37.226208+00:00"
+  },
+  "manifest_hash": "sha256:d9be78bff6cc9c74d3de3f9e55ccb5bd20b3f181523b6ec88d90a38d68435a78",
+  "viewer_sha256": {
+    "wasm": "de36c8625be15bd101dc82ea4e1f4dedef0b65981dcd3e8420ba3cb35a362000",
+    "data": "6a1d07f38179cd0ce3498dbaefb725c634d74a7705426ded9a119a83dd98e3f0",
+    "js": "12e3b4c6d0d346db5689253a768a9c6ba4f8c68d7743311272439875577c97ca"
+  },
+  "ci_url": "https://github.com/Metta-AI/polyworld/actions/runs/36069192354",
+  "verified_at": "2026-09-24T23:00:55.692025+00:00"
+}

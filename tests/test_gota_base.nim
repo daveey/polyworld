@@ -79,6 +79,10 @@ block:
           names.incl(name & "At")
   doAssert names.len >= 68
   for name in names:
+    # Chat is exercised by the mailbox example instead of the combat policy.
+    if name in ["sendChat", "pullMailbox$", "mailboxId", "mailboxCount",
+      "mailboxSelf", "mailboxPlayers"]:
+        continue
     doAssert name & "(" in source, "Base policy omits host call " & name
 
 echo "Testing base spends ability points in R, W, E, Q order at legal levels"

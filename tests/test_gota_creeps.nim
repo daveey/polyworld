@@ -88,6 +88,8 @@ block:
     )
     game.world.reveal()
     game.world.updateTower(tower)
+    inc game.world.tick
+    game.world.advanceTowerShots()
     doAssert game.world.footmen[0].hp ==
       1000 - [36'i32, 48, 60][tier.ord]
 
@@ -174,9 +176,13 @@ block:
   )
   game.world.reveal()
   game.world.updateTower(tower)
+  inc game.world.tick
+  game.world.advanceTowerShots()
   doAssert hero.totalXp == CreepNearbyXp and hero.level == 2
   doAssert hero.gold == gold
   game.world.updateTower(tower)
+  inc game.world.tick
+  game.world.advanceTowerShots()
   doAssert hero.totalXp == CreepNearbyXp
 
 echo "Testing basic attacks award the creep bounty exactly once"

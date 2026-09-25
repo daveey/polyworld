@@ -4,7 +4,8 @@
 import
   polyworld/neural,
   bassy, fixxy,
-  polyworld/[metrics, bodies, cli, controllers, pathing, profiles, tapes],
+  polyworld/[mailboxes, metrics, bodies, cli, controllers,
+    pathing, profiles, tapes],
   content,
   maps,
   motions,
@@ -103,6 +104,7 @@ proc bindHeroData(program: Program) =
 proc heroVmLimits(): Limits =
   ## Returns independent structural and per-decision limits for a hero VM.
   result = defaultLimits()
+  result.maxStringBytes = 256 * 1024
   result.maxSourceBytes = 64 * 1024
   result.maxCodeInstructions = 20_000
   result.maxArrays = 32
@@ -260,10 +262,65 @@ proc abilityProc(heroId: int32, field: AbilityField): HostProc =
     of AbilityRestore: spec.restore
     of AbilityManaCost: spec.manaCost
 
+proc sendChat*(
+  game: Game, sender, target: int, text: openArray[char]
+): int32 =
+  ## Routes chat according to this game's player and team rules.
+  if sender notin 0 ..< game.inboxes.len or
+    target < -2 or target >= game.inboxes.len:
+      return 0
+  let id = int32(if target < 0: target else: sender)
+  for recipient in 0 ..< game.inboxes.len:
+    case target
+    of -2:
+      discard
+    of -1:
+      if game.world.heroes[recipient].team != game.world.heroes[sender].team:
+        continue
+    else:
+      if recipient != target:
+        continue
+    if game.inboxes[recipient].push(id, text):
+      inc result
+
 proc initHeroHost(heroId: int32): Host =
   ## Builds the bounded world-query and action interface for one hero.
   result = initHost()
   result.addNeuralFunctions()
+  let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
+    ## Sends script text through the game's routing rules.
+    let player = activeGame.world.heroIndex(heroId)
+    activeGame.heroVms[player].runtime.withString(args[1], text):
+      result = activeGame.sendChat(player, int(args[0].asInt), text)
+  let pullMailboxProc: NumericHostProc = proc(args: openArray[Value]): Value =
+    ## Copies the oldest message into BASIC and consumes it on success.
+    let
+      player = activeGame.world.heroIndex(heroId)
+      inbox = activeGame.inboxes[player]
+    var runtime = activeGame.heroVms[player].runtime
+    if inbox.count == 0:
+      result = runtime.putString("")
+    else:
+      result = runtime.putString(inbox.messages[inbox.first])
+    discard inbox.pop()
+  let mailboxIdProc: HostProc = proc(args: openArray[int32]): int32 =
+    ## Returns the channel or DM sender of the last pulled message.
+    activeGame.inboxes[activeGame.world.heroIndex(heroId)].lastId
+  let mailboxCountProc: HostProc = proc(args: openArray[int32]): int32 =
+    ## Counts this player's unread messages.
+    int32(activeGame.inboxes[activeGame.world.heroIndex(heroId)].count)
+  let mailboxSelfProc: HostProc = proc(args: openArray[int32]): int32 =
+    ## Returns this player's zero-based mailbox address.
+    int32(activeGame.world.heroIndex(heroId))
+  let mailboxPlayersProc: HostProc = proc(args: openArray[int32]): int32 =
+    ## Returns the number of player mailboxes in this game.
+    int32(activeGame.inboxes.len)
+  discard result.addFunction("sendChat", 2, sendChatProc, 256)
+  discard result.addFunction("pullMailbox$", 0, pullMailboxProc, 256)
+  discard result.addFunction("mailboxId", 0, mailboxIdProc, 4)
+  discard result.addFunction("mailboxCount", 0, mailboxCountProc, 4)
+  discard result.addFunction("mailboxSelf", 0, mailboxSelfProc, 4)
+  discard result.addFunction("mailboxPlayers", 0, mailboxPlayersProc, 4)
   for error in ActionError:
     discard result.addData($error, error.ord.int32)
   for class in HeroClass:
@@ -800,15 +857,19 @@ proc loadBots*(
     kinds = controllerKinds(game.world.heroes.len, playerSlot)
     sources = groups.expandBotSources(kinds)
   game.heroVms.setLen(game.world.heroes.len)
+  game.inboxes.setLen(game.world.heroes.len)
+  for inbox in game.inboxes.mitems:
+    inbox = newMailbox()
   var bound = false
   for i in 0 ..< game.world.heroes.len:
     if kinds[i] == PlayerController:
       continue
+    let source = sources[i]
     let program =
       when defined(coworld):
-        compilePlayer(sources[i], schema, limits, int(i))
+        compilePlayer(source, schema, limits, int(i))
       else:
-        compile(sources[i], schema, limits)
+        compile(source, schema, limits)
     if not bound:
       bindHeroData(program)
       bound = true
@@ -833,8 +894,8 @@ proc runHeroScript(game: Game, index: int) =
     vm = game.heroVms[index]
   if vm == nil or vm.failed:
     return
-  vm.runtime.restart()
   try:
+    vm.runtime.restart()
     discard game.world.worldObjectCount(hero.id)
     vm.runtime.setData(heroDataIds[DataSelfId], hero.id)
     vm.runtime.setData(heroDataIds[DataSelfTeam], int32(hero.team.ord))

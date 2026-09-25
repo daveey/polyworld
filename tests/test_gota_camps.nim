@@ -353,6 +353,8 @@ block:
     targetId: unit.id, attackTicks: TowerAttackTicks - 1)
   world.buildings.add tower
   world.updateTower(tower)
+  inc world.tick
+  world.advanceTowerShots()
   doAssert world.footmen[index].hp <= 0
   doAssert hero.totalXp == NeutralXp[unit.campTier - 1] div 2
   doAssert ally.totalXp == hero.totalXp

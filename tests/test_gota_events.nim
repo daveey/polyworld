@@ -136,6 +136,8 @@ block:
   world.buildings.add tower
   world.footmen[0].hp = 1
   world.updateTower(world.buildings[^1])
+  inc world.tick
+  world.advanceTowerShots()
   doAssert world.last(Death).actor.id == 20
   doAssert world.last(Death).actor.kind == 4
   doAssert world.last(Death).target.kind == 3

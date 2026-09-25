@@ -1,5 +1,31 @@
 import polyworld/visions
 
+echo "Testing fractional vision circles, source offsets and cached occlusion"
+block:
+  const Size = 31'i32
+  var
+    cache: VisionCache
+    reference, cached: seq[uint8]
+    terrain = newSeq[int16](Size * Size)
+    blockers = newSeq[int16](Size * Size)
+  for offset in [-2500'i32, 0'i32, 2500'i32]:
+    let source = VisionSource(x: 15, z: 15, radius: 11, eyeHeight: 24,
+      units: 10_000, range: 95_000, offsetX: offset)
+    revealVision(reference, Size, Size, terrain, blockers, [source])
+    revealVisionCached(cache, cached, Size, Size, terrain, blockers, [source])
+    doAssert cached == reference
+    doAssert cached[15 * Size + 24] == 255
+    doAssert cached[15 * Size + 26] == 0
+    doAssert (cached[15 * Size + 25] != 0) == (offset >= 0)
+    doAssert (cached[15 * Size + 5] != 0) == (offset <= 0)
+  blockers[15 * Size + 18] = 40
+  let source = VisionSource(x: 15, z: 15, radius: 11, eyeHeight: 24,
+    units: 10_000, range: 95_000)
+  revealVision(reference, Size, Size, terrain, blockers, [source])
+  revealVisionCached(cache, cached, Size, Size, terrain, blockers, [source])
+  doAssert cached == reference
+  doAssert cached[15 * Size + 24] == 0
+
 echo "Testing cached vision against full rebuilds across world changes"
 block:
   var

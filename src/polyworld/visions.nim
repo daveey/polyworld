@@ -18,6 +18,8 @@ type
     x*, z*: int32
     radius*: int32
     eyeHeight*: int16
+    units*, range*, offsetX*, offsetZ*: int32
+      ## Optional exact circle in sub-tile units, relative to the source center.
   VisionRayStep = object
     ox, oz: int8
   VisionOffset* = object
@@ -107,6 +109,17 @@ proc copyVisionKeys*(dest: var seq[int32], src: openArray[int32]) =
   dest.setLen(src.len)
   for i, value in src:
     dest[i] = value
+
+proc inVisionRange(source: VisionSource, x, z: int32): bool =
+  ## Includes cells intersecting an exact circle when sub-tile units are supplied.
+  if source.units <= 0:
+    return true
+  let
+    dx = max(0'i64, abs(int64(x - source.x) * source.units -
+      source.offsetX) - source.units div 2)
+    dz = max(0'i64, abs(int64(z - source.z) * source.units -
+      source.offsetZ) - source.units div 2)
+  dx * dx + dz * dz <= int64(source.range) * source.range
 
 proc rayBlocked(
     width: int32,
@@ -295,7 +308,7 @@ proc revealVision*(
       for z in minimumZ .. maximumZ:
         for x in minimumX .. maximumX:
           let index = z * width + x
-          if visible[index] != 0:
+          if visible[index] != 0 or not source.inVisionRange(x, z):
             continue
           if lineVisible(
             width,
@@ -319,6 +332,8 @@ proc revealVision*(
         x = source.x + int32(offset.dx)
         z = source.z + int32(offset.dz)
       if x < 0 or x >= width or z < 0 or z >= height:
+        continue
+      if not source.inVisionRange(x, z):
         continue
       let index = z * width + x
       if visible[index] != 0:
@@ -369,7 +384,7 @@ proc revealVisionCached*(
       var cells: seq[int32]
       for z in max(0'i32, source.z - source.radius) .. min(height - 1, source.z + source.radius):
         for x in max(0'i32, source.x - source.radius) .. min(width - 1, source.x + source.radius):
-          if source.radius > 0 and lineVisible(
+          if source.radius > 0 and source.inVisionRange(x, z) and lineVisible(
               width, height, terrainHeights, blockerHeights,
               source.x, source.z, x, z, source.radius, source.eyeHeight):
             cells.add z * width + x

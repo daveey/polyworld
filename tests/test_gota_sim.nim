@@ -174,11 +174,15 @@ block:
     "a tower should protect heroes by targeting a footman first"
   for _ in 1 ..< TowerAttackTicks:
     updateTower(run.world, run.world.buildings[0])
+    inc run.world.tick
+    run.world.advanceTowerShots()
   doAssert run.world.footmen[0].hp ==
     FootmanHp - TowerDamages[run.world.buildings[0].tier]
   run.world.footmen[0].hp = 0
   for _ in 0 ..< TowerAttackTicks:
     updateTower(run.world, run.world.buildings[0])
+    inc run.world.tick
+    run.world.advanceTowerShots()
   doAssert run.world.buildings[0].targetId == run.world.heroes[targetHero].id
   doAssert run.world.heroes[targetHero].hp ==
     run.world.heroes[targetHero].maxHp -
@@ -193,6 +197,8 @@ block:
   let deaths = run.world.stats.values[victim][LossesMetric]
   for _ in 0 ..< TowerAttackTicks:
     updateTower(run.world, run.world.buildings[0])
+    inc run.world.tick
+    run.world.advanceTowerShots()
   doAssert run.world.stats.values[victim][LossesMetric] == deaths + 1
   doAssert snapshot.stats.values[victim][LossesMetric] == deaths
   run.world.restore(snapshot)

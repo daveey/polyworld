@@ -11,7 +11,7 @@
 import
   bassy, fixxy,
   polyworld/[bodies, hashes, metrics, pathing, profiles, rngs, tapes,
-    visions],
+    visions, mailboxes],
   content,
   maps,
   replays
@@ -41,6 +41,7 @@ type
     historyPlayback*: bool
     replayMode*: bool
     heroVms*: array[PartySize, HeroVm]
+    inboxes*: array[PartySize, Mailbox]
 
 const
   AggroTiles* = 9'i32

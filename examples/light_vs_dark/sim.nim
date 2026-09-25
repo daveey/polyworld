@@ -7,7 +7,7 @@
 import
   bassy, fixxy,
   polyworld/[bodies, hashes, metrics, pathing, profiles, rngs, tapes,
-    visions],
+    visions, mailboxes],
   content,
   maps,
   replays
@@ -153,6 +153,7 @@ type
     historyPlayback*: bool
     replayMode*: bool
     brains*: array[PlayerCount, OverlordVm]
+    inboxes*: array[PlayerCount, Mailbox]
     mapSeed*: int32
     maximumTicks*: int32
 

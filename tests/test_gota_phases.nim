@@ -132,7 +132,7 @@ for first in Team:
     doAssert creep.hp <= 0 and creep.state == Dying
     doAssert game.world.deaths(creep.id) == 1
 
-echo "Testing a tower and hero both land their final attacks"
+echo "Testing an in-flight tower shot and hero both land their final attacks"
 for team in Team:
   let
     game = arena()
@@ -143,6 +143,11 @@ for team in Team:
       tier: OuterTower, position: middle(), hp: 1, maxHp: 1,
       targetId: hero.id, attackTicks: TowerAttackTicks - 1)
   ]
+  game.world.towerShots.add TowerShot(
+    sourceId: 10, targetId: hero.id, team: enemy,
+    damage: TowerDamages[OuterTower], position: hero.position,
+    previous: hero.position, started: game.world.tick
+  )
   hero.attackObjectId = 10
   game.tickWorld(nil)
   doAssert hero.hp <= 0 and hero.state == Dying

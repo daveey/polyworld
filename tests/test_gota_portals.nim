@@ -59,7 +59,7 @@ for size in [64, 116, 256]:
     doAssert hero.itemCounts[0] == 2
     doAssert tower.team == team and tower.kind == TowerBuilding
     doAssert within(destination, tower.position,
-      tower.tier.towerSightTiles * WorldScale)
+      TowerAttackRanges[tower.tier])
     doAssert not world.applyWalkTo(hero.id, aim, aim)
     doAssert hero.lastActionError == ActionChanneling
     doAssert not world.applyAttackMove(hero.id, aim, aim)

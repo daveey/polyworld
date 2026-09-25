@@ -1818,8 +1818,7 @@ proc runGraphics*() =
 
   proc emitTickParticles(
       oldHeroLanded: seq[bool],
-      oldFootmanLanded: Table[int32, bool],
-      oldTowerTicks: seq[int32]
+      oldFootmanLanded: Table[int32, bool]
   ) =
     ## Emits each authoritative attack transition exactly once.
     for i, hero in run.world.heroes:
@@ -1860,27 +1859,6 @@ proc runGraphics*() =
           renderPoint(footman.position) + vec3(0, 1.4'f, 0),
           target.position
         )
-    for i, tower in run.world.buildings:
-      if i >= oldTowerTicks.len or tower.targetId == 0 or
-          oldTowerTicks[i] != TowerAttackTicks - 1 or
-          tower.attackTicks != 0:
-        continue
-      let target = particleTargetPosition(tower.targetId)
-      if not target.found:
-        continue
-      let origin = renderPoint(tower.position) +
-        vec3(0, buildingScale(tower) * 0.72'f32, 0)
-      particles.emitParticleProjectile(
-        Fireball,
-        FireBurst,
-        origin,
-        target.position,
-        clamp(
-          (target.position - origin).length / 14.0'f32,
-          0.14'f32,
-          0.5'f32
-        )
-      )
 
   proc advanceRenderedSimulation() =
     ## Advances one simulation tick and starts any new god animation.
@@ -1889,14 +1867,11 @@ proc runGraphics*() =
       oldHeroLanded = newSeq[bool](run.world.heroes.len)
       oldPortalEnds = newSeq[int32](run.world.heroes.len)
       oldFootmanLanded: Table[int32, bool]
-      oldTowerTicks = newSeq[int32](run.world.buildings.len)
     for i, hero in run.world.heroes:
       oldHeroLanded[i] = hero.damageLanded
       oldPortalEnds[i] = hero.portalEnds
     for footman in run.world.footmen:
       oldFootmanLanded[footman.id] = footman.damageLanded
-    for i, tower in run.world.buildings:
-      oldTowerTicks[i] = tower.attackTicks
     captureUnitPositions()
     advanceGame()
     for i, hero in run.world.heroes:
@@ -1905,8 +1880,7 @@ proc runGraphics*() =
     feedGotaActions(observeTick = true)
     emitTickParticles(
       oldHeroLanded,
-      oldFootmanLanded,
-      oldTowerTicks
+      oldFootmanLanded
     )
     if int(run.world.tick) mod SeekCheckpointTicks == 0 or
         int32(run.world.tick) == transport.timelineEnd:
@@ -2268,7 +2242,7 @@ proc runGraphics*() =
             var ring: array[65, Vec3]
             let
               center = renderPoint(tower.position)
-              radius = tower.tier.towerSightTiles.float32
+              radius = TowerAttackRanges[tower.tier].float32 / WorldScale.float32
             for i in 0 .. ring.high:
               let angle = i.float32 * 2 * PI.float32 / ring.high.float32
               ring[i] = center + vec3(cos(angle) * radius, 0,

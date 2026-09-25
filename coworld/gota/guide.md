@@ -14,6 +14,10 @@ the last hit. This is awarded once on the final tick and included in lifetime XP
 before calculating scores. It offsets 5 minutes of the 200-XP-per-minute time
 penalty. Timeouts grant no god reward.
 Destroying a tower or barracks grants its killer 200 XP and 75 gold.
+Towers fire once per second, and reload continues when they lose or switch
+targets. Their homing fireballs deal damage on arrival and follow the original
+target beyond range and into fog, even if the tower is destroyed. Shots disappear
+if their target dies before impact.
 
 The gods are the objectives: Hades for Red and Zeus for Blue. Each god has two level-3 guard towers. Clearing all three towers in any one lane exposes the guards. The god cannot take damage from attacks or spells until both of its guards are destroyed. Guards have the same 3900 HP and 60 damage as level-3 lane towers.
 
@@ -237,7 +241,8 @@ Buy item **21** for **100 gold**. Scrolls stack to eight per slot. Call
 `useItemAt(slot, x, y)` with whole or fractional map coordinates to consume
 one scroll and begin a **3-second** channel. The destination is the nearest
 visible, walkable point inside a living allied tower's sight radius:
-7 tiles for outer/inner towers, 8 for gate/guard towers. Barracks are not
+9 tiles for outer towers, 9.5 for inner towers, and 10 for gate/guard towers.
+Attack range, vision, and portal landing range share this same radius. Barracks are not
 anchors. A distant requested point is clamped into this area; there is no
 travel-distance limit. The selected tower must survive until arrival.
 

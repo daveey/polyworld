@@ -20,6 +20,7 @@ type
     meshes: array[Ability, SpellMesh]
     glow: SpellMesh
     trail: SpellMesh
+    fireball: SpellMesh
 
 proc initSpellRenderer*(): SpellRenderer =
   ## Creates the shared spell mesh shader and reusable geometry buffer.
@@ -267,6 +268,59 @@ proc matches(area: AreaMesh, spell: SpellCast): bool =
     area.ability == spell.ability and area.position == spell.position and
     area.direction == spell.direction
 
+proc drawTowerShots(
+    effects: var SpellRenderer,
+    world: World,
+    viewProjection: Mat4,
+    alpha: float32,
+    viewMode: int32
+) =
+  ## Draws homing fireballs and impacts directly from replay simulation state.
+  var settings = defaultFxSettings()
+  settings.shape = SphereShape
+  settings.pivot = CenterPivot
+  settings.radius = 0.22
+  settings.radialSegments = 16
+  settings.heightSegments = 8
+  settings.texture = NoiseTexture
+  settings.blendMode = AdditiveBlend
+  settings.startColor = vec4(1.0, 0.85, 0.25, 1.0)
+  settings.endColor = vec4(1.0, 0.16, 0.02, 0.6)
+  settings.scroll = vec2(0.7, -1.8)
+  settings.waveAmp = 0.04
+  settings.waveFreq = 5
+  settings.waveSpeed = 6
+  if effects.fireball.vertices.len == 0:
+    effects.fireball = buildFxMesh(settings)
+  for shot in world.towerShots:
+    if viewMode > 0 and shot.team != Team(viewMode - 1) and
+      not world.visible(Team(viewMode - 1), shot.position):
+        continue
+    let
+      age = (world.tick.float32 + alpha - shot.started.float32) /
+        TickRate.float32
+      impact = shot.impact > 0
+      fade =
+        if impact:
+          clamp(1 - (world.tick.float32 + alpha - shot.impact.float32) /
+            TowerImpactTicks.float32, 0, 1)
+        else:
+          1.0'f
+      position =
+        if impact:
+          shot.position.spellPoint()
+        else:
+          mix(shot.previous.spellPoint(), shot.position.spellPoint(), alpha)
+      size = if impact: 1 + (1 - fade) * 3 else: 1.0'f
+      base = translate(position)
+    settings.startColor.w = fade
+    settings.endColor.w = fade * 0.6
+    effects.renderer.uploadFxMesh(effects.fireball)
+    effects.renderer.drawFxMesh(
+      settings, viewProjection, base, age, 0.2, sizeScale = size
+    )
+    effects.drawGlow(viewProjection, base, vec3(1.0, 0.5, 0.04), age, fade)
+
 proc drawSpells*(
     effects: var SpellRenderer,
     world: World,
@@ -278,6 +332,7 @@ proc drawSpells*(
   let
     time = world.tick.float32 + alpha
     seconds = time / TickRate.float32
+  effects.drawTowerShots(world, viewProjection, alpha, viewMode)
   var write = 0
   for area in effects.areas:
     for spell in world.casts:
@@ -476,3 +531,4 @@ proc closeSpellRenderer*(effects: var SpellRenderer) =
   effects.meshes = default(typeof(effects.meshes))
   effects.glow = default(SpellMesh)
   effects.trail = default(SpellMesh)
+  effects.fireball = default(SpellMesh)
