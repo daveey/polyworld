@@ -25,6 +25,10 @@ else:
 --define:nimTypeNames
 --define:flatty64
 
+let bassyPath = getEnv("BASSY_PATH")
+if bassyPath.len > 0:
+  switch("path", bassyPath)
+
 when defined(coworld):
   when defined(emscripten):
     error("Coworld servers are native. Build replay viewers without -d:coworld.")

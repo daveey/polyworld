@@ -5,6 +5,7 @@
 ## cannot write world fields directly.
 
 import
+  polyworld/neural,
   bassy,
   polyworld/[mailboxes, bodies, metrics, cli, controllers,
     pathing, profiles],
@@ -128,6 +129,7 @@ proc sendChat*(
 proc buildHeroHost(heroId: int32): Host =
   ## Builds the world-query and high-level action API for one hero.
   result = initHost()
+  result.addNeuralFunctions()
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Sends script text through the game's routing rules.
     let player = int(heroId - 100)
