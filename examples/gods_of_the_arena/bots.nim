@@ -876,6 +876,7 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
   seat.sampling = package.decoder == SampleDecoder
   seat.temperature = package.temperature
   seat.telemetry = true
+  seat.deferEnabled = package.deferScript
   seat.resetEpisode(game.world.matchSeed, i)
   game.heroVms[i] = HeroVm(
     runtime: initRuntime(program, host, limits),
@@ -1015,6 +1016,9 @@ proc runHeroScript(game: Game, index: int) =
   if index < 0 or index >= game.heroVms.len:
     return
   let vm = game.heroVms[index]
+  if vm != nil and vm.neural != nil and not vm.failed and
+      NeuralSeat(vm.neural).deferEnabled:
+    game.deferConsult(index)
   game.runHeroVm(index, vm, true)
   if vm != nil and vm.neural != nil:
     let shadow = NeuralSeat(vm.neural).shadow

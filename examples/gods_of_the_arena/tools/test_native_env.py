@@ -204,9 +204,12 @@ def test_validation(lib):
         "policy hash mismatch": lambda f: f.__setitem__("policy.bas", f["policy.bas"] + b"\n' x\n"),
         "extra file": lambda f: f.__setitem__("notes.txt", b"hi"),
         "missing model": lambda f: f.pop("model.bin"),
+        "defer_script not a bool": edit_manifest("decoder", {"defer_script": 1}),
     }
     env = Env(lib, learner_seats=[])
     check("good package accepted by both", env.set_package(1, good) == 0)
+    deferring = npk.build(BASE.encode(), model, decoder={"defer_script": True})
+    check("defer_script package accepted by both", env.set_package(2, deferring) == 0)
     for name, fn in cases.items():
         bad = corrupt(good, fn)
         try:

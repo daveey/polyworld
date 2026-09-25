@@ -26,6 +26,8 @@ type
     goals*: array[2, array[GoalSize, float32]] ## red, blue
     decoder*: DecoderMode
     temperature*: float32
+    deferScript*: bool
+      ## decoder.defer_script: verb 0 defers to policy.bas (residual track).
     manifest*: string
 
 proc isPackage*(bytes: string): bool = bytes.startsWith(ZipMagic)
@@ -182,7 +184,11 @@ proc parsePackage*(bytes: string): NeuralPackage =
   result.temperature = 1
   if manifest.hasKey("decoder"):
     let decoder = manifest["decoder"]
-    decoder.requireKeys(["mode", "temperature"], "decoder")
+    decoder.requireKeys(["mode", "temperature", "defer_script"], "decoder")
+    if decoder.hasKey("defer_script"):
+      if decoder["defer_script"].kind != JBool:
+        raise newException(ValueError, "decoder.defer_script must be true or false")
+      result.deferScript = decoder["defer_script"].getBool
     let mode = if decoder.hasKey("mode"): decoder["mode"].getStr else: "argmax"
     case mode
     of "argmax":

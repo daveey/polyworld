@@ -34,6 +34,9 @@ type
     packages: array[10, string]
     overrides: array[10, bool]
     shadows: array[10, string]
+    defers: array[10, string]
+      ## Residual track: the learner seat's defer script (empty = off).
+    root: string
     goals: array[10, array[GoalSize, float32]]
     status: array[10, SeatStatus]
     game: Game
@@ -190,12 +193,15 @@ proc resetEnv(env: Env, seed: int64): int =
       continue
     if learner:
       env.status[i] = SeatStatus(code: 0)
-      if env.compileSeat(game, i, env.policyScript, true):
+      let deferring = env.defers[i].len > 0
+      let program = if deferring: env.defers[i] else: env.policyScript
+      if env.compileSeat(game, i, program, true):
         let seat = newNeuralSeat(NeuralLearner, env.period, env.maxTicks)
+        seat.deferEnabled = deferring
         seat.goal = env.goals[i]
         seat.resetEpisode(int32(seed), i)
         game.heroVms[i].neural = seat
-        if env.shadows[i].len > 0:
+        if env.shadows[i].len > 0 and not deferring:
           let heroId = game.world.heroes[i].id
           try:
             let program = compile(env.shadows[i], initHeroHost(0), heroVmLimits())
@@ -270,7 +276,7 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
           "record", "capture"]:
         raise newException(ValueError, "unknown config key " & key)
     let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
-    let env = Env(period: DefaultDecisionPeriod, capture: true)
+    let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
     env.config =
       if node.hasKey("config_path"): loadConfig(resolve(root, node["config_path"].getStr))
       else: parseConfig("{}")
@@ -561,7 +567,7 @@ proc gota_seat_orders(handle: pointer, seat: cint, output: ptr UncheckedArray[in
     for i in 0 ..< OrderSize:
       output[i] = s.lastLabel[i]
   of NeuralLearner, NeuralPackage:
-    if s.shadow != nil:
+    if s.shadow != nil or (s.deferEnabled and s.mode == NeuralLearner):
       for i in 0 ..< OrderSize:
         output[i] = s.lastLabel[i]
       return 0
@@ -589,6 +595,44 @@ proc gota_set_seat_shadow(handle: pointer, seat: cint, source: cstring, length: 
   let (ok, _) = checkCompile(text, false)
   if not ok: return 1
   env.shadows[seat] = text
+  env.defers[seat] = ""
+  0
+
+proc gota_set_seat_defer_script(handle: pointer, seat: cint, path: cstring): cint {.exportc, dynlib, cdecl.} =
+  ## Residual track: verb 0 defers to this script on a learner seat
+  ## (native_env.h). NULL or "" = off.
+  let env = toEnv(handle)
+  if env == nil or seat notin 0..9: return -1
+  if path == nil or path[0] == '\0':
+    env.defers[seat] = ""
+    return 0
+  var text: string
+  try:
+    text = readFile(resolve(env.root, $path))
+  except CatchableError as e:
+    lastError = e.msg
+    return -3
+  if text.len == 0:
+    lastError = "defer script is empty: " & $path
+    return -3
+  let (ok, message) = checkCompile(text, true)
+  if not ok:
+    lastError = message
+    return 1
+  env.defers[seat] = text
+  env.shadows[seat] = ""
+  0
+
+proc gota_seat_defer_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int64]): cint {.exportc, dynlib, cdecl.} =
+  let env = toEnv(handle)
+  if env == nil or seat notin 0..9 or output == nil: return -1
+  output[0] = 0
+  output[1] = 0
+  if env.game != nil:
+    let s = env.game.neuralSeat(seat)
+    if s != nil and s.deferEnabled:
+      output[0] = int64(s.deferDecisions)
+      output[1] = int64(s.overrideDecisions)
   0
 
 proc gota_set_seat_override(handle: pointer, seat: cint, enabled: int32): cint {.exportc, dynlib, cdecl.} =

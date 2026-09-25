@@ -30,6 +30,8 @@ class Lib:
         L.gota_seat_orders.argtypes = [vp, ctypes.c_int, i32p]
         L.gota_set_seat_override.argtypes = [vp, ctypes.c_int, ctypes.c_int32]
         L.gota_set_seat_shadow.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
+        L.gota_set_seat_defer_script.argtypes = [vp, ctypes.c_int, ctypes.c_char_p]
+        L.gota_seat_defer_stats.argtypes = [vp, ctypes.c_int, i64p]
         L.gota_set_seat_package.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int64]
         L.gota_seat_script_status.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_set_learner_seats.argtypes = [vp, ctypes.c_uint32]
@@ -115,6 +117,15 @@ class Env:
 
     def set_override(self, seat, on):
         return self.L.gota_set_seat_override(self.h, seat, int(on))
+
+    def set_defer_script(self, seat, path):
+        """Residual track: verb 0 defers to this script on a learner seat (None = off)."""
+        return self.L.gota_set_seat_defer_script(self.h, seat, path.encode() if path else None)
+
+    def defer_stats(self, seat):
+        out = np.zeros(2, np.int64)
+        self.L.gota_seat_defer_stats(self.h, seat, ptr(out, ctypes.c_int64))
+        return out
 
     def set_package(self, seat, data):
         return self.L.gota_set_seat_package(self.h, seat, data, len(data))

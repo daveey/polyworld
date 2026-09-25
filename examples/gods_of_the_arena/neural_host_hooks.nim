@@ -42,6 +42,12 @@ type
     shadow*: HeroVm
       ## Learner seats only: an expert script run on the same frame whose
       ## commands become labels and are never executed (DAgger).
+    deferEnabled*: bool
+      ## Residual track: verb 0 = defer to the seat's own script (its BASIC
+      ## program); any other verb overrides it for the decision window.
+    absorbing*: bool
+      ## Inside an override window: the script's contract commands are absorbed.
+    deferDecisions*, overrideDecisions*: int
 
 var shadowRunning {.threadvar.}: bool
   ## True while a shadow expert script runs: its host calls change nothing.
@@ -117,6 +123,9 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   seat.command = NeuralCommand()
   seat.decisions = 0
   seat.invalid = 0
+  seat.absorbing = false
+  seat.deferDecisions = 0
+  seat.overrideDecisions = 0
   seat.inferences = 0
   seat.lastTelemetry = 0
   seat.rng = uint64(uint32(matchSeed)) * 1_000_003'u64 + uint64(index) + 1
@@ -179,7 +188,7 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
     if seat.mode == NeuralCapture:
       seat.captured.setLen(0)
   of NeuralLearner:
-    if seat.shadow != nil:
+    if seat.shadow != nil or seat.deferEnabled:
       seat.lastLabel = seat.label
       seat.label = default(typeof(seat.label))
       seat.labelInstant = false
@@ -237,6 +246,12 @@ proc interceptCommand*(game: Game, heroId: int32, command: NeuralCommand): bool 
     if seat.frameTick >= 0:
       seat.writeLabel(game.world, tagged)
     return true
+  if seat.deferEnabled:
+    # Residual seat: the script is the seat's program. Its contract commands
+    # run live in a defer window and are absorbed in an override window.
+    if seat.mode == NeuralLearner and seat.frameTick >= 0:
+      seat.writeLabel(game.world, tagged)
+    return seat.absorbing
   case seat.mode
   of NeuralOverride:
     seat.captured.add tagged
@@ -275,6 +290,33 @@ proc actNow*(game: Game, index: int): int32 =
   if isInvalid(seat.frame, seat.heads):
     inc seat.invalid
   int32(game.issueDecoded(world.heroes[index].id, seat.command))
+
+proc deferConsult*(game: Game, index: int) =
+  ## Residual track: once per decision tick, before the seat's script runs,
+  ## verb 0 opens a defer window (the script's contract commands execute) and
+  ## any other verb issues the decoded command and opens an override window
+  ## (the script's contract commands are absorbed until the next decision).
+  ## Shared by the native learner seat and the hosted package seat.
+  let seat = game.neuralSeat(index)
+  if seat == nil or not seat.deferEnabled:
+    return
+  let world = game.world
+  if seat.frameTick != world.tick or seat.issuedTick == world.tick:
+    return
+  seat.issuedTick = world.tick
+  if not seat.acting or not seat.headsReady:
+    seat.absorbing = false
+    return
+  inc seat.decisions
+  if seat.heads[0] == 0:
+    seat.absorbing = false
+    inc seat.deferDecisions
+    return
+  seat.absorbing = true
+  inc seat.overrideDecisions
+  if isInvalid(seat.frame, seat.heads):
+    inc seat.invalid
+  discard game.issueDecoded(world.heroes[index].id, seat.command)
 
 proc runOverride*(game: Game, index: int, seat: NeuralSeat) =
   ## Mapping ceiling: route the script's queued orders through the contract.

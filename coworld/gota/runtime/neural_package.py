@@ -151,7 +151,9 @@ def validate(data: bytes, obs_hash=OBS_HASH, action_hash=ACTION_HASH) -> dict:
         _goal(m["goal"]["blue"], "goal.blue")
     if "decoder" in m:
         d = m["decoder"]
-        _keys(d, {"mode", "temperature"}, "decoder")
+        _keys(d, {"mode", "temperature", "defer_script"}, "decoder")
+        if "defer_script" in d and not isinstance(d["defer_script"], bool):
+            raise PackageError("decoder.defer_script must be true or false")
         mode = d.get("mode", "argmax")
         if mode == "argmax":
             if "temperature" in d:
@@ -209,6 +211,8 @@ def main():
     b.add_argument("--period", type=int, default=4)
     b.add_argument("--decoder", choices=["argmax", "sample"])
     b.add_argument("--temperature", type=float)
+    b.add_argument("--defer-script", action="store_true",
+                   help="decoder.defer_script: verb 0 defers to policy.bas (e.g. base.bas verbatim)")
     b.add_argument("--goal-red", type=float, nargs=16)
     b.add_argument("--goal-blue", type=float, nargs=16)
     a = ap.parse_args()
@@ -229,6 +233,8 @@ def main():
             decoder = {"mode": a.decoder}
             if a.temperature is not None:
                 decoder["temperature"] = a.temperature
+        if a.defer_script:
+            decoder = dict(decoder or {}, defer_script=True)
         goal = {"red": a.goal_red, "blue": a.goal_blue} if a.goal_red and a.goal_blue else None
         data = build(open(a.policy, "rb").read(), open(a.model, "rb").read(), a.period, decoder, goal)
         open(a.out, "wb").write(data)
