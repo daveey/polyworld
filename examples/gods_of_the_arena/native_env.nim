@@ -107,6 +107,13 @@ proc updatePush(env: Env) =
     let milli = int64(depth * 1000 / float64(WorldScale))
     env.pushDepth[i] = max(env.pushDepth[i], milli)
 
+proc tickDone(env: Env) =
+  ## Per-tick replay telemetry, exactly as the headless runner samples it.
+  if env.record:
+    let game = env.game
+    game.sampleMetrics(game.finished())
+    game.metrics.finishTick(game.world.tick)
+
 proc pauseOrFinish(env: Env) =
   ## Runs ticks until the next decision tick's heroes' turn (paused, with the
   ## observation frame frozen) or the end of the match.
@@ -123,9 +130,10 @@ proc pauseOrFinish(env: Env) =
       env.over = true
       return
     of TickDone:
-      discard
+      env.tickDone()
     of TickNoTurn:
       game.tickWorldFinish()
+      env.tickDone()
     of TickHeroTurn:
       if game.world.isDecisionTick(env.period):
         game.neuralPrelude()
@@ -134,6 +142,7 @@ proc pauseOrFinish(env: Env) =
         return
       runBotDecisions(game)
       game.tickWorldFinish()
+      env.tickDone()
 
 proc resetEnv(env: Env, seed: int64): int =
   activeGame = nil
@@ -216,6 +225,7 @@ proc resetEnv(env: Env, seed: int64): int =
   # Draft (BASIC picks), then the first battle decision.
   while game.world.phase == Drafting and not game.finished():
     tickWorld(game, proc() = runBotDecisions(game))
+    env.tickDone()
   env.pauseOrFinish()
 
 proc toEnv(handle: pointer): Env =
@@ -395,6 +405,7 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
         seat.setLearnerHeads(heads)
     runBotDecisions(game)
     game.tickWorldFinish()
+    env.tickDone()
     env.pauseOrFinish()
   except CatchableError as e:
     lastError = e.msg
@@ -615,6 +626,8 @@ proc gota_save_replay(handle: pointer, path: cstring): cint {.exportc, dynlib, c
   let env = toEnv(handle)
   if env == nil or env.game == nil or env.game.recorder == nil or path == nil: return -1
   try:
+    if env.game.world.tick == env.game.recorder.data.hashes.len:
+      env.game.sampleMetrics(true)
     env.game.recorder.data.metrics = env.game.history.replayMetrics()
     saveReplay($path, env.game.recorder.data)
     0

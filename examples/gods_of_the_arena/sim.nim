@@ -5575,6 +5575,8 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
 proc tickWorldFinish*(game: Game) =
   ## Completes a battle tick that `tickWorldBegin` paused.
   let world = game.world
+  # Another world may have ticked on this thread while this one was paused.
+  navigationWorld = world
   world.thawObservations()
   world.updateCamps()
 
