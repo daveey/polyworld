@@ -2555,14 +2555,14 @@ proc searchNavTile(
           z = worldZ + mapOrigin() - layer.originZ
         if not navigationOpen(layerIndex, x, z):
           continue
-        if PathTile(layer: layerIndex.int32, x: x.int32, z: z.int32) in excluded:
-          continue
         let
           centerY = worldPoint(pathPoint(layerIndex, x, z)).y
           planar = int64(dx * dx + dz * dz)
           score = planar * int64(WorldScale) * 100 +
             abs(int64(centerY) - int64(referenceY))
-        if score < bestScore:
+        # Exclusion is a pure filter: only a cell that would win needs it.
+        if score < bestScore and
+            PathTile(layer: layerIndex.int32, x: x.int32, z: z.int32) notin excluded:
           value = NavTile(layer: layerIndex, x: x, z: z)
           bestScore = score
           result = true
@@ -5093,10 +5093,12 @@ proc nearestEnemy(
   for footman in world.footmen:
     if not world.hostile(footman, hero.team, engageResting = hero.attackMoving) or
         footman.state == Dying or
-        footman.hp <= 0 or
-        not visible(world, hero.team, footman.position):
+        footman.hp <= 0:
       continue
+    # Range before the (pure) visibility test: a farther unit cannot win.
     let squared = distanceSquared(hero.position, footman.position)
+    if squared > bestSquared or not visible(world, hero.team, footman.position):
+      continue
     if squared < bestSquared or (squared == bestSquared and
       targetBefore(footman.position, footman.id,
         bestPosition, result, hero.team)):
@@ -5107,10 +5109,11 @@ proc nearestEnemy(
     if other.id == hero.id or
         other.team == hero.team or
         other.state == Dying or
-        other.hp <= 0 or
-        not visible(world, hero.team, other.position):
+        other.hp <= 0:
       continue
     let squared = distanceSquared(hero.position, other.position)
+    if squared > bestSquared or not visible(world, hero.team, other.position):
+      continue
     if squared < bestSquared or (squared == bestSquared and
       targetBefore(other.position, other.id, bestPosition, result, hero.team)):
         bestSquared = squared
