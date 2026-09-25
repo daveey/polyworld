@@ -1,4 +1,4 @@
-"""Residual-track (defer script) proofs, Amendment 3. Run on a build host, not a laptop.
+"""Residual-track (defer script) proofs. Run on a build host, not a laptop.
 
   python3 test_defer.py LIB [--seeds N] [--ticks T] [--jobs J] [--old-lib OLD] [--only a,b,c]
 

@@ -41,7 +41,7 @@
  * frame): self 48 | abilities 4x16 | items 6x25 | objects 25x40 | spell
  * warnings 4x8 | summary 16 | terrain 9x9 | goal 16. Exact layout and
  * normalizers: neural_basic.md. The LAST 16 floats are the goal vector w
- * (Amendment 1 order, below) set by gota_set_seat_goal.
+ * (order below) set by gota_set_seat_goal.
  *
  * Action contract v1: five int32 heads per seat, in this order:
  *   verb    8  {0 noop, 1 walk, 2 attackMove, 3 attackTarget, 4 castTarget,
@@ -76,7 +76,7 @@ extern "C" {
 #define GOTA_ORDER_SIZE 16
 #define GOTA_DEFAULT_DECISION_PERIOD 4
 
-/* Goal vector order (Amendment 1); w_reserved must be 0. */
+/* Goal vector order; w_reserved must be 0. */
 enum {
   GOTA_W_SCORE = 0, GOTA_W_WIN, GOTA_W_XP, GOTA_W_GOLD, GOTA_W_HERO_KILL,
   GOTA_W_ASSIST, GOTA_W_DEATH, GOTA_W_LAST_HIT, GOTA_W_NEUTRAL_KILL,
@@ -234,7 +234,7 @@ int gota_set_seat_override(void *handle, int seat, int32_t enabled);
  * gota_reset; length 0 = off (default; byte-identical). */
 int gota_set_seat_shadow(void *handle, int seat, const char *source, int32_t length);
 
-/* Residual track (Amendment 3): verb 0 becomes DEFER on this LEARNER seat.
+/* Residual track: verb 0 becomes DEFER on this LEARNER seat.
  * The seat's BASIC program becomes the script at script_path (relative paths
  * resolve against data_root; NULL or "" = off, the default, byte-identical),
  * compiled under the neural-seat structure limits with the plain-seat

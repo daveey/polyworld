@@ -55,7 +55,7 @@ Build and validate with `python3 coworld/gota/runtime/neural_package.py build|va
 accepts exactly the packages the game accepts. `tools/test_native_env.py` checks that they agree on eleven
 corruptions, including an unknown decoder key, a bad goal, a hash mismatch and extra or missing files.
 
-## Residual seats: `decoder.defer_script` (Amendment 3)
+## Residual seats: `decoder.defer_script`
 
 `"decoder": {"defer_script": true}` (a boolean; combines with `mode`/`temperature`) turns verb 0 into
 DEFER. `policy.bas` is then the script to defer to, for example `players/base.bas` verbatim, with no glue:
@@ -173,7 +173,7 @@ BASIC surface for `policy.bas`, registered only for neural seats:
 - `neuralModel(k)`: k = 0 width, 1 inputs, 2 outputs, 3 period, 5..9 the chosen heads.
 
 Package seats get `neuralVmLimits`: the hero limits with 160 host functions, 40,000 instructions and
-100,000 work units per decision. These were raised for neural seats only, as Amendment 1 allows.
+100,000 work units per decision. These were raised for neural seats only.
 The shipped `policy.bas` peaks at 1,065 instructions per tick (10 learner seats, a full match), so the headroom is for richer glue scripts. Plain seats keep
 `heroVmLimits` (20,000 / 50,000 / 128).
 
@@ -247,7 +247,7 @@ present, d/16, dist/16, ticks to impact/72, hostile, harmless (heal/restore), ab
 **Terrain (81):** a 9×9 known-walkable patch at a 2-tile stride centred on the hero's tile, in the team
 frame and row-major. Offset (−8, −8) comes first.
 
-**Goal (16), Amendment 1 order:**
+**Goal (16), in order:**
 - w_score, w_win, w_xp, w_gold, w_hero_kill, w_assist, w_death, w_last_hit, w_neutral_kill,
 - w_tower_damage, w_structure_kill, w_hero_damage, w_damage_taken, w_push_depth, w_god_damage,
   w_reserved.
