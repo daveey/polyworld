@@ -234,6 +234,47 @@ int gota_set_seat_override(void *handle, int seat, int32_t enabled);
  * gota_reset; length 0 = off (default; byte-identical). */
 int gota_set_seat_shadow(void *handle, int seat, const char *source, int32_t length);
 
+/* Residual track (Amendment 3): verb 0 becomes DEFER on this LEARNER seat.
+ * The seat's BASIC program becomes the script at script_path (relative paths
+ * resolve against data_root; NULL or "" = off, the default, byte-identical),
+ * compiled under the neural-seat VM limits and run every tick on the seat's
+ * own hero as its real program: it observes the true world, drafts, shops,
+ * levels abilities and buys back itself (these non-contract calls always
+ * execute), and it keeps its own persistent variables. policy.bas glue is
+ * not used on this seat.
+ * Decision windows. At each decision tick, before the seat's BASIC runs, the
+ * learner's action is consulted once:
+ *   verb head == 0 (DEFER): every contract command (walkTo .. useItemAt) the
+ *     script issues during this window (the decision tick and the following
+ *     decision_period - 1 ticks) executes live, at the tick the script issues
+ *     it, exactly as on a plain scripted seat. If it issues none, nothing is
+ *     issued and the engine keeps the held order.
+ *   verb head != 0 (OVERRIDE): the decoded learner command is issued on the
+ *     decision tick (invalid choices issue nothing, counted in stats[21]) and
+ *     every contract command the script issues during the window is absorbed
+ *     shadow-style: not executed, returns 1, lastActionError unchanged.
+ * Shadow state under overrides: the script is never paused or re-run; it
+ * reads the true world every tick, so after an override window it sees the
+ * hero where the learner's command put it, but its own variables may still
+ * assume its absorbed orders ran (e.g. "already sent attackTarget(x)") and
+ * base.bas mostly issues orders only when they change, so after an override
+ * the learner's order stays held until the script issues a new one.
+ * A seat that is dead / not acting at the decision frame defers (its action
+ * is ignored, as always). An always-defer learner plays byte-identical (state
+ * hash, replay commands) to a plain seat running the same script.
+ * gota_seat_orders(seat) reports the script's contract commands of the last
+ * window (issued or absorbed) as labels, like a shadow expert; setting a
+ * defer script clears the seat's gota_set_seat_shadow expert and vice versa.
+ * Hosted equivalent: package manifest "decoder": {"defer_script": true}, with
+ * policy.bas = the script (e.g. base.bas verbatim); identical semantics, the
+ * host consults the network at the same point. Seats without the option keep
+ * verb 0 = noop. Takes effect at the next gota_reset. 0 ok, 1 compile failed,
+ * -3 unreadable file (gota_last_error), -1 bad args. */
+int gota_set_seat_defer_script(void *handle, int seat, const char *script_path);
+/* int64[2] = {defer decisions, override decisions} since gota_reset (acting
+ * decisions only; zeros for seats without the defer option). */
+int gota_seat_defer_stats(void *handle, int seat, int64_t *out);
+
 /* Replays and diagnostics (config "record": true records every tick's hash
  * and command; "capture": false turns BC labeling of scripted seats off for
  * speed). gota_save_replay writes the replay (0, -1 not recording).
