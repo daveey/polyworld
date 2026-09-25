@@ -9,7 +9,7 @@
 ## every handle of the process must stay on one thread.)
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
-import std/[json, locks, os, strutils], jsony, scores, polyworld/visions
+import std/[json, locks, os], jsony, scores, polyworld/visions
 include bots
 
 const

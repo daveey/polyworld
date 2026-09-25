@@ -166,7 +166,8 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
       seat.headsReady = true
       seat.command = decodeAction(seat.frame, seat.heads)
       if seat.telemetry and (seat.inferences == 1 or
-          seat.inferences - seat.lastTelemetry >= 1800):
+          seat.inferences - seat.lastTelemetry >= 1800 or
+          world.battleTick() + seat.period > seat.maxTicks):
         seat.lastTelemetry = seat.inferences
         game.seatLog(index, "neural: peak_ops=" & $seat.peakOps & " budget=" &
           $NeuralOpBudget & " model=w" & $seat.actor.hiddenSize & " ticks=" &
