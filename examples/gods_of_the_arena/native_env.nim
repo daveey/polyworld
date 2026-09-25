@@ -16,6 +16,10 @@ const
   GotaEnvVersion = 1
   StatCount = 24
   OrderSize = 16
+  EventWords = 12
+    ## tick, battle tick, seat, kind, first, slot, accepted, gold before,
+    ## gold after, level, class, available-class mask (draft) / ability
+    ## points before (level)
   DataRoot = currentSourcePath().parentDir
 
 type
@@ -54,6 +58,10 @@ type
     replay: ReplayData
     decided: bool
     snap: array[10, array[StatCount, int64]]
+    events: seq[array[EventWords, int32]]
+      ## Replay mode: every recorded non-contract action (draft, buy, level,
+      ## buyback) with its context; gota_replay_events.
+    pending: array[EventWords, int32]
       ## Replay mode: every seat's stats at the paused decision frame (the
       ## live env reports them before the heroes' turn; replay mode has
       ## already finished that tick when it returns).
@@ -233,6 +241,7 @@ proc resetReplay(env: Env): int =
       mapReady = true
     game = newGame(gameMap, data.config.spawnIntervalTicks, 0, true, data)
   env.replay = data
+  env.events.setLen(0)
   env.config = data.config
   env.maxTicks = data.config.maxTicks
   game.replayPlayer = initReplayPlayer(data)
@@ -271,6 +280,29 @@ proc resetReplay(env: Env): int =
     var command: NeuralCommand
     if replayCommand(action, command):
       discard e.game.interceptCommand(action.heroId, command)
+    elif action.kind in {ActionBuyItem, ActionLevelAbility, ActionBuyback, ActionDraft}:
+      let world = e.game.world
+      let i = world.heroIndex(action.heroId)
+      let hero = world.heroes[i]
+      var extra = 0'i32
+      if action.kind == ActionDraft:
+        for c in 0 ..< HeroClassCount:
+          if world.heroAvailable(int32(c)):
+            extra = extra or (1'i32 shl c)
+      elif action.kind == ActionLevelAbility:
+        extra = hero.abilityPoints
+      e.pending = [int32(world.tick), world.battleTick(), int32(i), int32(action.kind),
+        action.first, action.slot, 0'i32, hero.gold, 0'i32, int32(hero.level),
+        int32(world.draftedClass(action.heroId)), extra]
+  game.playbackApplied = proc(action: ReplayAction, accepted: bool) =
+    if action.kind in {ActionBuyItem, ActionLevelAbility, ActionBuyback, ActionDraft}:
+      let world = e.game.world
+      var ev = e.pending
+      ev[6] = int32(accepted)
+      ev[8] = world.heroes[world.heroIndex(action.heroId)].gold
+      if action.kind == ActionDraft:
+        ev[10] = int32(world.draftedClass(action.heroId))
+      e.events.add ev
   env.over = false
   env.started = true
   env.replayAdvance()
@@ -962,3 +994,15 @@ proc gota_replay_info(handle: pointer, output: ptr char, capacity: int32): cint 
   let text = $node
   copyText(text, output, capacity)
   cint(text.len)
+
+proc gota_replay_events(handle: pointer, output: ptr UncheckedArray[int32], capacity: int32): cint {.exportc, dynlib, cdecl.} =
+  ## Replay mode: copies up to `capacity` events (EventWords = 12 int32 each:
+  ## tick, battle tick, seat, kind, first, slot, accepted, gold before, gold
+  ## after, level, class, extra) and returns the total event count.
+  let env = toEnv(handle)
+  if env == nil or env.replayPath.len == 0: return -1
+  if output != nil:
+    for n in 0 ..< min(int(capacity), env.events.len):
+      for k in 0 ..< EventWords:
+        output[n * EventWords + k] = env.events[n][k]
+  cint(env.events.len)

@@ -349,7 +349,9 @@ type
       ## battle tick after the observation frame is frozen and before the
       ## tick's recorded actions apply. nil (the default) changes nothing.
     playbackAction*: proc(action: ReplayAction) {.closure.}
-      ## Replay capture: called before each recorded battle action applies.
+      ## Replay capture: called before each recorded action applies.
+    playbackApplied*: proc(action: ReplayAction, accepted: bool) {.closure.}
+      ## Replay capture: called after each recorded action applied.
     recordingError*: string
     heroVms*: seq[HeroVm]
     inboxes*: seq[Mailbox]
@@ -5536,7 +5538,12 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
         game.replayPlayer.data = game.recorder.data
       var action: ReplayAction
       while game.replayPlayer.takeActionAt(uint32(world.tick), action):
-        if world.applyReplayAction(action):
+        if game.playbackAction != nil:
+          game.playbackAction(action)
+        let accepted = world.applyReplayAction(action)
+        if game.playbackApplied != nil:
+          game.playbackApplied(action, accepted)
+        if accepted:
           game.metrics.command(world.heroIndex(action.heroId), world.tick)
     elif decide and onDraftTurn != nil:
       onDraftTurn()
@@ -5574,7 +5581,10 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
     while game.replayPlayer.takeActionAt(uint32(world.tick), action):
       if game.playbackAction != nil:
         game.playbackAction(action)
-      if applyReplayAction(world, action):
+      let accepted = applyReplayAction(world, action)
+      if game.playbackApplied != nil:
+        game.playbackApplied(action, accepted)
+      if accepted:
         game.metrics.command(heroIndex(world, action.heroId), world.tick)
   dec world.heroTurnTicks
   if world.heroTurnTicks <= 0:
