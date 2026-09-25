@@ -52,7 +52,7 @@ the game and the hashes stored inside `model.bin`. `decision_period` (1..24) mus
 network was trained with; the native env's `decision_period` config key is the same number.
 
 Build and validate with `python3 coworld/gota/runtime/neural_package.py build|validate`. The validator
-accepts exactly the packages the game accepts. `tools/test_native_env.py` checks that they agree on eight
+accepts exactly the packages the game accepts. `tools/test_native_env.py` checks that they agree on eleven
 corruptions, including an unknown decoder key, a bad goal, a hash mismatch and extra or missing files.
 
 ## Residual seats: `decoder.defer_script` (Amendment 3)
@@ -88,6 +88,34 @@ It uses the same code path, `deferConsult` in neural_host_hooks.nim, at the same
 native call adds `gota_seat_orders` labels of the script's commands, issued or absorbed.
 `gota_seat_defer_stats` gives the {defer, override} decision counts for both kinds of seat. Build a
 package with `neural_package.py build --defer-script --policy players/base.bas --model model.bin`.
+
+## Action mask: `decoder.mask_empty_targets`
+
+`"decoder": {"mask_empty_targets": true}` makes the host apply a validity mask before argmax or sampling. An
+optional `"mask_mode"` of `"conditional"` (the default) or `"static"` chooses how. The default is off and
+byte-identical. The mask comes from the decision frame. `gota_action_mask(h, seat, uint8[187])` in
+native_env.h returns the same bytes to a trainer: verb[8], castTarget ability[4], then 7 target rows x 25:
+
+| row | verb | allowed slot |
+|---|---|---|
+| 0 | attackTarget | occupied, not self, and a living enemy the engine lets the hero attack (`isEnemyTarget`) |
+| 1-4 | castTarget with ability 0-3 | occupied, and the ability is self-cast, or the object is a living, visible spell target of the right faction (Strike: not own; others: own) |
+| 5 | castPoint | occupied (point anchor) |
+| 6 | useItemAt | occupied (point anchor) |
+
+Verb 0 is always allowed. Verbs 1, 2 and 6 are allowed while the seat is alive. Verbs 3, 5 and 7 are allowed
+when their row has a slot, and verb 4 when some ability row does. A dead seat allows only verb 0. Range,
+cooldown, mana and charges are not masked: the engine reports those as action errors, not decode noops.
+
+- **conditional:** mask the verb, then the ability (only for castTarget), then the target by the
+  (verb, ability) row. A decision decoded this way never becomes an invalid noop (`stats[21]` = 0).
+- **static:** for trainers that sample heads independently with one mask per head (PufferLib). Mask the verb,
+  leave the ability unmasked, and mask the target by the union of the rows of the allowed target-reading
+  verbs. Cross-verb invalids remain.
+
+Point and item heads are never masked. When sampling, the host draws one uniform per head in head order
+first, so it uses the RNG exactly as unmasked sampling does. `tools/native_env.py` has `masked_argmax` and
+`static_masks`, which reproduce the host decoder.
 
 ## model.bin (GOTANET1)
 
