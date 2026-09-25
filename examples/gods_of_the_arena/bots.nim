@@ -994,7 +994,8 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
       max(0'i32, hero.controls[RootControl].ends - game.world.tick))
     vm.runtime.setData(heroDataIds[DataSelfDeaths], hero.deaths)
     vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
-    discard vm.runtime.run(vm.output)
+    perfRegion PrBasicRun:
+      discard vm.runtime.run(vm.output)
     inc vm.decisions
     if primary and vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
       game.runOverride(index, NeuralSeat(vm.neural))
@@ -1043,10 +1044,12 @@ proc runBotDecisions*(game: Game) {.measure.} =
       game.world.thawObservations()
   for vm in game.heroVms:
     if vm != nil and vm.neural != nil:
-      game.neuralPrelude()
+      perfRegion PrNeuralPrelude:
+        game.neuralPrelude()
       break
-  for offset in 0 ..< game.world.heroes.len:
-    let index = (game.world.heroTurnStart + offset) mod game.world.heroes.len
-    runHeroScript(game, index)
+  perfRegion PrDecisions:
+    for offset in 0 ..< game.world.heroes.len:
+      let index = (game.world.heroTurnStart + offset) mod game.world.heroes.len
+      runHeroScript(game, index)
   game.world.heroTurnStart =
     (game.world.heroTurnStart + 1) mod game.world.heroes.len

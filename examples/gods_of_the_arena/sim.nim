@@ -15,9 +15,14 @@ import
     visions, mailboxes],
   content, events, motions,
   maps,
-  replays
+  replays, perfregions
 
-export events
+export events, perfregions
+
+template perfBlock(id: PerfRegionId, name: static string, body: untyped) =
+  perfRegion(id):
+    profileBlock name:
+      body
 
 ## Deterministic animation slots shared by every backend.
 
@@ -2302,34 +2307,35 @@ proc ensureScriptObjects(world: World, heroId: int32) =
   if world.scriptObjectsHeroId == heroId and
       world.scriptObjectsTick == world.tick:
     return
-  world.scriptObjectCount = 0
-  let observer = heroIndex(world, heroId)
-  if observer >= 0:
-    let team = world.heroes[observer].team
-    var value: WorldObject
-    let count =
-      if world.observationsFrozen: world.observedObjects.len
-      else: rawWorldObjectCount(world)
-    for i in 0 ..< count:
-      if world.observationsFrozen:
-        value = world.observedObjects[i]
-      elif not rawWorldObjectAt(world, i, value):
-        continue
-      if not objectVisibleTo(world, team, value) or
-          (value.kind in [TowerObjectKind, BarracksObjectKind] and value.hp <= 0):
-        continue
-      if world.scriptObjectCount == world.scriptObjects.len:
-        world.scriptObjects.add value
-      else:
-        world.scriptObjects[world.scriptObjectCount] = value
-      inc world.scriptObjectCount
-    world.scriptObjects.setLen(world.scriptObjectCount)
-    world.scriptObjects.sort(proc(first, second: WorldObject): int =
-      ## Orders observed identities in the querying team's coordinate frame.
-      cmp(first.scriptObjectKey(team), second.scriptObjectKey(team))
-    )
-  world.scriptObjectsHeroId = heroId
-  world.scriptObjectsTick = world.tick
+  perfRegion PrScriptObjects:
+    world.scriptObjectCount = 0
+    let observer = heroIndex(world, heroId)
+    if observer >= 0:
+      let team = world.heroes[observer].team
+      var value: WorldObject
+      let count =
+        if world.observationsFrozen: world.observedObjects.len
+        else: rawWorldObjectCount(world)
+      for i in 0 ..< count:
+        if world.observationsFrozen:
+          value = world.observedObjects[i]
+        elif not rawWorldObjectAt(world, i, value):
+          continue
+        if not objectVisibleTo(world, team, value) or
+            (value.kind in [TowerObjectKind, BarracksObjectKind] and value.hp <= 0):
+          continue
+        if world.scriptObjectCount == world.scriptObjects.len:
+          world.scriptObjects.add value
+        else:
+          world.scriptObjects[world.scriptObjectCount] = value
+        inc world.scriptObjectCount
+      world.scriptObjects.setLen(world.scriptObjectCount)
+      world.scriptObjects.sort(proc(first, second: WorldObject): int =
+        ## Orders observed identities in the querying team's coordinate frame.
+        cmp(first.scriptObjectKey(team), second.scriptObjectKey(team))
+      )
+    world.scriptObjectsHeroId = heroId
+    world.scriptObjectsTick = world.tick
 
 proc worldObjectCount*(world: World, heroId: int32): int =
   ## Returns the number of objects visible to one hero script.
@@ -5547,7 +5553,7 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
   dec world.spawnTimerTicks
   if world.spawnTimerTicks <= 0:
     world.spawnTimerTicks += world.spawnIntervalTicks
-    profileBlock "spawnWave":
+    perfBlock PrSpawn, "spawnWave":
       spawnWave(world)
 
   world.tick = world.tick +% 1
@@ -5555,10 +5561,12 @@ proc tickWorldBegin*(game: Game, onDraftTurn: proc() {.closure.}): TickStage =
   for hero in world.heroes:
     if hero.hp > 0 and hero.state != Dying:
       world.tickHeroCooldowns(hero)
-  profileBlock "vision":
+  perfBlock PrVision, "vision":
     rebuildVision(world)
-    world.updateKnownBuildings()
-  discard world.freezeObservations()
+    perfRegion PrKnown:
+      world.updateKnownBuildings()
+  perfRegion PrFreeze:
+    discard world.freezeObservations()
   if game.historyPlayback:
     if game.recorder != nil:
       game.replayPlayer.data = game.recorder.data
@@ -5581,7 +5589,8 @@ proc tickWorldFinish*(game: Game) =
   # Another world may have ticked on this thread while this one was paused.
   navigationWorld = world
   world.thawObservations()
-  world.updateCamps()
+  perfRegion PrCamps:
+    world.updateCamps()
 
   # Plan every unit against the same actor state, then publish together.
   game.nextFootmen.setLen(world.footmen.len)
@@ -5592,15 +5601,15 @@ proc tickWorldFinish*(game: Game) =
     if game.nextHeroes[i] == nil:
       game.nextHeroes[i] = Hero()
     game.nextHeroes[i][] = hero[]
-  profileBlock "footmen":
+  perfBlock PrFootmen, "footmen":
     for offset in 0 ..< world.footmen.len:
       let index = (world.tick.int + offset) mod world.footmen.len
       updateFootman(world, game.nextFootmen[index])
-  profileBlock "towers":
+  perfBlock PrTowers, "towers":
     for offset in 0 ..< world.buildings.len:
       let index = (world.tick.int + offset) mod world.buildings.len
       updateTower(world, world.buildings[index])
-  profileBlock "heroes":
+  perfBlock PrHeroes, "heroes":
     for offset in 0 ..< world.heroes.len:
       let index = (world.tick.int + offset) mod world.heroes.len
       updateHero(world, game.nextHeroes[index])
@@ -5609,10 +5618,14 @@ proc tickWorldFinish*(game: Game) =
   for i, hero in game.nextHeroes:
     world.heroes[i][] = hero[]
 
-  world.advanceSpells()
-  world.advanceTowerShots()
-  world.resolveCombat()
-  world.updateCamps()
+  perfRegion PrSpells:
+    world.advanceSpells()
+  perfRegion PrShots:
+    world.advanceTowerShots()
+  perfRegion PrCombat:
+    world.resolveCombat()
+  perfRegion PrCamps:
+    world.updateCamps()
 
   var write = 0
   for read in 0 ..< world.footmen.len:
@@ -5627,10 +5640,10 @@ proc tickWorldFinish*(game: Game) =
           CorpseExpired)
   world.footmen.setLen(write)
 
-  profileBlock "separate":
+  perfBlock PrSeparate, "separate":
     game.separateUnits()
 
-  profileBlock "applyBody":
+  perfBlock PrApplyBody, "applyBody":
     for footman in world.footmen.mitems:
       let before = footman.position
       applyBody(footman)
@@ -5688,7 +5701,8 @@ proc tickWorldFinish*(game: Game) =
         actor: world.eventEntity(0), target: world.eventEntity(0), related: -1
       )
 
-  game.finishTick()
+  perfRegion PrFinishTick:
+    game.finishTick()
 
 proc tickWorld*(game: Game, onHeroTurn: proc() {.closure.}) {.measure.} =
   ## Advances exactly one authoritative integer simulation tick.
