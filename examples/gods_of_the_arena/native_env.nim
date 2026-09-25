@@ -142,6 +142,11 @@ proc pauseOrFinish(env: Env) =
       env.tickDone()
     of TickHeroTurn:
       if game.world.isDecisionTick(env.period):
+        # Freeze the common observation frame BEFORE the neural seats observe,
+        # exactly as runBotDecisions does on the hosted server (the frozen
+        # frame orders spell warnings by observation key; the live list does
+        # not). gota_step thaws it after the heroes' turn.
+        discard game.world.freezeObservations()
         game.neuralPrelude()
         env.paused = true
         env.updatePush()
@@ -417,7 +422,8 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
           for h in 0 ..< ActionHeads:
             heads[h] = actions[i * ActionHeads + h]
         seat.setLearnerHeads(heads)
-    runBotDecisions(game)
+    runBotDecisions(game)  # the frame is already frozen: it does not thaw it
+    game.world.thawObservations()
     game.tickWorldFinish()
     env.tickDone()
     env.pauseOrFinish()

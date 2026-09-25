@@ -141,7 +141,7 @@ def job_b(lib_path, seed, ticks):
                 xp=[int(abi.stats(seat)[2]), int(ref.stats(seat)[2])])
 
 
-def lineup_c(lib, seed, ticks):
+def lineup_c(lib, seed, ticks, package=True):
     """Every non-defer feature at once: 2 learners (random actions, one with a shadow), a plain package
     seat (random net, no defer_script), an override seat, capture on, puller/rusher scripts."""
     env = Env(lib, learner_seats=[1, 6], max_ticks=ticks, record=True, capture=True)
@@ -150,15 +150,16 @@ def lineup_c(lib, seed, ticks):
     assert env.set_override(5, 1) == 0
     b = BASE
     assert env.L.gota_set_seat_shadow(env.h, 6, b, len(b)) == 0
-    assert env.set_package(3, npk.build(POLICY, model_weights(hidden=64, seed=seed, scale=0.05, verb0_bias=0))) == 0
+    if package:
+        assert env.set_package(3, npk.build(POLICY, model_weights(hidden=64, seed=seed, scale=0.05, verb0_bias=0))) == 0
     h = play(env, seed, rng=np.random.default_rng(seed))
     orders = [env.orders(s).tolist() for s in range(10)]
     return h, replay_bytes(env), orders
 
 
-def job_c(lib_path, old_path, seed, ticks):
-    h_new, r_new, o_new = lineup_c(Lib(lib_path), seed, ticks)
-    h_old, r_old, o_old = lineup_c(Lib(old_path), seed, ticks)
+def job_c(lib_path, old_path, seed, ticks, package=True):
+    h_new, r_new, o_new = lineup_c(Lib(lib_path), seed, ticks, package)
+    h_old, r_old, o_old = lineup_c(Lib(old_path), seed, ticks, package)
     # plain all-script lineup (no neural seats, capture off) too
     p_new = play(Env(Lib(lib_path), learner_seats=[], max_ticks=ticks, capture=False), seed)
     p_old = play(Env(Lib(old_path), learner_seats=[], max_ticks=ticks, capture=False), seed)
@@ -174,6 +175,8 @@ def main():
     ap.add_argument("--ticks", type=int, default=28800)
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--only", default="a,b,c")
+    ap.add_argument("--c-no-package", action="store_true",
+                    help="c without the package seat (when the reference lib predates a package-seat fix)")
     a = ap.parse_args()
     fails = []
     with ProcessPoolExecutor(a.jobs) as ex:
@@ -197,7 +200,8 @@ def main():
             if ok != n or o == 0 or d == 0: fails.append("b")
         if "c" in a.only and a.old_lib:
             n = max(8, a.seeds // 2)
-            rows = list(ex.map(job_c, [a.lib] * n, [a.old_lib] * n, range(1, n + 1), [a.ticks] * n))
+            rows = list(ex.map(job_c, [a.lib] * n, [a.old_lib] * n, range(1, n + 1), [a.ticks] * n,
+                               [not a.c_no_package] * n))
             for r in rows: print("c", r, flush=True)
             ok = sum(r["hashes"] and r["replay"] and r["orders"] and r["plain"] for r in rows)
             print(f"C no-option seats == pre-change lib (hashes+replay+orders, plus plain lineup): {ok}/{n}", flush=True)
