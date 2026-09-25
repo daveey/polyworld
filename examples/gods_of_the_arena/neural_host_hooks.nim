@@ -30,6 +30,15 @@ type
     lastLabel*: array[16, int32]
       ## The label of the previous decision window (what gota_seat_orders reports).
     labelInstant: bool
+    standingMode*: int32
+      ## Dense ("standing order") labels, config "standing_labels" (0 off =
+      ## byte-identical default). 1: every decision window's label starts as
+      ## the seat's last movement/attack command re-encoded on the new frame
+      ## (noop once a walk/attack-move has arrived or its target is gone);
+      ## 2: as 1, but an engine-acquired attack target (hero.attackObjectId)
+      ## is labelled attackTarget. A command issued in the window overwrites
+      ## it; label[13] = 0 marks a standing label. Override seats execute it.
+    standing: NeuralCommand
     actor*: Actor
     state*, logits*: seq[float32]
     sampling*: bool
@@ -114,6 +123,7 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   seat.captured.setLen(0)
   seat.label = default(typeof(seat.label))
   seat.lastLabel = default(typeof(seat.lastLabel))
+  seat.standing = NeuralCommand()
   seat.command = NeuralCommand()
   seat.decisions = 0
   seat.invalid = 0
@@ -123,6 +133,34 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   if seat.actor != nil:
     seat.state = newSeq[float32](seat.actor.hiddenSize)
     seat.logits = newSeq[float32](seat.actor.outputSize)
+
+proc fillStanding(seat: NeuralSeat, world: World) =
+  ## Pre-fills the window's label with the standing order (standingMode > 0).
+  if seat.standingMode <= 0:
+    return
+  if not seat.acting:
+    seat.standing = NeuralCommand()
+    return
+  var command = seat.standing
+  if seat.standingMode >= 2:
+    let target = world.heroes[seat.frame.heroIndex].attackObjectId
+    if target != 0:
+      command = NeuralCommand(kind: AttackTargetCommand, objectId: target)
+  if command.kind notin {WalkCommand, AttackMoveCommand, AttackTargetCommand}:
+    return
+  let encoded = encodeCommand(seat.frame, world, command)
+  if not encoded.represented or encoded.heads[0] == 0:
+    return
+  if encoded.heads[0] in 1'i32 .. 2'i32 and encoded.heads[2] == 0:
+    return  # arrived: the order is finished
+  seat.label[0] = 1
+  for h in 0 ..< ActionHeads:
+    seat.label[1 + h] = encoded.heads[h]
+  seat.label[6] = int32(encoded.exact)
+  seat.label[7] = int32(command.kind.ord)
+  seat.label[8] = command.objectId
+  seat.label[14] = encoded.errorMilli
+  seat.label[15] = world.tick
 
 proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
   ## Captures the decision frame (observation, slots, resets) once per tick.
@@ -178,11 +216,13 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
     seat.labelInstant = false
     if seat.mode == NeuralCapture:
       seat.captured.setLen(0)
+    seat.fillStanding(world)
   of NeuralLearner:
     if seat.shadow != nil:
       seat.lastLabel = seat.label
       seat.label = default(typeof(seat.label))
       seat.labelInstant = false
+      seat.fillStanding(world)
 
 proc setLearnerHeads*(seat: NeuralSeat, heads: Heads) =
   ## The native trainer's action for the paused decision.
@@ -199,6 +239,8 @@ proc writeLabel(seat: NeuralSeat, world: World, command: NeuralCommand) =
   if seat.labelInstant:
     inc seat.label[13]
     return
+  if command.kind in {WalkCommand, AttackMoveCommand, AttackTargetCommand}:
+    seat.standing = command
   let encoded = encodeCommand(seat.frame, world, command)
   let count = seat.label[13] + 1
   seat.label = default(typeof(seat.label))
@@ -281,8 +323,18 @@ proc runOverride*(game: Game, index: int, seat: NeuralSeat) =
   let world = game.world
   if seat.frameTick != world.tick:
     return
-  if seat.captured.len == 0 or not seat.acting:
+  if not seat.acting:
     seat.captured.setLen(0)
+    return
+  if seat.captured.len == 0:
+    if seat.standingMode > 0 and seat.label[0] != 0 and seat.label[13] == 0:
+      var standingHeads: Heads
+      for h in 0 ..< ActionHeads:
+        standingHeads[h] = seat.label[1 + h]
+      seat.heads = standingHeads
+      inc seat.decisions
+      discard game.issueDecoded(world.heroes[index].id,
+        decodeAction(seat.frame, standingHeads))
     return
   for command in seat.captured:
     seat.writeLabel(world, command)

@@ -108,6 +108,14 @@ int gota_action_contract_hash(char *out, int32_t capacity);
  *                      compiled into the library).
  *   "record":          record a replay (default false; gota_save_replay).
  *   "capture":         label scripted seats' commands (default true).
+ *   "standing_labels": 0 (default, byte-identical), 1 or 2: dense BC labels.
+ *                      Each window's label starts as the seat's last
+ *                      walk/attackMove/attackTarget re-encoded on the new
+ *                      frame (noop once arrived / target gone; 2 = an
+ *                      engine-acquired attack target labels attackTarget);
+ *                      a command issued in the window overwrites it.
+ *                      label[13] = 0 marks a standing label. Override seats
+ *                      re-issue it (the standing mapping ceiling).
  * Returns NULL on failure with the reason in error (may be NULL). The match is
  * not started: call gota_reset. */
 void *gota_create(const char *config_json, char *error, int32_t capacity);
