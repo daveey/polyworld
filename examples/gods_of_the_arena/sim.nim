@@ -325,6 +325,11 @@ type
       ## slot order, valid only while hostileTick == tick (the unit phase,
       ## when footmen and camp states are frozen and hits are collected).
     hostileTick: int32
+    hostileGridSide: int
+    hostileGridStart: array[Team, seq[int32]]
+    hostileGridSlots: array[Team, seq[int32]]
+      ## hostileSlots bucketed by FootmanSightRadius-sized cells (each cell's
+      ## slots ascending): cell c holds hostileGridSlots[start[c] ..< start[c+1]].
     hits: seq[CombatHit]
     rewards: seq[DeathReward]
     rewardAlive: seq[bool]
@@ -628,6 +633,66 @@ iterator hostileCandidates(world: World, team: Team): int =
   if world.hostileTick == world.tick and world.hostileTick >= 0:
     for slot in world.hostileSlots[team]:
       yield int(slot)
+  else:
+    for slot in 0 ..< world.footmen.len:
+      yield slot
+
+const HostileCellSize = FootmanSightRadius
+  ## Two points within FootmanSightRadius lie in the same or adjacent cells.
+
+proc hostileCell(world: World, value: int32): int {.inline.} =
+  ## Clamped grid column (or row) of one world coordinate. Clamping is
+  ## monotone and 1-Lipschitz, so adjacency within the radius survives it.
+  let origin = int64(mapTiles() div 2 + 2) * WorldScale
+  let shifted = int64(value) + origin
+  let cell =
+    if shifted >= 0: shifted div int64(HostileCellSize)
+    else: -((-shifted + int64(HostileCellSize) - 1) div int64(HostileCellSize))
+  clamp(int(cell), 0, world.hostileGridSide - 1)
+
+proc buildHostileGrid(world: World) =
+  ## Buckets each team's frozen hostile slots by cell, ascending within a cell.
+  world.hostileGridSide =
+    (mapTiles() + 4) * int(WorldScale) div int(HostileCellSize) + 2
+  let cells = world.hostileGridSide * world.hostileGridSide
+  for team in Team:
+    world.hostileGridStart[team].setLen(cells + 1)
+    for value in world.hostileGridStart[team].mitems:
+      value = 0
+    for slot in world.hostileSlots[team]:
+      let unit {.byaddr.} = world.footmen[slot]
+      let cell = world.hostileCell(unit.position.z) * world.hostileGridSide +
+        world.hostileCell(unit.position.x)
+      inc world.hostileGridStart[team][cell + 1]
+    for cell in 0 ..< cells:
+      world.hostileGridStart[team][cell + 1] += world.hostileGridStart[team][cell]
+    world.hostileGridSlots[team].setLen(world.hostileSlots[team].len)
+    for slot in world.hostileSlots[team]:
+      let unit {.byaddr.} = world.footmen[slot]
+      let cell = world.hostileCell(unit.position.z) * world.hostileGridSide +
+        world.hostileCell(unit.position.x)
+      world.hostileGridSlots[team][world.hostileGridStart[team][cell]] = slot
+      inc world.hostileGridStart[team][cell]
+    # The fill advanced each start to the next cell's start: shift back.
+    for cell in countdown(cells, 1):
+      world.hostileGridStart[team][cell] = world.hostileGridStart[team][cell - 1]
+    world.hostileGridStart[team][0] = 0
+
+iterator hostileNear(world: World, team: Team, position: WorldPoint): int =
+  ## A superset of the hostile slots within FootmanSightRadius of position
+  ## (the 3x3 cells around it) in the unit phase, else every slot. The order
+  ## is not slot order: callers' nearest-target choice must not depend on it.
+  if world.hostileTick == world.tick and world.hostileTick >= 0:
+    let
+      side = world.hostileGridSide
+      cx = world.hostileCell(position.x)
+      cz = world.hostileCell(position.z)
+    for z in max(cz - 1, 0) .. min(cz + 1, side - 1):
+      let
+        first = world.hostileGridStart[team][z * side + max(cx - 1, 0)]
+        last = world.hostileGridStart[team][z * side + min(cx + 1, side - 1) + 1]
+      for k in first ..< last:
+        yield int(world.hostileGridSlots[team][k])
   else:
     for slot in 0 ..< world.footmen.len:
       yield slot
@@ -3883,7 +3948,11 @@ proc updateFootman(world: World, footman: var Footman) =
       bestSquared = int64(FootmanSightRadius) * FootmanSightRadius
       bestId = 0'i32
       bestPosition: WorldPoint
-    for i in world.hostileCandidates(footman.team):
+    # hostileNear visits candidates out of slot order. The choice is the
+    # minimum over units strictly inside the radius by (distance, then
+    # targetBefore, a strict total order since ids are unique), so it is the
+    # same for any visiting order.
+    for i in world.hostileNear(footman.team, footman.position):
       let other {.byaddr.} = world.footmen[i]
       if not world.hostile(other, footman.team):
         continue
@@ -3899,6 +3968,30 @@ proc updateFootman(world: World, footman: var Footman) =
           bestId = other.id
           bestPosition = other.position
           targetFootman = i
+    when defined(gotaTargetCheck):
+      # Reference: the slot-order scan over every candidate.
+      var
+        refSquared = int64(FootmanSightRadius) * FootmanSightRadius
+        refId = 0'i32
+        refPosition: WorldPoint
+        refFootman = -1
+      for i in world.hostileCandidates(footman.team):
+        let other {.byaddr.} = world.footmen[i]
+        if not world.hostile(other, footman.team):
+          continue
+        let distance = distanceSquared(footman.position, other.position)
+        if distance > refSquared or
+            not visible(world, footman.team, other.position):
+          continue
+        if distance < refSquared or (distance == refSquared and refId != 0 and
+          targetBefore(other.position, other.id,
+            refPosition, refId, footman.team)):
+            refSquared = distance
+            refId = other.id
+            refPosition = other.position
+            refFootman = i
+      doAssert refFootman == targetFootman and refSquared == bestSquared,
+        "grid target scan diverged from the slot-order scan"
     for i in 0 ..< world.heroes.len:
       let hero {.cursor.} = world.heroes[i]
       if hero.team == footman.team or hero.state == Dying or hero.hp <= 0:
@@ -5923,6 +6016,7 @@ proc tickWorldFinish*(game: Game) =
       for team in Team:
         if world.hostile(unit, team):
           world.hostileSlots[team].add int32(i)
+    world.buildHostileGrid()
     world.hostileTick = world.tick
   perfBlock PrFootmen, "footmen":
     for offset in 0 ..< world.footmen.len:
