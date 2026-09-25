@@ -183,9 +183,9 @@ proc objectProc(heroId: int32, field: ObjectField): HostProc =
   ## Binds one field to the hero's visibility-filtered object snapshot.
   result = proc(arguments: openArray[int32]): int32 =
     ## Reads a visible object's field without exposing hidden targets.
-    let world = activeGame.world
-    var value: WorldObject
-    if not world.worldObjectAt(heroId, int(arguments[0]), value):
+    let world {.cursor.} = activeGame.world
+    let value = world.worldObjectPtr(heroId, int(arguments[0]))
+    if value == nil:
       return (if field == ObjectCamp: -1 else: 0)
     case field
     of ObjectCamp: int32(value.camp - 1)
@@ -216,13 +216,13 @@ proc objectProc(heroId: int32, field: ObjectField): HostProc =
         WorldScale
       )
     of ObjectTarget:
-      if value.targetId == 0:
+      let targetId = value.targetId
+      if targetId == 0:
         return 0
-      var target: WorldObject
       for i in 0 ..< world.worldObjectCount(heroId):
-        if world.worldObjectAt(heroId, i, target) and
-          target.id == value.targetId:
-            return target.id
+        let target = world.worldObjectPtr(heroId, i)
+        if target != nil and target.id == targetId:
+          return target.id
       0
     of ObjectVelX:
       value.velocity.x
@@ -498,67 +498,64 @@ proc initHeroHost(heroId: int32): Host =
   let objectIdProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.id
     else:
       0
   let objectKindProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.kind
     else:
       0
   let objectTeamProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.faction
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
+      value[].faction
     else:
       0
   let objectClassProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.class
     else:
       -1
   let objectXProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       mapCoordinate(value.position.x, activeGame.world.heroById(heroId).team)
     else:
       0
   let objectYProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       mapCoordinate(value.position.z, activeGame.world.heroById(heroId).team)
     else:
       0
   let objectHpProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       max(value.hp, 0'i32)
     else:
       0
   let objectAliveProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    int32(
-      worldObjectAt(activeGame.world, heroId, int(arguments[0]), value) and
-        value.alive
-    )
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    int32(value != nil and value.alive)
   let walkToProc: NumericHostProc = proc(
       arguments: openArray[Value]
   ): Value =

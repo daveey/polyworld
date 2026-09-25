@@ -93,6 +93,13 @@ type
     neural*: RootRef
       ## Neural seat state (bots.nim NeuralSeat); nil for plain BASIC seats.
 
+  NavTileKey = tuple
+    mapX, mapY: int
+    referenceY: int32
+    reverseSearch: bool
+
+  ScriptOrderKey = (uint64, uint64, int32)
+
   PathCacheKey = tuple
     startLayer, startX, startZ, finishLayer, finishX, finishZ: int
     tieOrder: PathTieOrder
@@ -305,6 +312,8 @@ type
     pathCache: Table[PathCacheKey, seq[PathTile]]
       ## A* results over navigationOpen for this world's occupancy revision.
     pathCacheRevision: int32
+    navTileCache: Table[NavTileKey, tuple[found: bool, tile: NavTile]]
+      ## nearestNavTile results (no exclusions) for the same revision.
     spawnIntervalTicks*: int32
     spawnTimerTicks*: int32
     gameOver*: bool
@@ -2329,6 +2338,10 @@ proc scriptObjectKey(value: WorldObject, observer: Team):
   (group, int(value.faction != observer.ord.int32), direction * value.position.z,
     direction * value.position.x, value.id)
 
+var
+  scriptScratch {.threadvar.}: seq[WorldObject]
+  scriptOrder {.threadvar.}: seq[ScriptOrderKey]
+
 proc ensureScriptObjects(world: World, heroId: int32): Team =
   ## Rebuilds the visible object list once per team decision frame.
   ## Every hero of a team sees the same list while observations are
@@ -2342,29 +2355,46 @@ proc ensureScriptObjects(world: World, heroId: int32): Team =
       (world.observationsFrozen or world.scriptObjectsHeroId[team] == heroId):
     return
   perfRegion PrScriptObjects:
-    world.scriptObjectCount[team] = 0
-    var value: WorldObject
+    # Same order as sorting the objects by scriptObjectKey (stable): the key
+    # is packed once per object into two words that compare the same way,
+    # with the scan position as the final tiebreak.
+    scriptScratch.setLen(0)
+    scriptOrder.setLen(0)
     let count =
       if world.observationsFrozen: world.observedObjects.len
       else: rawWorldObjectCount(world)
+    var value: WorldObject
     for i in 0 ..< count:
       if world.observationsFrozen:
-        value = world.observedObjects[i]
-      elif not rawWorldObjectAt(world, i, value):
-        continue
-      if not objectVisibleTo(world, team, value) or
-          (value.kind in [TowerObjectKind, BarracksObjectKind] and value.hp <= 0):
-        continue
-      if world.scriptObjectCount[team] == world.scriptObjects[team].len:
-        world.scriptObjects[team].add value
+        let frozen {.byaddr.} = world.observedObjects[i]
+        if not objectVisibleTo(world, team, frozen) or
+            (frozen.kind in [TowerObjectKind, BarracksObjectKind] and frozen.hp <= 0):
+          continue
+        scriptScratch.add frozen
       else:
-        world.scriptObjects[team][world.scriptObjectCount[team]] = value
-      inc world.scriptObjectCount[team]
-    world.scriptObjects[team].setLen(world.scriptObjectCount[team])
-    world.scriptObjects[team].sort(proc(first, second: WorldObject): int =
-      ## Orders observed identities in the querying team's coordinate frame.
-      cmp(first.scriptObjectKey(team), second.scriptObjectKey(team))
-    )
+        if not rawWorldObjectAt(world, i, value):
+          continue
+        if not objectVisibleTo(world, team, value) or
+            (value.kind in [TowerObjectKind, BarracksObjectKind] and value.hp <= 0):
+          continue
+        scriptScratch.add value
+    for i in 0 ..< scriptScratch.len:
+      let key = scriptScratch[i].scriptObjectKey(team)
+      const Bias = 0x8000_0000'u32
+      scriptOrder.add (
+        (uint64(key.group * 2 + key.enemy) shl 32) or
+          uint64(cast[uint32](key.z) xor Bias),
+        (uint64(cast[uint32](key.x) xor Bias) shl 32) or
+          uint64(cast[uint32](key.id) xor Bias),
+        int32(i))
+    scriptOrder.sort(proc(a, b: ScriptOrderKey): int =
+      if a[0] != b[0]: cmp(a[0], b[0])
+      elif a[1] != b[1]: cmp(a[1], b[1])
+      else: cmp(a[2], b[2]))
+    world.scriptObjects[team].setLen(scriptOrder.len)
+    for i in 0 ..< scriptOrder.len:
+      world.scriptObjects[team][i] = scriptScratch[scriptOrder[i][2]]
+    world.scriptObjectCount[team] = scriptOrder.len
     world.scriptObjectsHeroId[team] = heroId
     world.scriptObjectsTick[team] = world.tick
 
@@ -2389,6 +2419,16 @@ proc worldObjectAt*(
     return false
   value = world.scriptObjects[team][index]
   true
+
+proc worldObjectPtr*(world: World, heroId: int32, index: int): ptr WorldObject =
+  ## worldObjectAt without the copy: the entry in the hero team's cached
+  ## enumeration, or nil. Valid until that enumeration is rebuilt.
+  if world.heroIndex(heroId) < 0:
+    return nil
+  let team = world.ensureScriptObjects(heroId)
+  if index < 0 or index >= world.scriptObjectCount[team]:
+    return nil
+  addr world.scriptObjects[team][index]
 
 proc worldObjectById*(
     world: World,
@@ -2454,7 +2494,7 @@ proc navTileAt(position: WorldPoint, value: var NavTile, team: Team): bool =
       bestHeight = height
       result = true
 
-proc nearestNavTile(
+proc searchNavTile(
     mapX,
     mapY: int,
     referenceY: int32,
@@ -2493,6 +2533,39 @@ proc nearestNavTile(
           value = NavTile(layer: layerIndex, x: x, z: z)
           bestScore = score
           result = true
+
+proc nearestNavTile(
+    mapX,
+    mapY: int,
+    referenceY: int32,
+    value: var NavTile,
+    excluded: seq[PathTile],
+    reverseSearch: bool
+): bool =
+  ## searchNavTile, memoized without exclusions: the search reads only static
+  ## terrain and navigationWorld's occupancy (navigationOpen), which changes
+  ## only where navigationRevision is bumped. A miss leaves value untouched,
+  ## as the search does.
+  const MaxCachedTiles = 4096
+  let nav = navigationWorld
+  if excluded.len > 0 or nav == nil or nav.occupancy.len == 0:
+    return searchNavTile(mapX, mapY, referenceY, value, excluded, reverseSearch)
+  if nav.pathCacheRevision != nav.navigationRevision:
+    nav.pathCache.clear()
+    nav.navTileCache.clear()
+    nav.pathCacheRevision = nav.navigationRevision
+  elif nav.navTileCache.len >= MaxCachedTiles:
+    nav.navTileCache.clear()
+  let key: NavTileKey = (mapX, mapY, referenceY, reverseSearch)
+  nav.navTileCache.withValue(key, cached):
+    if cached.found:
+      value = cached.tile
+    return cached.found
+  var tile: NavTile
+  result = searchNavTile(mapX, mapY, referenceY, tile, excluded, reverseSearch)
+  nav.navTileCache[key] = (result, tile)
+  if result:
+    value = tile
 
 proc movementPath(tiles: seq[PathTile], start: WorldPoint,
     team: Team): seq[PathTile] =
@@ -2536,10 +2609,12 @@ proc navigationTilePath(query: PathQuery, tiles: var seq[PathTile]) =
   if nav == nil or nav.occupancy.len == 0:
     discard fillTilePath(query, tiles)
     return
-  if nav.pathCacheRevision != nav.navigationRevision or
-      nav.pathCache.len >= MaxCachedPaths:
+  if nav.pathCacheRevision != nav.navigationRevision:
     nav.pathCache.clear()
+    nav.navTileCache.clear()
     nav.pathCacheRevision = nav.navigationRevision
+  elif nav.pathCache.len >= MaxCachedPaths:
+    nav.pathCache.clear()
   let key: PathCacheKey = (query.startLayer, query.startX, query.startZ,
     query.finishLayer, query.finishX, query.finishZ, query.tieOrder)
   nav.pathCache.withValue(key, cached):

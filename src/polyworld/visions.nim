@@ -40,6 +40,10 @@ type
     terrain, blockers: seq[int16]
     counts: seq[uint16]
     sources: Table[VisionSource, TalliedSource]
+    spare: Table[VisionSource, seq[int32]]
+      ## Cells of recently vanished sources (same terrain and blockers), so a
+      ## unit re-entering a tile, or the next creep wave on the same lane,
+      ## skips the ray walk.
     frame: int64
     changed, stale: seq[int32]
     gone: seq[VisionSource]
@@ -442,6 +446,7 @@ proc revealVisionTallied*(
       not sameHeights(tally.terrain, terrainHeights) or
       not sameHeights(tally.blockers, blockerHeights):
     tally.sources.clear()
+    tally.spare.clear()
     tally.width = width
     tally.height = height
     tally.terrain = terrainHeights
@@ -459,8 +464,10 @@ proc revealVisionTallied*(
     tally.sources.withValue(source, entry):
       entry.frame = frame
     do:
-      let cells = sourceCells(width, height, terrainHeights, blockerHeights,
-        source)
+      var cells: seq[int32]
+      if not tally.spare.pop(source, cells):
+        cells = sourceCells(width, height, terrainHeights, blockerHeights,
+          source)
       for index in cells:
         if tally.counts[index] == 0:
           tally.changed.add index
@@ -474,8 +481,13 @@ proc revealVisionTallied*(
         dec tally.counts[index]
         if tally.counts[index] == 0:
           tally.changed.add index
+  const MaxSpareSources = 2048
+  if tally.spare.len + tally.gone.len > MaxSpareSources:
+    tally.spare.clear()
   for source in tally.gone:
-    tally.sources.del(source)
+    var entry: TalliedSource
+    discard tally.sources.pop(source, entry)
+    tally.spare[source] = move(entry.cells)
   for index in tally.changed:
     let now = if tally.counts[index] > 0: 255'u8 else: 0'u8
     if now != visible[index]:
