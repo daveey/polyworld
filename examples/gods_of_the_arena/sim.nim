@@ -810,34 +810,43 @@ proc addVisionBlocker(world: World, position: WorldPoint, height: int16) =
 
 proc fillVisionKeys(world: World, dest: var seq[int32]) =
   ## Records living observers and the towers or forts that occlude them.
-  dest.setLen(0)
-  dest.add int32(world.heroes.len)
+  # Written by index into a buffer sized for every unit, then trimmed.
+  dest.setLen(4 + 7 * (world.heroes.len + world.footmen.len +
+    world.buildings.len + world.forts.len))
+  var n = 0
+  template put(value: int32) =
+    dest[n] = value
+    inc n
+  template putUnit(id: int32, team: Team, alive: bool, position: WorldPoint) =
+    put id
+    put int32(team.ord)
+    put int32(alive)
+    let bounds = sightBounds(position)
+    put bounds[0]
+    put bounds[1]
+    put bounds[2]
+    put bounds[3]
+  put int32(world.heroes.len)
   for i in 0 ..< world.heroes.len:
-    let hero = world.heroes[i]
-    dest.add hero.id
-    dest.add int32(hero.team.ord)
-    dest.add int32(hero.state != Dying and hero.hp > 0)
-    dest.add sightBounds(hero.position)
-  dest.add int32(world.footmen.len)
-  for footman in world.footmen:
+    let hero {.cursor.} = world.heroes[i]
+    putUnit(hero.id, hero.team, hero.state != Dying and hero.hp > 0,
+      hero.position)
+  put int32(world.footmen.len)
+  for i in 0 ..< world.footmen.len:
+    let footman {.byaddr.} = world.footmen[i]
     if footman.camp > 0:
       continue
-    dest.add footman.id
-    dest.add int32(footman.team.ord)
-    dest.add int32(footman.state != Dying and footman.hp > 0)
-    dest.add sightBounds(footman.position)
-  dest.add int32(world.buildings.len)
-  for tower in world.buildings:
-    dest.add tower.id
-    dest.add int32(tower.team.ord)
-    dest.add int32(tower.hp > 0)
-    dest.add sightBounds(tower.position)
-  dest.add int32(world.forts.len)
-  for fort in world.forts:
-    dest.add fort.id
-    dest.add int32(fort.team.ord)
-    dest.add int32(fort.hp > 0)
-    dest.add sightBounds(fort.center)
+    putUnit(footman.id, footman.team,
+      footman.state != Dying and footman.hp > 0, footman.position)
+  put int32(world.buildings.len)
+  for i in 0 ..< world.buildings.len:
+    let tower {.byaddr.} = world.buildings[i]
+    putUnit(tower.id, tower.team, tower.hp > 0, tower.position)
+  put int32(world.forts.len)
+  for i in 0 ..< world.forts.len:
+    let fort {.byaddr.} = world.forts[i]
+    putUnit(fort.id, fort.team, fort.hp > 0, fort.center)
+  dest.setLen(n)
 
 proc rebuildVision*(world: World) {.measure.} =
   ## Rebuilds both teams' limited, terrain-occluded visibility maps.

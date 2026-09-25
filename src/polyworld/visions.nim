@@ -4,7 +4,7 @@
 ## ray still uses the same integer lerp so visibility matches the live
 ## formula.
 
-import std/tables
+import std/[hashes, tables]
 
 const
   MaxVisionRadius* = 16
@@ -47,6 +47,22 @@ type
     frame: int64
     changed, stale: seq[int32]
     gone: seq[VisionSource]
+
+proc hash*(source: VisionSource): Hash =
+  ## Cheap multiplicative mix of every field (the vision tables only need
+  ## equal sources to hash equally; iteration order does not reach results).
+  template mix(value: uint64): uint64 =
+    (value xor (value shr 29)) * 0xBF58476D1CE4E5B9'u64
+  let
+    a = (uint64(cast[uint32](source.x)) shl 32) or uint64(cast[uint32](source.z))
+    b = (uint64(cast[uint32](source.radius)) shl 32) or
+      uint64(cast[uint16](source.eyeHeight))
+    c = (uint64(cast[uint32](source.units)) shl 32) or
+      uint64(cast[uint32](source.range))
+    d = (uint64(cast[uint32](source.offsetX)) shl 32) or
+      uint64(cast[uint32](source.offsetZ))
+    h = mix(mix(mix(mix(a) xor b) xor c) xor d)
+  Hash(h xor (h shr 31))
 
 var
   visionRayOffsets: seq[VisionRayStep]
@@ -421,6 +437,32 @@ proc revealVisionCached*(
 proc sourceCells(width, height: int32, terrainHeights,
     blockerHeights: seq[int16], source: VisionSource): seq[int32] =
   ## The cells one source sees, exactly as revealVisionCached computes them.
+  if source.radius > 0 and source.radius <= MaxVisionRadius:
+    # Same cells in the same (row-major) order as the square scan below:
+    # lineVisible rejects every offset outside the radius circle, so walking
+    # the precomputed circle and applying lineVisible's remaining tests
+    # (grid bounds, steps <= 1, kernel ray) is equivalent.
+    if source.x < 0 or source.x >= width or source.z < 0 or
+        source.z >= height:
+      return
+    initVisionKernel()
+    let sourceY = int64(terrainHeights[source.z * width + source.x]) +
+      int64(source.eyeHeight)
+    for offset in visionCircle[source.radius]:
+      let
+        x = source.x + int32(offset.dx)
+        z = source.z + int32(offset.dz)
+      if x < 0 or x >= width or z < 0 or z >= height or
+          not source.inVisionRange(x, z):
+        continue
+      let
+        index = z * width + x
+        rayIndex = visionKernelIndex(int(offset.dx), int(offset.dz))
+      if int(visionRaySteps[rayIndex]) <= 1 or not rayBlocked(width,
+          terrainHeights, blockerHeights, source.x, source.z, sourceY,
+          int64(terrainHeights[index]) + 3, rayIndex):
+        result.add index
+    return
   for z in max(0'i32, source.z - source.radius) .. min(height - 1, source.z + source.radius):
     for x in max(0'i32, source.x - source.radius) .. min(width - 1, source.x + source.radius):
       if source.radius > 0 and source.inVisionRange(x, z) and lineVisible(
