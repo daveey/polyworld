@@ -10,6 +10,14 @@
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
 import std/[json, locks, os], jsony, scores, polyworld/visions
+
+when defined(linux) and defined(amd64) and not defined(gotaDynamicTls):
+  # Nim reads its thread-local error flag in nearly every proc; with the
+  # default general-dynamic model each read is a __tls_get_addr call (~12% of
+  # instructions here). The library's TLS is small (<512 bytes) and fits
+  # glibc's static TLS surplus reserved for dlopen'ed initial-exec modules.
+  # -d:gotaDynamicTls restores the default model if a host runs out of it.
+  {.passC: "-ftls-model=initial-exec".}
 include bots
 
 const

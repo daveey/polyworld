@@ -29,6 +29,20 @@ type
     width, height: int32
     terrain, blockers: seq[int16]
     sources: Table[VisionSource, seq[int32]]
+  TalliedSource = object
+    cells: seq[int32]
+    frame: int64
+  VisionTally* = object
+    ## Incremental twin of VisionCache: per-cell counts of the distinct live
+    ## sources that see each cell, so a frame only touches the cells of
+    ## sources that appeared or disappeared.
+    width, height: int32
+    terrain, blockers: seq[int16]
+    counts: seq[uint16]
+    sources: Table[VisionSource, TalliedSource]
+    frame: int64
+    changed, stale: seq[int32]
+    gone: seq[VisionSource]
 
 var
   visionRayOffsets: seq[VisionRayStep]
@@ -399,6 +413,75 @@ proc revealVisionCached*(
       visible[index] = 255
     nextSources[source] = move(cache.sources[source])
   cache.sources = move(nextSources)
+
+proc sourceCells(width, height: int32, terrainHeights,
+    blockerHeights: seq[int16], source: VisionSource): seq[int32] =
+  ## The cells one source sees, exactly as revealVisionCached computes them.
+  for z in max(0'i32, source.z - source.radius) .. min(height - 1, source.z + source.radius):
+    for x in max(0'i32, source.x - source.radius) .. min(width - 1, source.x + source.radius):
+      if source.radius > 0 and source.inVisionRange(x, z) and lineVisible(
+          width, height, terrainHeights, blockerHeights,
+          source.x, source.z, x, z, source.radius, source.eyeHeight):
+        result.add z * width + x
+
+proc revealVisionTallied*(
+    tally: var VisionTally,
+    visible: var seq[uint8],
+    width, height: int32,
+    terrainHeights, blockerHeights: seq[int16],
+    sources: openArray[VisionSource],
+    revealed: var seq[int32]
+) =
+  ## Same visibility map as revealVisionCached (255 where any distinct source
+  ## sees the cell, else 0), updated in place from the previous frame. Cells
+  ## that turn visible this frame are appended to `revealed` (every visible
+  ## cell after a reset). Terrain or blocker changes rebuild from scratch.
+  let cellCount = int(width * height)
+  if tally.width != width or tally.height != height or
+      visible.len != cellCount or
+      not sameHeights(tally.terrain, terrainHeights) or
+      not sameHeights(tally.blockers, blockerHeights):
+    tally.sources.clear()
+    tally.width = width
+    tally.height = height
+    tally.terrain = terrainHeights
+    tally.blockers = blockerHeights
+    tally.counts.setLen(cellCount)
+    for count in tally.counts.mitems:
+      count = 0
+    visible.setLen(cellCount)
+    for value in visible.mitems:
+      value = 0
+  inc tally.frame
+  let frame = tally.frame
+  tally.changed.setLen(0)
+  for source in sources:
+    tally.sources.withValue(source, entry):
+      entry.frame = frame
+    do:
+      let cells = sourceCells(width, height, terrainHeights, blockerHeights,
+        source)
+      for index in cells:
+        if tally.counts[index] == 0:
+          tally.changed.add index
+        inc tally.counts[index]
+      tally.sources[source] = TalliedSource(cells: cells, frame: frame)
+  tally.gone.setLen(0)
+  for source, entry in tally.sources.mpairs:
+    if entry.frame != frame:
+      tally.gone.add source
+      for index in entry.cells:
+        dec tally.counts[index]
+        if tally.counts[index] == 0:
+          tally.changed.add index
+  for source in tally.gone:
+    tally.sources.del(source)
+  for index in tally.changed:
+    let now = if tally.counts[index] > 0: 255'u8 else: 0'u8
+    if now != visible[index]:
+      visible[index] = now
+      if now != 0:
+        revealed.add index
 
 proc blurVisibility*(visible: openArray[uint8], width, height: int32): seq[uint8] =
   ## Softens only presentation edges with one deterministic box-blur pass.
