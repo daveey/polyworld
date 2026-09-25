@@ -2598,9 +2598,14 @@ proc worldObjectAt*(
 proc worldObjectPtr*(world: World, heroId: int32, index: int): ptr WorldObject =
   ## worldObjectAt without the copy: the entry in the hero team's cached
   ## enumeration, or nil. Valid until that enumeration is rebuilt.
-  if world.heroIndex(heroId) < 0:
+  let observer = world.heroIndex(heroId)
+  if observer < 0:
     return nil
-  let team = world.ensureScriptObjects(heroId)
+  let team = world.heroes[observer].team
+  # ensureScriptObjects' own freshness test, without its second lookup.
+  if world.scriptObjectsTick[team] != world.tick or
+      not (world.observationsFrozen or world.scriptObjectsHeroId[team] == heroId):
+    discard world.ensureScriptObjects(heroId)
   if index < 0 or index >= world.scriptObjectCount[team]:
     return nil
   addr world.scriptObjects[team][index]
