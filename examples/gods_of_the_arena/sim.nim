@@ -2464,6 +2464,7 @@ proc sortDistinct[T](keys: var seq[T], spare: var seq[T]) =
   ## Ascending sort by keyBefore. The keys are distinct (the last field is
   ## a unique position), so the result is the one order any correct sort
   ## gives, including a stable sort by the other fields.
+  mixin keyBefore
   let n = keys.len
   if n < 2:
     return
