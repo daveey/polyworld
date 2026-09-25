@@ -81,33 +81,25 @@ def vision(lib, handles, threads, steps):
     return ok
 
 
-def create(lib, threads, per_thread, steps=40):
-    configs = [(t * per_thread + j) for t in range(threads) for j in range(per_thread)]
+def create(lib, threads, per_thread, steps=40, kinds=14):
+    """Creates race each other; handle i uses config kind i % kinds (seat, capture, seed, action RNG)."""
     def run(i):
-        env = Env(lib, learner_seats=[i % 10], max_ticks=28800, capture=bool(i % 2),
-                  decision_period=4)
-        env.reset(900 + i % 7)
+        k = i % kinds
+        env = Env(lib, learner_seats=[k % 10], max_ticks=28800, capture=bool(k % 2), decision_period=4)
+        env.reset(900 + k)
         env.done = False
-        rng, trace = np.random.default_rng(i), []
+        rng, trace = np.random.default_rng(k), []
         for _ in range(steps):
             advance(env, rng, trace)
         env.close()
         return trace
-    reference = {i: run(i) for i in configs[:14]}  # serial references (seed and seat repeat mod 7 / 10)
-    failures = []
+    reference = {k: run(k) for k in range(kinds)}  # serial, one at a time
     def worker(t):
-        out = []
-        for j in range(per_thread):
-            i = t * per_thread + j
-            out.append((i, run(i)))
-        return out
+        return [(t * per_thread + j, run(t * per_thread + j)) for j in range(per_thread)]
     with ThreadPoolExecutor(threads) as pool:
         results = [r for rows in pool.map(worker, range(threads)) for r in rows]
-    for i, trace in results:
-        key = next((k for k in reference if k % 7 == i % 7 and k % 10 == i % 10 and k % 2 == i % 2), None)
-        if key is not None and reference[key] != trace:
-            failures.append(i)
-    print(f"create: threads={threads} creates={len(results)} compared={sum(1 for i, _ in results if any(k % 7 == i % 7 and k % 10 == i % 10 and k % 2 == i % 2 for k in reference))} mismatched={failures}")
+    failures = [i for i, trace in results if trace != reference[i % kinds]]
+    print(f"create: threads={threads} creates={len(results)} kinds={kinds} steps_each={steps} mismatched={failures}")
     ok = not failures and len(results) == threads * per_thread
     print("CONCURRENT CREATE OK" if ok else "CONCURRENT CREATE FAIL")
     return ok
