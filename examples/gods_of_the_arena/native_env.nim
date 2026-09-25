@@ -28,6 +28,7 @@ type
     maxTicks, period: int32
     learners: uint32
     record, capture: bool
+    standing: int32
     defaultScript, policyScript: string
     sources: array[10, SeatSource]
     scripts: array[10, string]
@@ -208,6 +209,7 @@ proc resetEnv(env: Env, seed: int64): int =
         let seat = newNeuralSeat(NeuralLearner, env.period, env.maxTicks)
         seat.deferEnabled = deferring
         seat.goal = env.goals[i]
+        seat.standingMode = env.standing
         seat.resetEpisode(int32(seed), i)
         game.heroVms[i].neural = seat
         if env.shadows[i].len > 0 and not deferring:
@@ -231,6 +233,7 @@ proc resetEnv(env: Env, seed: int64): int =
           if env.overrides[i]: NeuralOverride else: NeuralCapture,
           env.period, env.maxTicks)
         seat.goal = env.goals[i]
+        seat.standingMode = env.standing
         seat.resetEpisode(int32(seed), i)
         game.heroVms[i].neural = seat
     else:
@@ -285,7 +288,7 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
       for key in node.keys:
         if key notin ["config_path", "seed", "max_ticks", "decision_period",
             "learner_seats", "script_path", "policy_path", "data_root",
-            "record", "capture"]:
+            "record", "capture", "standing_labels"]:
           raise newException(ValueError, "unknown config key " & key)
       let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
       let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
@@ -311,6 +314,10 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
       env.record = node.hasKey("record") and node["record"].getBool
       if node.hasKey("capture"):
         env.capture = node["capture"].getBool
+      if node.hasKey("standing_labels"):
+        env.standing = int32(node["standing_labels"].getInt)
+        if env.standing notin 0'i32 .. 2'i32:
+          raise newException(ValueError, "standing_labels must be 0..2")
       env.defaultScript = readFile(resolve(root,
         if node.hasKey("script_path"): node["script_path"].getStr else: "players/base.bas"))
       env.policyScript = readFile(resolve(root,
