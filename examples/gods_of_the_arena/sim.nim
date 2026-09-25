@@ -835,7 +835,7 @@ proc rebuildVision*(world: World) {.measure.} =
       # Reference: the previous full rebuild must agree cell for cell.
       revealVisionCached(world.visionCheck[team.ord],
         world.visionCheckVisible[team.ord], mapTiles().int32,
-        mapTiles().int32, sightTerrain.terrainHeights, visionBlockers,
+        mapTiles().int32, sightTerrain.terrainHeights, world.visionBlockers,
         visionSources)
       world.visionCheckExplored[team.ord].setLen(
         world.visionCheckVisible[team.ord].len)
