@@ -11,7 +11,7 @@
 ## the same on every platform; the observation is FP32.
 
 import
-  std/[algorithm, math, strutils],
+  std/[algorithm, decls, math, strutils],
   crunchy, fixxy,
   polyworld/[bodies, metrics, pathing],
   content, maps, observations, scores, sim, terrains
@@ -222,7 +222,7 @@ proc terrainOpen(world: World, team: Team, layer: int32, mx, my: int): bool =
     return false
   if terrainValue(int32(mx), int32(my), layer, TerrainWalkableField) == 0:
     return false
-  let floor = layers[int(layer)]
+  let floor {.cursor.} = layers[int(layer)]
   world.knownWalkable(team, int(layer), mx + mapOrigin() - floor.originX,
     my + mapOrigin() - floor.originZ)
 
@@ -454,7 +454,8 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
     let enemyCenter = world.forts[1 - team.ord].center
     var best = int64.high
     var bestIndex = -1
-    for i, building in world.buildings:
+    for i in 0 ..< world.buildings.len:
+      let building {.byaddr.} = world.buildings[i]
       if building.kind == TowerBuilding and building.team == team and building.hp > 0:
         let
           dx = int64(building.position.x - enemyCenter.x)
@@ -464,7 +465,7 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
           best = d
           bestIndex = i
     if bestIndex >= 0:
-      let building = world.buildings[bestIndex]
+      let building {.byaddr.} = world.buildings[bestIndex]
       place(o, frame, SlotStructures + 2, WorldObject(id: building.id, kind: 4,
         class: -1, team: building.team, position: building.position,
         hp: building.hp, maxHp: building.maxHp,

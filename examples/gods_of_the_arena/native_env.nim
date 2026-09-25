@@ -10,6 +10,14 @@
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
 import std/[json, locks, os], jsony, scores, polyworld/visions
+
+when defined(linux) and defined(amd64) and not defined(gotaDynamicTls):
+  # Nim reads its thread-local error flag in nearly every proc; with the
+  # default general-dynamic model each read is a __tls_get_addr call (~12% of
+  # instructions here). The library's TLS is small (<512 bytes) and fits
+  # glibc's static TLS surplus reserved for dlopen'ed initial-exec modules.
+  # -d:gotaDynamicTls restores the default model if a host runs out of it.
+  {.passC: "-ftls-model=initial-exec".}
 include bots
 
 const
@@ -381,28 +389,29 @@ proc gota_observe_seats(handle: pointer, seats: uint32,
   let env = toEnv(handle)
   if env == nil or env.game == nil or obs == nil: return -1
   let game = env.game
-  for i in 0 ..< 10:
-    if (seats and (1'u32 shl i)) == 0:
-      continue
-    let row = cast[ptr UncheckedArray[float32]](addr obs[i * ObservationSize])
-    let seat = game.neuralSeat(i)
-    if seat != nil and env.paused and seat.frameTick == game.world.tick:
-      for k in 0 ..< ObservationSize:
-        row[k] = seat.obs[k]
-      if resets != nil: resets[i] = float32(seat.resetState and seat.acting)
-      if acting != nil:
-        acting[i] = float32(seat.acting and not env.over)
-    else:
-      if env.scratch.len != ObservationSize:
-        env.scratch = newSeq[float32](ObservationSize)
-      var frame: DecisionFrame
-      let goal = if seat != nil: seat.goal else: env.goals[i]
-      buildObservation(game.world, i, goal, env.maxTicks,
-        game.world.stats, env.scratch, frame)
-      for k in 0 ..< ObservationSize:
-        row[k] = env.scratch[k]
-      if resets != nil: resets[i] = 0
-      if acting != nil: acting[i] = 0
+  perfRegion PrObserve:
+    for i in 0 ..< 10:
+      if (seats and (1'u32 shl i)) == 0:
+        continue
+      let row = cast[ptr UncheckedArray[float32]](addr obs[i * ObservationSize])
+      let seat = game.neuralSeat(i)
+      if seat != nil and env.paused and seat.frameTick == game.world.tick:
+        for k in 0 ..< ObservationSize:
+          row[k] = seat.obs[k]
+        if resets != nil: resets[i] = float32(seat.resetState and seat.acting)
+        if acting != nil:
+          acting[i] = float32(seat.acting and not env.over)
+      else:
+        if env.scratch.len != ObservationSize:
+          env.scratch = newSeq[float32](ObservationSize)
+        var frame: DecisionFrame
+        let goal = if seat != nil: seat.goal else: env.goals[i]
+        buildObservation(game.world, i, goal, env.maxTicks,
+          game.world.stats, env.scratch, frame)
+        for k in 0 ..< ObservationSize:
+          row[k] = env.scratch[k]
+        if resets != nil: resets[i] = 0
+        if acting != nil: acting[i] = 0
   0
 
 proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
@@ -422,11 +431,12 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
           for h in 0 ..< ActionHeads:
             heads[h] = actions[i * ActionHeads + h]
         seat.setLearnerHeads(heads)
-    runBotDecisions(game)  # the frame is already frozen: it does not thaw it
-    game.world.thawObservations()
-    game.tickWorldFinish()
-    env.tickDone()
-    env.pauseOrFinish()
+    perfRegion PrStep:
+      runBotDecisions(game)  # the frame is already frozen: it does not thaw it
+      game.world.thawObservations()
+      game.tickWorldFinish()
+      env.tickDone()
+      env.pauseOrFinish()
   except CatchableError as e:
     lastError = e.msg
     return -3
@@ -765,3 +775,16 @@ proc gota_net_infer(net: pointer, observation, state, logits: ptr UncheckedArray
     0
   except CatchableError:
     -2
+
+proc gota_perf_regions(cycles, calls: ptr UncheckedArray[uint64],
+    capacity: cint): cint {.exportc, dynlib, cdecl.} =
+  ## Perf lane: per-thread region cycle/call counters (-d:gotaPerfRegions),
+  ## in PerfRegionId order; returns the region count (0 when compiled out).
+  when defined(gotaPerfRegions):
+    for id in PerfRegionId:
+      if id.ord < capacity:
+        cycles[id.ord] = perfCycles[id]
+        calls[id.ord] = perfCalls[id]
+    cint(PerfRegionId.high.ord + 1)
+  else:
+    0

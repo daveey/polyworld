@@ -4,7 +4,7 @@
 ## ray still uses the same integer lerp so visibility matches the live
 ## formula.
 
-import std/tables
+import std/[hashes, tables]
 
 const
   MaxVisionRadius* = 16
@@ -29,6 +29,40 @@ type
     width, height: int32
     terrain, blockers: seq[int16]
     sources: Table[VisionSource, seq[int32]]
+  TalliedSource = object
+    cells: seq[int32]
+    frame: int64
+  VisionTally* = object
+    ## Incremental twin of VisionCache: per-cell counts of the distinct live
+    ## sources that see each cell, so a frame only touches the cells of
+    ## sources that appeared or disappeared.
+    width, height: int32
+    terrain, blockers: seq[int16]
+    counts: seq[uint16]
+    sources: Table[VisionSource, TalliedSource]
+    spare: Table[VisionSource, seq[int32]]
+      ## Cells of recently vanished sources (same terrain and blockers), so a
+      ## unit re-entering a tile, or the next creep wave on the same lane,
+      ## skips the ray walk.
+    frame: int64
+    changed, stale: seq[int32]
+    gone: seq[VisionSource]
+
+proc hash*(source: VisionSource): Hash =
+  ## Cheap multiplicative mix of every field (the vision tables only need
+  ## equal sources to hash equally; iteration order does not reach results).
+  template mix(value: uint64): uint64 =
+    (value xor (value shr 29)) * 0xBF58476D1CE4E5B9'u64
+  let
+    a = (uint64(cast[uint32](source.x)) shl 32) or uint64(cast[uint32](source.z))
+    b = (uint64(cast[uint32](source.radius)) shl 32) or
+      uint64(cast[uint16](source.eyeHeight))
+    c = (uint64(cast[uint32](source.units)) shl 32) or
+      uint64(cast[uint32](source.range))
+    d = (uint64(cast[uint32](source.offsetX)) shl 32) or
+      uint64(cast[uint32](source.offsetZ))
+    h = mix(mix(mix(mix(a) xor b) xor c) xor d)
+  cast[Hash](h xor (h shr 31))
 
 var
   visionRayOffsets: seq[VisionRayStep]
@@ -357,6 +391,11 @@ proc revealVision*(
       ):
         visible[index] = 255
 
+proc sameHeights(a, b: seq[int16]): bool =
+  ## Compares two height grids with one memory comparison.
+  a.len == b.len and (a.len == 0 or
+    equalMem(a[0].unsafeAddr, b[0].unsafeAddr, a.len * sizeof(int16)))
+
 proc revealVisionCached*(
     cache: var VisionCache,
     visible: var seq[uint8],
@@ -367,7 +406,8 @@ proc revealVisionCached*(
   ## Retains only the previous frame's source rays. Terrain or blocker changes
   ## invalidate every entry, including height changes without moving a source.
   if cache.width != width or cache.height != height or
-      cache.terrain != terrainHeights or cache.blockers != blockerHeights:
+      not sameHeights(cache.terrain, terrainHeights) or
+      not sameHeights(cache.blockers, blockerHeights):
     cache.sources.clear()
     cache.width = width
     cache.height = height
@@ -393,6 +433,109 @@ proc revealVisionCached*(
       visible[index] = 255
     nextSources[source] = move(cache.sources[source])
   cache.sources = move(nextSources)
+
+proc sourceCells(width, height: int32, terrainHeights,
+    blockerHeights: seq[int16], source: VisionSource): seq[int32] =
+  ## The cells one source sees, exactly as revealVisionCached computes them.
+  if source.radius > 0 and source.radius <= MaxVisionRadius:
+    # Same cells in the same (row-major) order as the square scan below:
+    # lineVisible rejects every offset outside the radius circle, so walking
+    # the precomputed circle and applying lineVisible's remaining tests
+    # (grid bounds, steps <= 1, kernel ray) is equivalent.
+    if source.x < 0 or source.x >= width or source.z < 0 or
+        source.z >= height:
+      return
+    initVisionKernel()
+    let sourceY = int64(terrainHeights[source.z * width + source.x]) +
+      int64(source.eyeHeight)
+    for offset in visionCircle[source.radius]:
+      let
+        x = source.x + int32(offset.dx)
+        z = source.z + int32(offset.dz)
+      if x < 0 or x >= width or z < 0 or z >= height or
+          not source.inVisionRange(x, z):
+        continue
+      let
+        index = z * width + x
+        rayIndex = visionKernelIndex(int(offset.dx), int(offset.dz))
+      if int(visionRaySteps[rayIndex]) <= 1 or not rayBlocked(width,
+          terrainHeights, blockerHeights, source.x, source.z, sourceY,
+          int64(terrainHeights[index]) + 3, rayIndex):
+        result.add index
+    return
+  for z in max(0'i32, source.z - source.radius) .. min(height - 1, source.z + source.radius):
+    for x in max(0'i32, source.x - source.radius) .. min(width - 1, source.x + source.radius):
+      if source.radius > 0 and source.inVisionRange(x, z) and lineVisible(
+          width, height, terrainHeights, blockerHeights,
+          source.x, source.z, x, z, source.radius, source.eyeHeight):
+        result.add z * width + x
+
+proc revealVisionTallied*(
+    tally: var VisionTally,
+    visible: var seq[uint8],
+    width, height: int32,
+    terrainHeights, blockerHeights: seq[int16],
+    sources: openArray[VisionSource],
+    revealed: var seq[int32]
+) =
+  ## Same visibility map as revealVisionCached (255 where any distinct source
+  ## sees the cell, else 0), updated in place from the previous frame. Cells
+  ## that turn visible this frame are appended to `revealed` (every visible
+  ## cell after a reset). Terrain or blocker changes rebuild from scratch.
+  let cellCount = int(width * height)
+  if tally.width != width or tally.height != height or
+      visible.len != cellCount or
+      not sameHeights(tally.terrain, terrainHeights) or
+      not sameHeights(tally.blockers, blockerHeights):
+    tally.sources.clear()
+    tally.spare.clear()
+    tally.width = width
+    tally.height = height
+    tally.terrain = terrainHeights
+    tally.blockers = blockerHeights
+    tally.counts.setLen(cellCount)
+    for count in tally.counts.mitems:
+      count = 0
+    visible.setLen(cellCount)
+    for value in visible.mitems:
+      value = 0
+  inc tally.frame
+  let frame = tally.frame
+  tally.changed.setLen(0)
+  for source in sources:
+    tally.sources.withValue(source, entry):
+      entry.frame = frame
+    do:
+      var cells: seq[int32]
+      if not tally.spare.pop(source, cells):
+        cells = sourceCells(width, height, terrainHeights, blockerHeights,
+          source)
+      for index in cells:
+        if tally.counts[index] == 0:
+          tally.changed.add index
+        inc tally.counts[index]
+      tally.sources[source] = TalliedSource(cells: cells, frame: frame)
+  tally.gone.setLen(0)
+  for source, entry in tally.sources.mpairs:
+    if entry.frame != frame:
+      tally.gone.add source
+      for index in entry.cells:
+        dec tally.counts[index]
+        if tally.counts[index] == 0:
+          tally.changed.add index
+  const MaxSpareSources = 2048
+  if tally.spare.len + tally.gone.len > MaxSpareSources:
+    tally.spare.clear()
+  for source in tally.gone:
+    var entry: TalliedSource
+    discard tally.sources.pop(source, entry)
+    tally.spare[source] = move(entry.cells)
+  for index in tally.changed:
+    let now = if tally.counts[index] > 0: 255'u8 else: 0'u8
+    if now != visible[index]:
+      visible[index] = now
+      if now != 0:
+        revealed.add index
 
 proc blurVisibility*(visible: openArray[uint8], width, height: int32): seq[uint8] =
   ## Softens only presentation edges with one deterministic box-blur pass.
