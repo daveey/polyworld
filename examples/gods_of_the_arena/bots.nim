@@ -175,9 +175,9 @@ proc campProc(heroId: int32, field: CampField): HostProc =
     case field
     of CampTier: int32(camp.tier)
     of CampX:
-      mapCoordinate(camp.center.x, world.heroById(heroId).team)
+      mapCoordinate(camp.center.x, world.heroTeamById(heroId))
     of CampY:
-      mapCoordinate(camp.center.z, world.heroById(heroId).team)
+      mapCoordinate(camp.center.z, world.heroTeamById(heroId))
 
 proc objectProc(heroId: int32, field: ObjectField): HostProc =
   ## Binds one field to the hero's visibility-filtered object snapshot.
@@ -243,9 +243,9 @@ proc spellProc(heroId: int32, field: SpellField): HostProc =
     of SpellCasterId:
       world.visibleSpellCasterId(heroId, value)
     of SpellX:
-      mapCoordinate(value.position.x, world.heroById(heroId).team)
+      mapCoordinate(value.position.x, world.heroTeamById(heroId))
     of SpellY:
-      mapCoordinate(value.position.z, world.heroById(heroId).team)
+      mapCoordinate(value.position.z, world.heroTeamById(heroId))
     of SpellImpactTick:
       value.impact
 
@@ -532,7 +532,7 @@ proc initHeroHost(heroId: int32): Host =
   ): int32 =
     let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
     if value != nil:
-      mapCoordinate(value.position.x, activeGame.world.heroById(heroId).team)
+      mapCoordinate(value.position.x, activeGame.world.heroTeamById(heroId))
     else:
       0
   let objectYProc: HostProc = proc(
@@ -540,7 +540,7 @@ proc initHeroHost(heroId: int32): Host =
   ): int32 =
     let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
     if value != nil:
-      mapCoordinate(value.position.z, activeGame.world.heroById(heroId).team)
+      mapCoordinate(value.position.z, activeGame.world.heroTeamById(heroId))
     else:
       0
   let objectHpProc: HostProc = proc(

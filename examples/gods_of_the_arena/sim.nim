@@ -2379,6 +2379,78 @@ proc scriptObjectKey(value: WorldObject, observer: Team):
 var
   scriptScratch {.threadvar.}: seq[WorldObject]
   scriptOrder {.threadvar.}: seq[ScriptOrderKey]
+  scriptOrderSpare {.threadvar.}: seq[ScriptOrderKey]
+
+proc keyBefore(a, b: ScriptOrderKey): bool {.inline.} =
+  ## Lexicographic (a < b) over the packed script-object sort key.
+  if a[0] != b[0]: a[0] < b[0]
+  elif a[1] != b[1]: a[1] < b[1]
+  else: a[2] < b[2]
+
+proc sortScriptOrder(keys: var seq[ScriptOrderKey],
+    spare: var seq[ScriptOrderKey]) =
+  ## Ascending sort. The keys are distinct (the last field is a unique scan
+  ## position), so the result is the one order any correct sort gives.
+  let n = keys.len
+  if n < 2:
+    return
+  # Insertion-sorted runs of 16, then bottom-up merges.
+  const Run = 16
+  var start = 0
+  while start < n:
+    let stop = min(start + Run, n)
+    for i in start + 1 ..< stop:
+      let key = keys[i]
+      var j = i
+      while j > start and keyBefore(key, keys[j - 1]):
+        keys[j] = keys[j - 1]
+        dec j
+      keys[j] = key
+    start = stop
+  spare.setLen(n)
+  var width = Run
+  while width < n:
+    var left = 0
+    while left < n:
+      let
+        mid = min(left + width, n)
+        right = min(left + 2 * width, n)
+      var
+        i = left
+        j = mid
+        k = left
+      while i < mid and j < right:
+        if keyBefore(keys[j], keys[i]):
+          spare[k] = keys[j]
+          inc j
+        else:
+          spare[k] = keys[i]
+          inc i
+        inc k
+      while i < mid:
+        spare[k] = keys[i]
+        inc i
+        inc k
+      while j < right:
+        spare[k] = keys[j]
+        inc j
+        inc k
+      left = right
+    swap(keys, spare)
+    width *= 2
+
+proc scriptOrderKey(value: WorldObject, team: Team, position: int):
+    ScriptOrderKey {.inline.} =
+  ## scriptObjectKey packed into two words that compare the same way, with
+  ## the scan position as the final tiebreak.
+  let key = value.scriptObjectKey(team)
+  const Bias = 0x8000_0000'u32
+  (
+    (uint64(key.group * 2 + key.enemy) shl 32) or
+      uint64(cast[uint32](key.z) xor Bias),
+    (uint64(cast[uint32](key.x) xor Bias) shl 32) or
+      uint64(cast[uint32](key.id) xor Bias),
+    int32(position))
 
 proc ensureScriptObjects(world: World, heroId: int32): Team =
   ## Rebuilds the visible object list once per team decision frame.
@@ -2393,45 +2465,36 @@ proc ensureScriptObjects(world: World, heroId: int32): Team =
       (world.observationsFrozen or world.scriptObjectsHeroId[team] == heroId):
     return
   perfRegion PrScriptObjects:
-    # Same order as sorting the objects by scriptObjectKey (stable): the key
-    # is packed once per object into two words that compare the same way,
-    # with the scan position as the final tiebreak.
-    scriptScratch.setLen(0)
+    # Same order as sorting the visible objects by scriptObjectKey (stable).
+    # A frozen frame is read in place: its slot numbers are increasing in the
+    # scan order, so they break ties exactly like scan positions.
     scriptOrder.setLen(0)
-    let count =
-      if world.observationsFrozen: world.observedObjects.len
-      else: rawWorldObjectCount(world)
-    var value: WorldObject
-    for i in 0 ..< count:
-      if world.observationsFrozen:
+    if world.observationsFrozen:
+      for i in 0 ..< world.observedObjects.len:
         let frozen {.byaddr.} = world.observedObjects[i]
         if not objectVisibleTo(world, team, frozen) or
             (frozen.kind in [TowerObjectKind, BarracksObjectKind] and frozen.hp <= 0):
           continue
-        scriptScratch.add frozen
-      else:
+        scriptOrder.add frozen.scriptOrderKey(team, i)
+      sortScriptOrder(scriptOrder, scriptOrderSpare)
+      world.scriptObjects[team].setLen(scriptOrder.len)
+      for i in 0 ..< scriptOrder.len:
+        world.scriptObjects[team][i] = world.observedObjects[scriptOrder[i][2]]
+    else:
+      scriptScratch.setLen(0)
+      var value: WorldObject
+      for i in 0 ..< rawWorldObjectCount(world):
         if not rawWorldObjectAt(world, i, value):
           continue
         if not objectVisibleTo(world, team, value) or
             (value.kind in [TowerObjectKind, BarracksObjectKind] and value.hp <= 0):
           continue
+        scriptOrder.add value.scriptOrderKey(team, scriptScratch.len)
         scriptScratch.add value
-    for i in 0 ..< scriptScratch.len:
-      let key = scriptScratch[i].scriptObjectKey(team)
-      const Bias = 0x8000_0000'u32
-      scriptOrder.add (
-        (uint64(key.group * 2 + key.enemy) shl 32) or
-          uint64(cast[uint32](key.z) xor Bias),
-        (uint64(cast[uint32](key.x) xor Bias) shl 32) or
-          uint64(cast[uint32](key.id) xor Bias),
-        int32(i))
-    scriptOrder.sort(proc(a, b: ScriptOrderKey): int =
-      if a[0] != b[0]: cmp(a[0], b[0])
-      elif a[1] != b[1]: cmp(a[1], b[1])
-      else: cmp(a[2], b[2]))
-    world.scriptObjects[team].setLen(scriptOrder.len)
-    for i in 0 ..< scriptOrder.len:
-      world.scriptObjects[team][i] = scriptScratch[scriptOrder[i][2]]
+      sortScriptOrder(scriptOrder, scriptOrderSpare)
+      world.scriptObjects[team].setLen(scriptOrder.len)
+      for i in 0 ..< scriptOrder.len:
+        world.scriptObjects[team][i] = scriptScratch[scriptOrder[i][2]]
     world.scriptObjectCount[team] = scriptOrder.len
     world.scriptObjectsHeroId[team] = heroId
     world.scriptObjectsTick[team] = world.tick
@@ -2501,6 +2564,15 @@ proc heroById*(world: World, id: int32): Hero =
     result = world.heroes[index]
   else:
     result = Hero()
+
+proc heroTeamById*(world: World, id: int32): Team {.inline.} =
+  ## heroById(id).team without copying the hero ref (a missing id reads the
+  ## default Hero's team, as heroById does).
+  let index = heroIndex(world, id)
+  if index >= 0:
+    world.heroes[index].team
+  else:
+    default(Team)
 
 proc footmanById*(world: World, id: int32): Footman =
   ## Reads one footman by its script-visible object ID.
@@ -5448,14 +5520,14 @@ proc separateUnits(game: Game) =
           dec j
         game.collisionOrder[j + 1] = moving
     var overlap = false
+    # The units are not written during the pair scan (only the offsets), so
+    # they are read in place.
     for first in 0 ..< count:
-      let
-        i = game.collisionOrder[first]
-        a = game.collisionUnits[i]
+      let i = game.collisionOrder[first]
+      let a {.byaddr.} = game.collisionUnits[i]
       for second in first + 1 ..< count:
-        let
-          j = game.collisionOrder[second]
-          b = game.collisionUnits[j]
+        let j = game.collisionOrder[second]
+        let b {.byaddr.} = game.collisionUnits[j]
         if b.body.pos.x - a.body.pos.x > a.body.radius + maximumRadius:
           break
         if a.layer != b.layer or (a.fixed and b.fixed) or
