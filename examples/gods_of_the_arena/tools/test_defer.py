@@ -68,10 +68,12 @@ class Driver:
             actions[self.seat] = argmax_heads(self.logits)
 
 
-def play(env, seed, driver=None, rng=None, learners=()):
-    """Full episode: per-step hashes + digest of the whole hash sequence."""
+def play(env, seed, driver=None, rng=None, watch=None):
+    """Full episode: per-step hashes. watch = seat whose BASIC instructions (last tick of each step) are
+    sampled into env.peak_instr."""
     env.reset(seed)
     hashes = []
+    env.peak_instr = 0
     while True:
         actions = np.zeros((10, 5), np.int32)
         if rng is not None:
@@ -81,6 +83,8 @@ def play(env, seed, driver=None, rng=None, learners=()):
             driver.act(env, actions)
         r = env.step(actions)
         hashes.append(env.state_hash())
+        if watch is not None:
+            env.peak_instr = max(env.peak_instr, int(env.stats(watch)[22]))
         if r == 1:
             return hashes
 
@@ -98,8 +102,8 @@ def job_a(lib_path, seed, ticks):
     cfg = dict(max_ticks=ticks, record=True, capture=False)
     model = model_weights(**ALWAYS)
     ref = Env(lib, learner_seats=[], **cfg)
-    h_ref = play(ref, seed); r_ref = replay_bytes(ref)
-    instr = ref.stats(seat)[22]
+    h_ref = play(ref, seed, watch=seat); r_ref = replay_bytes(ref)
+    instr = ref.peak_instr
     abi = Env(lib, learner_seats=[seat], **cfg)
     assert abi.set_defer_script(seat, "players/base.bas") == 0
     drv = Driver(lib, model, seat)
@@ -113,7 +117,7 @@ def job_a(lib_path, seed, ticks):
                 final=f"{h_ref[-1]:016x}",
                 abi_hashes=h_abi == h_ref, abi_replay=r_abi == r_ref,
                 pkg_hashes=h_pkg == h_ref, pkg_replay=r_pkg == r_ref,
-                abi_defer=st_abi, pkg_defer=st_pkg, ref_seat_max_instr=int(instr),
+                abi_defer=st_abi, pkg_defer=st_pkg, ref_seat_peak_instr_sampled=int(instr),
                 replay_sha=hashlib.sha256(r_ref).hexdigest()[:12])
 
 
@@ -179,7 +183,7 @@ def main():
             ok = sum(r["abi_hashes"] and r["abi_replay"] and r["pkg_hashes"] and r["pkg_replay"]
                      and r["abi_defer"][1] == 0 and r["pkg_defer"][1] == 0 for r in rows)
             print(f"A always-defer == plain base.bas (ABI+package, hashes+replay): {ok}/{len(rows)}; "
-                  f"max plain-seat BASIC instr {max(r['ref_seat_max_instr'] for r in rows)}", flush=True)
+                  f"peak plain-seat BASIC instr/tick (sampled last tick of every step) {max(r['ref_seat_peak_instr_sampled'] for r in rows)}", flush=True)
             if ok != len(rows): fails.append("a")
         if "b" in a.only:
             n = max(8, a.seeds // 2)

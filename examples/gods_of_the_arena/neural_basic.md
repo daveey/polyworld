@@ -52,8 +52,41 @@ the game and the hashes stored inside `model.bin`. `decision_period` (1..24) mus
 network was trained with; the native env's `decision_period` config key is the same number.
 
 Build and validate with `python3 coworld/gota/runtime/neural_package.py build|validate`. The validator
-accepts exactly the packages the game accepts. `tools/test_native_env.py` checks that they agree on seven
+accepts exactly the packages the game accepts. `tools/test_native_env.py` checks that they agree on eight
 corruptions, including an unknown decoder key, a bad goal, a hash mismatch and extra or missing files.
+
+## Residual seats: `decoder.defer_script` (Amendment 3)
+
+`"decoder": {"defer_script": true}` (a boolean; combines with `mode`/`temperature`) turns verb 0 into
+DEFER. `policy.bas` is then the script to defer to, for example `players/base.bas` verbatim, with no glue:
+it is the seat's real program. It runs every tick on the true world state, and it drafts, shops, levels
+abilities and buys back itself; those non-contract calls always execute. It needs no `gota_act`, and if it
+calls one, the call does nothing. The network runs on each decision tick as usual. Before the script's BASIC
+turn on that tick, the host consults the decoded heads once:
+
+- **verb 0, defer.** Every contract command (walkTo, attackMove, attackTarget, castTarget, castPoint,
+  useItem, useItemAt) the script issues in this decision window executes live, on the tick it is issued.
+  The window is the decision tick plus the next `decision_period - 1` ticks.
+- **Any other verb, override.** The decoded command is issued on the decision tick; an invalid choice
+  issues nothing and counts as invalid. For the rest of the window, the script's contract commands are
+  absorbed: they are not executed, the call returns 1, and `lastActionError` is unchanged.
+
+The script is never paused or re-run, and it keeps its persistent variables. After an override it sees the
+hero where the network's command put it, but its variables may still assume that its absorbed orders ran.
+base.bas re-issues an order only when it changes (or on its periodic refresh), so after an override the
+network's order stays held until the script issues a new one. A seat that is dead at the decision frame
+defers.
+
+An always-defer network is byte-identical to a plain seat running the script (state hash every tick and the
+replay bytes; `tools/test_defer.py` a). The VM limits are the neural-seat limits (40k instructions per tick,
+160 host functions). Plain base.bas peaks far below the 20k plain-seat limit, so the larger budget never
+changes its behaviour. Seats without the key keep verb 0 = noop.
+
+The native equivalent is `gota_set_seat_defer_script(h, seat, path)` on a learner seat (see native_env.h).
+It uses the same code path, `deferConsult` in neural_host_hooks.nim, at the same point in the tick. The
+native call adds `gota_seat_orders` labels of the script's commands, issued or absorbed.
+`gota_seat_defer_stats` gives the {defer, override} decision counts for both kinds of seat. Build a
+package with `neural_package.py build --defer-script --policy players/base.bas --model model.bin`.
 
 ## model.bin (GOTANET1)
 
