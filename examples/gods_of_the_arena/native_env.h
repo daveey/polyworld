@@ -4,12 +4,17 @@
  *
  * Built from examples/gods_of_the_arena/native_env.nim as a shared library
  * (see neural_basic.md, "Building the native library"). One handle owns one
- * ten-seat match. Handles are NOT thread safe and the simulation keeps
- * process-global state (map, navigation, active game): drive every handle of a
- * process from one thread; several handles may be stepped sequentially (every
- * entry point re-binds the globals to its handle). All handles of a process
- * must use the same map preset (gota_create refuses a second preset).
- * Parallelism = several processes.
+ * ten-seat match.
+ * Threads (built with --mm:atomicArc --threads:on -d:useMalloc, the documented
+ * build): DIFFERENT handles may be called concurrently from different threads;
+ * one handle must be used by one thread at a time, but that thread may change
+ * between calls, and gota_destroy may run on any thread. Per-world scratch is
+ * thread-local; the map, navigation graph and lane globals are built once
+ * (first gota_reset, under a process lock) and only read afterwards.
+ * Acceptance: tools/test_native_concurrency.py (N threads x M handles give the
+ * serial per-step hashes). A --mm:orc build is ~10% faster but single-thread.
+ * All handles of a process must use the same map preset (gota_create refuses
+ * a second preset).
  *
  * Seats are hero slots 0..9: seats 0..4 are red, 5..9 blue. Every seat is
  * either a LEARNER seat (the caller supplies its actions) or a SCRIPTED seat
@@ -125,9 +130,10 @@ int gota_decision_period(void *handle);
  * obs[GOTA_SEATS][GOTA_OBS_SIZE]; unselected rows untouched. resets[seat] =
  * 1 when a recurrent actor must zero its state before this inference (first
  * decision of the episode; first alive decision after a death), else 0.
- * acting[seat] = 1 when the seat is alive and the step will execute its
- * action, 0 when dead/respawning or the episode is over (its action is
- * ignored; a hosted seat does not run its net then). Read only. */
+ * acting[seat] = 1 when the seat is alive at this decision frame and the
+ * episode is running: for a learner the step will execute its action (0 =
+ * dead/respawning, action ignored; a hosted seat does not run its net then);
+ * for a scripted seat it marks a valid BC row. Read only. */
 int gota_observe_seats(void *handle, uint32_t seats, float *obs, float *resets,
                        float *acting);
 
@@ -187,7 +193,9 @@ int gota_set_policy_script(void *handle, const char *source, int32_t length);
 int gota_seat_script_status(void *handle, int seat, char *message, int32_t capacity);
 
 /* BC labels. For a scripted seat: the contract encoding of the commands its
- * script issued during the last gota_step's ticks, int32[GOTA_ORDER_SIZE]:
+ * script issued during the last gota_step's ticks (the window that started at
+ * the frame gota_observe_seats reported before that step; available after the
+ * step returns), int32[GOTA_ORDER_SIZE]:
  *  0 labeled (1 if a contract command was issued, else 0 = noop label)
  *  1..5 head indices {verb, target, point, ability, item} (noop: 0s)
  *  6 exact (1 when the decoder reproduces the script's command exactly: same

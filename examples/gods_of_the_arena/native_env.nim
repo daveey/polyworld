@@ -1,12 +1,15 @@
 ## Gods of the Arena native training environment (native_env.h, ABI v1).
 ##
-## Build (shared library, training counters on):
+## Build (shared library, training counters on, handles usable from any
+## thread):
 ##   nim c --app:lib -d:release -d:headless -d:gotaTrainingStats \
-##     --mm:orc --threads:on -o:libgota_env.so \
-##     examples/gods_of_the_arena/native_env.nim
+##     --mm:atomicArc --threads:on -d:useMalloc -u:nimTypeNames \
+##     -o:libgota_env.so examples/gods_of_the_arena/native_env.nim
+## (--mm:orc instead of atomicArc is ~10% faster single-threaded but then
+## every handle of the process must stay on one thread.)
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
-import std/[json, os, strutils], jsony, scores
+import std/[json, locks, os, strutils], jsony, scores, polyworld/visions
 include bots
 
 const
@@ -41,7 +44,13 @@ type
 
 var
   presetKey: string
-  lastError: string
+  lastError {.threadvar.}: string
+  processLock: Lock
+    ## Serializes create/reset: the shared map, navigation graph and lane
+    ## globals are built once under it; stepping never writes them.
+  mapTemplate: MapData
+  mapReady: bool
+initLock(processLock)
 
 proc copyText(text: string, buffer: ptr char, capacity: int32) =
   if buffer == nil or capacity <= 0:
@@ -128,8 +137,16 @@ proc pauseOrFinish(env: Env) =
 proc resetEnv(env: Env, seed: int64): int =
   activeGame = nil
   neuralTelemetryEnabled = false
-  let
-    gameMap = generateMap(int32(seed), env.config.mapPreset)
+  var gameMap: MapData
+  var game: Game
+  withLock processLock:
+    if not mapReady:
+      mapTemplate = generateMap(int32(seed), env.config.mapPreset)
+      warmEdgeLinks()
+      initVisionKernel()
+      mapReady = true
+    gameMap = mapTemplate
+    gameMap.seed = int32(seed)
     game = newGame(gameMap, env.config.spawnIntervalTicks, 10, false,
       ReplayData(), true)
   game.replayData = initReplayData(currentSetup(game, uint32(env.maxTicks)),
@@ -335,7 +352,7 @@ proc gota_observe_seats(handle: pointer, seats: uint32,
         row[k] = seat.obs[k]
       if resets != nil: resets[i] = float32(seat.resetState and seat.acting)
       if acting != nil:
-        acting[i] = float32(seat.acting and seat.mode == NeuralLearner and not env.over)
+        acting[i] = float32(seat.acting and not env.over)
     else:
       if env.scratch.len != ObservationSize:
         env.scratch = newSeq[float32](ObservationSize)
@@ -520,7 +537,7 @@ proc gota_seat_orders(handle: pointer, seat: cint, output: ptr UncheckedArray[in
   case s.mode
   of NeuralCapture, NeuralOverride:
     for i in 0 ..< OrderSize:
-      output[i] = s.label[i]
+      output[i] = s.lastLabel[i]
   of NeuralLearner, NeuralPackage:
     output[0] = int32(s.headsReady and s.acting and s.heads[0] != 0)
     for h in 0 ..< ActionHeads:

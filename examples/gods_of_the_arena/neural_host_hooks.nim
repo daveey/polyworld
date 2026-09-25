@@ -27,6 +27,8 @@ type
     issuedTick*: int32
     captured*: seq[NeuralCommand]
     label*: array[16, int32]
+    lastLabel*: array[16, int32]
+      ## The label of the previous decision window (what gota_seat_orders reports).
     labelInstant: bool
     actor*: Actor
     state*, logits*: seq[float32]
@@ -105,6 +107,7 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   seat.headsReady = false
   seat.captured.setLen(0)
   seat.label = default(typeof(seat.label))
+  seat.lastLabel = default(typeof(seat.lastLabel))
   seat.command = NeuralCommand()
   seat.decisions = 0
   seat.invalid = 0
@@ -163,10 +166,11 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
           $NeuralOpBudget & " model=w" & $seat.actor.hiddenSize & " ticks=" &
           $world.battleTick() & " inferences=" & $seat.inferences)
   of NeuralCapture, NeuralOverride:
-    if seat.mode == NeuralCapture:
-      seat.captured.setLen(0)
+    seat.lastLabel = seat.label
     seat.label = default(typeof(seat.label))
     seat.labelInstant = false
+    if seat.mode == NeuralCapture:
+      seat.captured.setLen(0)
   of NeuralLearner:
     discard
 
@@ -263,8 +267,6 @@ proc runOverride*(game: Game, index: int, seat: NeuralSeat) =
   let world = game.world
   if seat.frameTick != world.tick:
     return
-  seat.label = default(typeof(seat.label))
-  seat.labelInstant = false
   if seat.captured.len == 0 or not seat.acting:
     seat.captured.setLen(0)
     return

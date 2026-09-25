@@ -36,14 +36,21 @@ var
   lanePathPoints*: array[3, seq[PathPoint]]
   lanePathTiles: array[3, seq[PathTile]]
   laneWorldLayers: array[3, seq[int32]]
-  visionBlockers: seq[int16]
-  visionSources: seq[VisionSource]
-  visionSkipNow: seq[int32]
-  heroPathPoints: seq[PathPoint]
-  heroPathTiles: seq[PathTile]
-  gotaWalkLayer: int
-  gotaWalkDestLayer: int
-  gotaWalkOrigin: FixedVec2
+  mapGlobalsHash: uint64
+  mapGlobalsReady: bool
+    ## Map-derived globals (lane paths, sight terrain) are rebuilt only when
+    ## the map changes, so worlds on one map never write them concurrently.
+
+# Per-thread scratch: separate worlds may tick concurrently on separate threads.
+var
+  visionBlockers {.threadvar.}: seq[int16]
+  visionSources {.threadvar.}: seq[VisionSource]
+  visionSkipNow {.threadvar.}: seq[int32]
+  heroPathPoints {.threadvar.}: seq[PathPoint]
+  heroPathTiles {.threadvar.}: seq[PathTile]
+  gotaWalkLayer {.threadvar.}: int
+  gotaWalkDestLayer {.threadvar.}: int
+  gotaWalkOrigin {.threadvar.}: FixedVec2
 
 ## Simulation
 
@@ -344,8 +351,8 @@ type
     collisionOffsets: seq[FixedVec2]
 
 var
-  navigationWorld: World
-  gotaWalkTeam: Team
+  navigationWorld {.threadvar.}: World
+  gotaWalkTeam {.threadvar.}: Team
 
 const
   WorldScale* = 60_000'i32
@@ -5822,7 +5829,9 @@ proc newGame*(
   world.rng = initRng(map.seed)
   world.matchSeed = map.seed
   initTowers(world, map)
-  initLanePaths(map)
+  let rebuildMapGlobals = not mapGlobalsReady or mapGlobalsHash != map.hash
+  if rebuildMapGlobals:
+    initLanePaths(map)
   for team in Team:
     var point = worldPoint(map.layout.spawns[team.ord])
     point.y = fixedSurfaceHeight(point, team)
@@ -5863,21 +5872,25 @@ proc newGame*(
       )
   world.initOccupancy()
   world.initCamps(map)
-  sightTerrain = buildSightTerrain()
+  if rebuildMapGlobals:
+    sightTerrain = buildSightTerrain()
   let visionCells = mapTiles() * mapTiles()
   for team in Team:
     world.teamVisible[team.ord] = newSeq[uint8](visionCells)
     world.teamExplored[team.ord] = newSeq[uint8](visionCells)
-  for lane in 0 .. 2:
-    laneWorldPaths[lane].setLen(0)
-    laneWorldLayers[lane].setLen(0)
-    for tile in lanePathTiles[lane]:
-      laneWorldPaths[lane].add worldPoint(pathPoint(
-        int(tile.layer),
-        int(tile.x),
-        int(tile.z)
-      ))
-      laneWorldLayers[lane].add tile.layer
+  if rebuildMapGlobals:
+    for lane in 0 .. 2:
+      laneWorldPaths[lane].setLen(0)
+      laneWorldLayers[lane].setLen(0)
+      for tile in lanePathTiles[lane]:
+        laneWorldPaths[lane].add worldPoint(pathPoint(
+          int(tile.layer),
+          int(tile.x),
+          int(tile.z)
+        ))
+        laneWorldLayers[lane].add tile.layer
+    mapGlobalsHash = map.hash
+    mapGlobalsReady = true
   for fort in world.forts.mitems:
     fort.center.y = fixedSurfaceHeight(fort.center, fort.team)
   let heroSetup =

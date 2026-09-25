@@ -173,14 +173,18 @@ var
   nodePathZs: seq[int32]
   edgeLinks: seq[array[4, EdgeLink]]
   edgeKnown: seq[array[4, bool]]
-  pathCosts: seq[int64]
-  pathCameFrom: seq[int]
-  pathSeen: seq[uint32]
-  pathGeneration = 0'u32
-  pathResultKeys: seq[int]
-  pathFrontierEdges: HeapQueue[(int64, int64, int, int)]
-  pathFrontierEight: HeapQueue[(int32, int, int)]
   dormantPathingContext: PathingContext
+
+# Search scratch is per thread so separate worlds may search concurrently;
+# every search sizes it for the installed graph (see `beginSearch`).
+var
+  pathCosts {.threadvar.}: seq[int64]
+  pathCameFrom {.threadvar.}: seq[int]
+  pathSeen {.threadvar.}: seq[uint32]
+  pathGeneration {.threadvar.}: uint32
+  pathResultKeys {.threadvar.}: seq[int]
+  pathFrontierEdges {.threadvar.}: HeapQueue[(int64, int64, int, int)]
+  pathFrontierEight {.threadvar.}: HeapQueue[(int32, int, int)]
 
 ## Walkability
 
@@ -512,6 +516,15 @@ proc edgeLink*(layerIndex, x, z, direction: int): EdgeLink =
   edgeLinks[index][direction] = result
   edgeKnown[index][direction] = true
 
+proc warmEdgeLinks*() =
+  ## Fills the whole edge cache so later searches only read it (required
+  ## before several threads search the same installed graph).
+  for layerIndex, layer in layers:
+    for z in 0 ..< layer.depth:
+      for x in 0 ..< layer.width:
+        for direction in 0 .. 3:
+          discard edgeLink(layerIndex, x, z, direction)
+
 proc edgeMask*(
     layerIndex, x, z: int,
     blockers: openArray[seq[int32]] = [],
@@ -677,6 +690,10 @@ proc octileCost(
     orthogonalCost * (max(ax, az) - min(ax, az))
 
 proc beginSearch() =
+  if pathCosts.len < nodeLayers.len:
+    pathCosts.setLen(nodeLayers.len)
+    pathCameFrom.setLen(nodeLayers.len)
+    pathSeen.setLen(nodeLayers.len)
   ## Advances the generation stamp so a new search can reuse scratch.
   if pathGeneration == uint32.high:
     pathSeen = newSeq[uint32](pathSeen.len)

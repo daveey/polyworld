@@ -96,14 +96,21 @@ const
   ]
 
 var
-  activeGame: Game
+  activeGame {.threadvar.}: Game
+    ## Per thread: separate games may run their heroes on separate threads.
   heroDataIds: array[HeroDataSlot, int32]
+  heroDataBound: bool
 
 proc bindHeroData(program: Program) =
   ## Resolves host data slots once so think ticks do not allocate names.
+  ## Every hero program shares the host's data order, so one binding serves
+  ## all of them (and is never rewritten while other threads read it).
+  if heroDataBound:
+    return
   for slot, name in HeroDataNames:
     heroDataIds[slot] = program.hostDataIndex(name)
     doAssert heroDataIds[slot] >= 0, "missing host data " & name
+  heroDataBound = true
 
 proc heroVmLimits(): Limits =
   ## Returns independent structural and per-decision limits for a hero VM.
