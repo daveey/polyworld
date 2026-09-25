@@ -1010,7 +1010,7 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
   if primary:
     game.metrics.decision(
       index, game.world.tick, vm.lastInstructions,
-      heroVmLimits().maxInstructions
+      vm.limits.maxInstructions
     )
 
 proc runHeroScript(game: Game, index: int) =

@@ -78,10 +78,9 @@ network's order stays held until the script issues a new one. A seat that is dea
 defers.
 
 An always-defer network is byte-identical to a plain seat running the script (state hash every tick and the
-replay bytes; `tools/test_defer.py` a). The VM keeps the neural-seat structure limits (160 host functions)
-but the plain-seat budget of 20k instructions and 50k work units per tick. The network consult is host-side
-and costs no BASIC instructions, so the script runs out of budget exactly where a plain seat would. Seats
-without the key keep verb 0 = noop.
+replay bytes; `tools/test_defer.py` a). The VM has the neural-seat limits, which use the plain-seat budget
+(see below). The network consult is host-side and costs no BASIC instructions, so the script runs out of
+budget exactly where a plain seat would. Seats without the key keep verb 0 = noop.
 
 The native equivalent is `gota_set_seat_defer_script(h, seat, path)` on a learner seat (see native_env.h).
 It uses the same code path, `deferConsult` in neural_host_hooks.nim, at the same point in the tick. The
@@ -172,10 +171,12 @@ BASIC surface for `policy.bas`, registered only for neural seats:
 - `neuralObservation(i)`, `neuralLogits(i)`, `neuralState(i)`: Q16.16 reads.
 - `neuralModel(k)`: k = 0 width, 1 inputs, 2 outputs, 3 period, 5..9 the chosen heads.
 
-Package seats get `neuralVmLimits`: the hero limits with 160 host functions, 40,000 instructions and
-100,000 work units per decision. These were raised for neural seats only, as Amendment 1 allows.
-The shipped `policy.bas` peaks at 1,065 instructions per tick (10 learner seats, a full match), so the headroom is for richer glue scripts. Plain seats keep
-`heroVmLimits` (20,000 / 50,000 / 128).
+Package seats, learner seats and defer seats get `neuralVmLimits`. That is the plain-seat per-tick budget,
+the same as every `.bas` seat (20,000 instructions and 50,000 work units per tick), with 160 host functions
+instead of 128 to make room for the neural host functions. The per-tick budget is kept equal for fairness:
+the network runs on its own separate 4,000,000-op budget. The shipped `policy.bas` peaks at 1,065
+instructions per tick (10 learner seats, a full match). Replay metrics report each seat's instructions
+against that seat's own limit.
 
 ## Observation contract v1 (1407 float32)
 

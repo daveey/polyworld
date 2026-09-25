@@ -38,6 +38,8 @@ type
       ## Residual track: the learner seat's defer script (empty = off).
     root: string
     goals: array[10, array[GoalSize, float32]]
+    goalSet: array[10, bool]
+      ## gota_set_seat_goal was called: overrides a package seat's manifest goal.
     status: array[10, SeatStatus]
     game: Game
     seeds: int64
@@ -186,7 +188,8 @@ proc resetEnv(env: Env, seed: int64): int =
         game.installPackageSeat(i, env.packages[i])
         let seat = game.neuralSeat(i)
         seat.telemetry = false
-        seat.goal = env.goals[i]
+        if env.goalSet[i]:
+          seat.goal = env.goals[i]  # else the manifest goal of the seat's team
       except BasicError as error:
         env.status[i] = SeatStatus(code: 2, message: error.msg)
         game.heroVms[i] = nil
@@ -388,7 +391,8 @@ proc gota_observe_seats(handle: pointer, seats: uint32,
       if env.scratch.len != ObservationSize:
         env.scratch = newSeq[float32](ObservationSize)
       var frame: DecisionFrame
-      buildObservation(game.world, i, env.goals[i], env.maxTicks,
+      let goal = if seat != nil: seat.goal else: env.goals[i]
+      buildObservation(game.world, i, goal, env.maxTicks,
         game.world.stats, env.scratch, frame)
       for k in 0 ..< ObservationSize:
         row[k] = env.scratch[k]
@@ -499,6 +503,7 @@ proc gota_set_seat_goal(handle: pointer, seat: cint, w: ptr UncheckedArray[float
   if w[GoalSize - 1] != 0: return -3
   for i in 0 ..< GoalSize:
     env.goals[seat][i] = w[i]
+  env.goalSet[seat] = true
   if env.game != nil:
     let s = env.game.neuralSeat(seat)
     if s != nil:
