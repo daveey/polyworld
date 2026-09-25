@@ -8,7 +8,7 @@ export groves
 
 proc plantGrove*(grove: var Grove, brush: BrushMix, seed: int) =
   ## Reuses seeded models on blocked brush tiles without changing navigation.
-  let ground = layers[GroundLayer]
+  let ground {.cursor.} = layers[GroundLayer]
   grove.colors = newSeq[Vec3](ground.tiles.len)
   for index, tile in ground.tiles:
     if not tile.exists or not tile.impassable:

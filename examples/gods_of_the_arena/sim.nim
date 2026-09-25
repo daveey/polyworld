@@ -9,7 +9,7 @@
 ## VM type on `Game` but never runs a program.
 
 import
-  std/algorithm,
+  std/[algorithm, decls],
   bassy, fixxy,
   polyworld/[bodies, hashes, metrics, noises, pathing, profiles, rngs, tapes,
     visions, mailboxes],
@@ -665,7 +665,7 @@ proc buildSightTerrain(): tuple[
           result.terrainHeights[index],
           mean
         )
-  let ground = layers[GroundLayer]
+  let ground {.cursor.} = layers[GroundLayer]
   for z in 0 ..< ground.depth:
     for x in 0 ..< ground.width:
       let index = z * ground.width + x
@@ -1460,7 +1460,7 @@ proc layerFixedHeight(
 ): bool =
   ## Samples one packed tile surface using only fixed-point arithmetic.
   let
-    layer = layers[layerIndex]
+    layer {.cursor.} = layers[layerIndex]
     worldTileX = floorWorldTile(position.x, team) + GridTiles div 2
     worldTileZ = floorWorldTile(position.z, team) + GridTiles div 2
     tileX = worldTileX - layer.originX
@@ -1490,7 +1490,8 @@ proc layerFixedHeight(
 proc fixedSurfaceHeight(position: WorldPoint, team: Team): int32 =
   ## Returns the highest packed solid surface at an integer world position.
   var found = false
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     if layer.water:
       continue
     var height: int32
@@ -1508,7 +1509,8 @@ proc fixedSurfaceHeightNear(
   var
     found = false
     bestDistance = int64.high
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     if layer.water:
       continue
     var height: int32
@@ -1564,8 +1566,8 @@ proc navigationLineClear(
   ## Checks exact positions against the same tile edges and building occupancy.
   const Origin = int64(GridTiles div 2) * WorldScale
   let
-    first = layers[firstLayer]
-    last = layers[lastLayer]
+    first {.cursor.} = layers[firstLayer]
+    last {.cursor.} = layers[lastLayer]
   lineClear(
     PathTile(
       layer: firstLayer,
@@ -1620,7 +1622,7 @@ proc buildingFootprint(building: Building): seq[PathTile] =
   const TowerRadii = [63_000'i32, 75_000'i32, 99_000'i32]
   let
     layer = int(bindNavLayer(building.position, building.team))
-    floor = layers[layer]
+    floor {.cursor.} = layers[layer]
     forward = scaledPlanar(WorldPoint(
       x: building.facing.x, z: building.facing.z), WorldScale)
     halfX = 39_000'i64
@@ -1686,7 +1688,8 @@ proc initOccupancy(world: World) =
   ## Initializes independent occupancy and known building state for one match.
   navigationWorld = nil
   world.occupancy.setLen(layers.len)
-  for i, layer in layers:
+  for i in 0 ..< layers.len:
+    let layer {.cursor.} = layers[i]
     world.occupancy[i] = newSeq[int16](layer.width * layer.depth)
   for building in world.buildings.mitems:
     building.footprint = buildingFootprint(building)
@@ -1888,7 +1891,7 @@ proc currentWaypoint(footman: Footman): WorldPoint =
 
 proc currentWaypointLayer(footman: Footman): int32 =
   ## Layer of the waypoint this footman is walking toward.
-  let route = laneWorldLayers[footman.lane]
+  let route {.cursor.} = laneWorldLayers[footman.lane]
   if route.len == 0:
     return footman.navLayer
   let index =
@@ -1903,7 +1906,7 @@ proc currentWaypointLayer(footman: Footman): int32 =
 
 proc advanceWaypoints*(footman: var Footman) =
   ## Clears reached lane goals even while pursuing an enemy.
-  let route = laneWorldPaths[footman.lane]
+  let route {.cursor.} = laneWorldPaths[footman.lane]
   while footman.waypointIndex < route.len and
       within(footman.position, footman.currentWaypoint, WaypointRadius):
     inc footman.waypointIndex
@@ -2421,7 +2424,8 @@ proc navTileAt(position: WorldPoint, value: var NavTile, team: Team): bool =
     worldX = floorWorldTile(position.x, team) + GridTiles div 2
     worldZ = floorWorldTile(position.z, team) + GridTiles div 2
   var bestHeight = int64.high
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     if layer.water:
       continue
     let
@@ -2457,7 +2461,8 @@ proc nearestNavTile(
       if worldX < 0 or worldX >= mapTiles() or
           worldZ < 0 or worldZ >= mapTiles():
         continue
-      for layerIndex, layer in layers:
+      for layerIndex in 0 ..< layers.len:
+        let layer {.cursor.} = layers[layerIndex]
         if layer.water:
           continue
         let
@@ -2795,7 +2800,8 @@ proc portalLanding*(
       radius = int((range + WorldScale - 1) div WorldScale)
       centerX = floorWorldTile(tower.position.x, team) + GridTiles div 2
       centerZ = floorWorldTile(tower.position.z, team) + GridTiles div 2
-    for layerIndex, layer in layers:
+    for layerIndex in 0 ..< layers.len:
+      let layer {.cursor.} = layers[layerIndex]
       if layer.water:
         continue
       for z in max(0, centerZ - layer.originZ - radius) ..
@@ -3155,14 +3161,14 @@ proc updateTower*(world: World, tower: var Building) =
     targetFootman = footmanIndex(world, tower.targetId)
     targetHero = heroIndex(world, tower.targetId)
   if targetFootman >= 0:
-    let footman = world.footmen[targetFootman]
+    let footman {.byaddr.} = world.footmen[targetFootman]
     if not world.hostile(footman, tower.team) or
         footman.state == Dying or footman.hp <= 0 or
         not within(tower.position, footman.position, attackRange) or
         not visible(world, tower.team, footman.position):
       targetFootman = -1
   if targetHero >= 0:
-    let hero = world.heroes[targetHero]
+    let hero {.cursor.} = world.heroes[targetHero]
     if hero.team == tower.team or hero.state == Dying or
         hero.hp <= 0 or
         not within(tower.position, hero.position, attackRange) or
@@ -3173,12 +3179,16 @@ proc updateTower*(world: World, tower: var Building) =
       bestSquared = int64(attackRange) * attackRange
       bestId = 0'i32
       bestPosition: WorldPoint
-    for i, footman in world.footmen:
+    for i in 0 ..< world.footmen.len:
+      let footman {.byaddr.} = world.footmen[i]
       if not world.hostile(footman, tower.team) or footman.state == Dying or
-          footman.hp <= 0 or
+          footman.hp <= 0:
+        continue
+      # Range first: a farther unit can never win, and visible() is pure.
+      let distance = distanceSquared(tower.position, footman.position)
+      if distance > bestSquared or
           not visible(world, tower.team, footman.position):
         continue
-      let distance = distanceSquared(tower.position, footman.position)
       if distance < bestSquared or
           (distance == bestSquared and targetBefore(footman.position,
             footman.id, bestPosition, bestId, tower.team)):
@@ -3190,12 +3200,13 @@ proc updateTower*(world: World, tower: var Building) =
       bestSquared = int64(attackRange) * attackRange
       bestId = 0
       for i in 0 ..< world.heroes.len:
-        let hero = world.heroes[i]
+        let hero {.cursor.} = world.heroes[i]
         if hero.team == tower.team or hero.state == Dying or hero.hp <= 0:
           continue
-        if not visible(world, tower.team, hero.position):
-          continue
         let distance = distanceSquared(tower.position, hero.position)
+        if distance > bestSquared or
+            not visible(world, tower.team, hero.position):
+          continue
         if distance < bestSquared or
             (distance == bestSquared and targetBefore(hero.position,
               hero.id, bestPosition, bestId, tower.team)):
@@ -3586,7 +3597,7 @@ proc updateFootman(world: World, footman: var Footman) =
     targetHero = heroIndex(world, footman.targetHeroId)
     targetBuilding = buildingIndex(world, footman.targetBuildingId)
   if targetFootman >= 0:
-    let other = world.footmen[targetFootman]
+    let other {.byaddr.} = world.footmen[targetFootman]
     if not world.hostile(other, footman.team) or
         not visible(world, footman.team, other.position) or
         not within(
@@ -3596,7 +3607,7 @@ proc updateFootman(world: World, footman: var Footman) =
         ):
       targetFootman = -1
   if targetHero >= 0:
-    let hero = world.heroes[targetHero]
+    let hero {.cursor.} = world.heroes[targetHero]
     if hero.state == Dying or hero.hp <= 0 or
         not visible(world, footman.team, hero.position) or
         not within(
@@ -3606,7 +3617,7 @@ proc updateFootman(world: World, footman: var Footman) =
         ):
       targetHero = -1
   if targetBuilding >= 0:
-    let tower = world.buildings[targetBuilding]
+    let tower {.byaddr.} = world.buildings[targetBuilding]
     if not buildingExposed(world, tower) or
         not visible(world, footman.team, tower.position) or
         not within(
@@ -3620,12 +3631,15 @@ proc updateFootman(world: World, footman: var Footman) =
       bestSquared = int64(FootmanSightRadius) * FootmanSightRadius
       bestId = 0'i32
       bestPosition: WorldPoint
-    for i, other in world.footmen:
+    for i in 0 ..< world.footmen.len:
+      let other {.byaddr.} = world.footmen[i]
       if not world.hostile(other, footman.team):
         continue
-      if not visible(world, footman.team, other.position):
-        continue
+      # Range first: a farther unit can never win, and visible() is pure.
       let distance = distanceSquared(footman.position, other.position)
+      if distance > bestSquared or
+          not visible(world, footman.team, other.position):
+        continue
       if distance < bestSquared or (distance == bestSquared and bestId != 0 and
         targetBefore(other.position, other.id,
           bestPosition, bestId, footman.team)):
@@ -3634,12 +3648,13 @@ proc updateFootman(world: World, footman: var Footman) =
           bestPosition = other.position
           targetFootman = i
     for i in 0 ..< world.heroes.len:
-      let hero = world.heroes[i]
+      let hero {.cursor.} = world.heroes[i]
       if hero.team == footman.team or hero.state == Dying or hero.hp <= 0:
         continue
-      if not visible(world, footman.team, hero.position):
-        continue
       let distance = distanceSquared(footman.position, hero.position)
+      if distance > bestSquared or
+          not visible(world, footman.team, hero.position):
+        continue
       if distance < bestSquared or (distance == bestSquared and
         targetFootman < 0 and bestId != 0 and targetBefore(hero.position,
           hero.id, bestPosition, bestId, footman.team)):
@@ -5614,8 +5629,13 @@ proc tickWorldFinish*(game: Game) =
 
   # Plan every unit against the same actor state, then publish together.
   game.nextFootmen.setLen(world.footmen.len)
-  for i, footman in world.footmen:
-    game.nextFootmen[i] = footman
+  for i in 0 ..< world.footmen.len:
+    # Only a footman's own update reads its movePath, so the route moves to
+    # the planning copy instead of being duplicated every tick. The retired
+    # snapshot keeps an empty path until the swap below recycles it.
+    var route = move(world.footmen[i].movePath)
+    game.nextFootmen[i] = world.footmen[i]
+    game.nextFootmen[i].movePath = move(route)
   game.nextHeroes.setLen(world.heroes.len)
   for i, hero in world.heroes:
     if game.nextHeroes[i] == nil:

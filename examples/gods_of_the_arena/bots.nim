@@ -156,7 +156,7 @@ proc terrainProc(
     let index = heroIndex(activeGame.world, heroId)
     if index < 0:
       return 0
-    let floor = layers[int(layer)]
+    let floor {.cursor.} = layers[int(layer)]
     int32(activeGame.world.knownWalkable(
       activeGame.world.heroes[index].team,
       int(layer),

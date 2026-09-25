@@ -222,7 +222,7 @@ proc terrainOpen(world: World, team: Team, layer: int32, mx, my: int): bool =
     return false
   if terrainValue(int32(mx), int32(my), layer, TerrainWalkableField) == 0:
     return false
-  let floor = layers[int(layer)]
+  let floor {.cursor.} = layers[int(layer)]
   world.knownWalkable(team, int(layer), mx + mapOrigin() - floor.originX,
     my + mapOrigin() - floor.originZ)
 
