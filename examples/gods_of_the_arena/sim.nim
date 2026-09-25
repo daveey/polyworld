@@ -884,6 +884,11 @@ proc heroIndex*(world: World, id: int32): int =
   ## Returns the hero slot for one id, or -1.
   if id == 0:
     return -1
+  # Heroes are created with consecutive ids from FirstHeroId; ids are
+  # unique, so a hit at the expected slot is the only match.
+  let guess = int(id) - int(FirstHeroId)
+  if guess >= 0 and guess < world.heroes.len and world.heroes[guess].id == id:
+    return guess
   for i in 0 ..< world.heroes.len:
     if world.heroes[i].id == id:
       return i
@@ -5409,18 +5414,26 @@ proc separateUnits(game: Game) =
   for iteration in 0 ..< 4:
     for offset in game.collisionOffsets.mitems:
       offset = FixedVec2Zero
-    # Stable insertion sort by X: the same permutation std sort (stable
-    # merge sort) produces from this input, and near-linear because the
-    # previous iteration's order is almost sorted already.
-    for k in 1 ..< count:
-      let
-        moving = game.collisionOrder[k]
-        key = game.collisionUnits[moving].body.pos.x
-      var j = k - 1
-      while j >= 0 and game.collisionUnits[game.collisionOrder[j]].body.pos.x > key:
-        game.collisionOrder[j + 1] = game.collisionOrder[j]
-        dec j
-      game.collisionOrder[j + 1] = moving
+    # Stable sort by X. Later passes start from the previous pass's order,
+    # which is almost sorted, so they use insertion sort; both are stable, so
+    # the permutation equals std sort's (stable merge sort) on this input.
+    if iteration == 0:
+      game.collisionOrder.sort(proc(first, second: int): int =
+        ## Restricts pair checks to bodies close enough along the X axis.
+        cmp(game.collisionUnits[first].body.pos.x,
+          game.collisionUnits[second].body.pos.x)
+      )
+    else:
+      for k in 1 ..< count:
+        let
+          moving = game.collisionOrder[k]
+          key = game.collisionUnits[moving].body.pos.x
+        var j = k - 1
+        while j >= 0 and
+            game.collisionUnits[game.collisionOrder[j]].body.pos.x > key:
+          game.collisionOrder[j + 1] = game.collisionOrder[j]
+          dec j
+        game.collisionOrder[j + 1] = moving
     var overlap = false
     for first in 0 ..< count:
       let
