@@ -43,7 +43,6 @@ var
 
 # Per-thread scratch: separate worlds may tick concurrently on separate threads.
 var
-  visionBlockers {.threadvar.}: seq[int16]
   visionSources {.threadvar.}: seq[VisionSource]
   visionSkipNow {.threadvar.}: seq[int32]
   heroPathPoints {.threadvar.}: seq[PathPoint]
@@ -321,6 +320,10 @@ type
     teamExplored*: array[2, seq[uint8]]
     visionCache: array[2, VisionCache]
     visionSkipKeys: seq[int32]
+    visionBlockers: seq[int16]
+      ## Occluder heights of the last rebuild of THIS world (camp sight reads
+      ## them); per world, not per thread, so worlds sharing a thread never
+      ## see each other's towers.
     scriptObjects: seq[WorldObject]
     scriptObjectCount: int
     scriptObjectsHeroId: int32
@@ -694,11 +697,11 @@ proc addVisionSource(position: WorldPoint, radius: int32, eyeHeight: int16) =
       x: tile.x, z: tile.z, radius: radius, eyeHeight: eyeHeight
     )
 
-proc addVisionBlocker(position: WorldPoint, height: int16) =
+proc addVisionBlocker(world: World, position: WorldPoint, height: int16) =
   ## Raises the occluder height in each cell touched by a structure's center.
   for tile in sightTiles(position):
     let index = tile.z * mapTiles() + tile.x
-    visionBlockers[index] = max(visionBlockers[index], height)
+    world.visionBlockers[index] = max(world.visionBlockers[index], height)
 
 proc fillVisionKeys(world: World, dest: var seq[int32]) =
   ## Records living observers and the towers or forts that occlude them.
@@ -736,15 +739,15 @@ proc rebuildVision*(world: World) {.measure.} =
   world.fillVisionKeys(visionSkipNow)
   if sameVisionKeys(visionSkipNow, world.visionSkipKeys):
     return
-  visionBlockers.setLen(sightTerrain.blockerHeights.len)
+  world.visionBlockers.setLen(sightTerrain.blockerHeights.len)
   for i, value in sightTerrain.blockerHeights:
-    visionBlockers[i] = value
+    world.visionBlockers[i] = value
   for tower in world.buildings:
     if tower.hp > 0:
-      addVisionBlocker(tower.position, 28)
+      world.addVisionBlocker(tower.position, 28)
   for fort in world.forts:
     if fort.hp > 0:
-      addVisionBlocker(fort.center, 32)
+      world.addVisionBlocker(fort.center, 32)
   for team in Team:
     visionSources.setLen(0)
     for i in 0 ..< world.heroes.len:
@@ -777,7 +780,7 @@ proc rebuildVision*(world: World) {.measure.} =
       mapTiles().int32,
       mapTiles().int32,
       sightTerrain.terrainHeights,
-      visionBlockers,
+      world.visionBlockers,
       visionSources
     )
     for i, value in world.teamVisible[team.ord]:
@@ -3317,12 +3320,12 @@ proc spawnCamp(world: World, index: int) =
       world.lifecycleEvent(EntitySpawned, 0, unit.id,
         if camp.started: Respawn else: Initialization)
 
-proc campCanSee(unit: Footman, point: WorldPoint, radius: int32): bool =
+proc campCanSee(world: World, unit: Footman, point: WorldPoint, radius: int32): bool =
   ## Tests the mob's own terrain-occluded sight without granting team vision.
   # Exact world range is checked before allowing for rounded tile centers.
   within(unit.position, point, radius * WorldScale) and lineVisible(
     mapTiles().int32, mapTiles().int32,
-    sightTerrain.terrainHeights, visionBlockers,
+    sightTerrain.terrainHeights, world.visionBlockers,
     mapCoordinate(unit.position.x, unit.team),
     mapCoordinate(unit.position.z, unit.team),
     mapCoordinate(point.x, unit.team), mapCoordinate(point.z, unit.team),
@@ -3360,7 +3363,7 @@ proc provokeCamp(world: World, index: int) =
           continue
         let distance = distanceSquared(unit.position, point)
         if distance > best or
-          not unit.campCanSee(point, NeutralAggroTiles):
+          not world.campCanSee(unit, point, NeutralAggroTiles):
             continue
         if distance < best or
           targetBefore(point, candidateId, targetPoint, targetId, unit.team) or
@@ -3447,7 +3450,7 @@ proc updateCamps(world: World) =
         var seen = false
         for unit in world.footmen:
           if unit.camp == index + 1 and unit.hp > 0 and
-            unit.campCanSee(target.position, 12):
+            world.campCanSee(unit, target.position, 12):
               seen = true
               break
         if seen:
@@ -3481,7 +3484,7 @@ proc updateNeutral(world: World, unit: var Footman) =
   template consider(id: int32, at: WorldPoint) =
     ## Chooses the nearest visible hero or lane creep while defending a camp.
     let radius = if id == camp.targetId: 12'i32 else: 5'i32
-    if within(at, camp.center, NeutralLeash) and unit.campCanSee(at, radius):
+    if within(at, camp.center, NeutralLeash) and world.campCanSee(unit, at, radius):
       let distance = distanceSquared(unit.position, at)
       if distance < best or (distance == best and
         targetBefore(at, id, point, targetId, unit.team)):

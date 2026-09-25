@@ -12,7 +12,12 @@
  * thread-local; the map, navigation graph and lane globals are built once
  * (first gota_reset, under a process lock) and only read afterwards.
  * Acceptance: tools/test_native_concurrency.py (N threads x M handles give the
- * serial per-step hashes). A --mm:orc build is ~10% faster but single-thread.
+ * serial per-step hashes), and tools/test_thread_isolation.py (several
+ * worlds per thread over full matches == each world alone; concurrent
+ * gota_create). gota_create is thread-safe (it runs under the process lock).
+ * World state that one world's tick reads later (vision blockers included)
+ * lives in the World, never in per-thread scratch. A --mm:orc build is ~10%
+ * faster but single-thread.
  * All handles of a process must use the same map preset (gota_create refuses
  * a second preset).
  *

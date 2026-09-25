@@ -268,51 +268,54 @@ proc resolve(root, path: string): string =
   if path.isAbsolute: path else: root / path
 
 proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer {.exportc, dynlib, cdecl.} =
+  ## Thread-safe: the whole create (config parse, file reads, the process-wide
+  ## preset check) runs under processLock, so concurrent creates serialize.
   try:
-    let node = if configJson == nil or configJson[0] == '\0': newJObject()
-      else: parseJson($configJson)
-    for key in node.keys:
-      if key notin ["config_path", "seed", "max_ticks", "decision_period",
-          "learner_seats", "script_path", "policy_path", "data_root",
-          "record", "capture"]:
-        raise newException(ValueError, "unknown config key " & key)
-    let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
-    let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
-    env.config =
-      if node.hasKey("config_path"): loadConfig(resolve(root, node["config_path"].getStr))
-      else: parseConfig("{}")
-    env.maxTicks = int32(if node.hasKey("max_ticks"): node["max_ticks"].getInt
-      else: 28_800)
-    if env.maxTicks notin 1'i32 .. 28_800'i32:
-      raise newException(ValueError, "max_ticks must be 1..28800")
-    if node.hasKey("decision_period"):
-      env.period = int32(node["decision_period"].getInt)
-    if env.period notin 1'i32 .. 24'i32:
-      raise newException(ValueError, "decision_period must be 1..24")
-    env.learners = 1
-    if node.hasKey("learner_seats"):
-      env.learners = 0
-      for seat in node["learner_seats"]:
-        let s = seat.getInt
-        if s notin 0..9:
-          raise newException(ValueError, "learner seat out of range")
-        env.learners = env.learners or (1'u32 shl s)
-    env.record = node.hasKey("record") and node["record"].getBool
-    if node.hasKey("capture"):
-      env.capture = node["capture"].getBool
-    env.defaultScript = readFile(resolve(root,
-      if node.hasKey("script_path"): node["script_path"].getStr else: "players/base.bas"))
-    env.policyScript = readFile(resolve(root,
-      if node.hasKey("policy_path"): node["policy_path"].getStr else: "neural/policy.bas"))
-    env.seeds = if node.hasKey("seed"): node["seed"].getInt else: 0
-    for i in 0 ..< 10:
-      env.goals[i] = defaultGoal()
-    let key = env.config.mapPreset.toJson()
-    if presetKey.len > 0 and presetKey != key:
-      raise newException(ValueError, "every handle in a process must use the same map preset")
-    presetKey = key
-    GC_ref(env)
-    result = cast[pointer](env)
+    withLock processLock:
+      let node = if configJson == nil or configJson[0] == '\0': newJObject()
+        else: parseJson($configJson)
+      for key in node.keys:
+        if key notin ["config_path", "seed", "max_ticks", "decision_period",
+            "learner_seats", "script_path", "policy_path", "data_root",
+            "record", "capture"]:
+          raise newException(ValueError, "unknown config key " & key)
+      let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
+      let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
+      env.config =
+        if node.hasKey("config_path"): loadConfig(resolve(root, node["config_path"].getStr))
+        else: parseConfig("{}")
+      env.maxTicks = int32(if node.hasKey("max_ticks"): node["max_ticks"].getInt
+        else: 28_800)
+      if env.maxTicks notin 1'i32 .. 28_800'i32:
+        raise newException(ValueError, "max_ticks must be 1..28800")
+      if node.hasKey("decision_period"):
+        env.period = int32(node["decision_period"].getInt)
+      if env.period notin 1'i32 .. 24'i32:
+        raise newException(ValueError, "decision_period must be 1..24")
+      env.learners = 1
+      if node.hasKey("learner_seats"):
+        env.learners = 0
+        for seat in node["learner_seats"]:
+          let s = seat.getInt
+          if s notin 0..9:
+            raise newException(ValueError, "learner seat out of range")
+          env.learners = env.learners or (1'u32 shl s)
+      env.record = node.hasKey("record") and node["record"].getBool
+      if node.hasKey("capture"):
+        env.capture = node["capture"].getBool
+      env.defaultScript = readFile(resolve(root,
+        if node.hasKey("script_path"): node["script_path"].getStr else: "players/base.bas"))
+      env.policyScript = readFile(resolve(root,
+        if node.hasKey("policy_path"): node["policy_path"].getStr else: "neural/policy.bas"))
+      env.seeds = if node.hasKey("seed"): node["seed"].getInt else: 0
+      for i in 0 ..< 10:
+        env.goals[i] = defaultGoal()
+      let key = env.config.mapPreset.toJson()
+      if presetKey.len > 0 and presetKey != key:
+        raise newException(ValueError, "every handle in a process must use the same map preset")
+      presetKey = key
+      GC_ref(env)
+      result = cast[pointer](env)
   except CatchableError as e:
     copyText(e.msg, error, capacity)
     result = nil
