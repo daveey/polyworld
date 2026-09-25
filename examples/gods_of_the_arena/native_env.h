@@ -276,6 +276,40 @@ int gota_set_seat_defer_script(void *handle, int seat, const char *script_path);
  * decisions only; zeros for seats without the defer option). */
 int gota_seat_defer_stats(void *handle, int seat, int64_t *out);
 
+/* Action validity mask for the paused decision frame of any seat (learner,
+ * scripted or package), uint8[GOTA_MASK_SIZE], 1 = allowed:
+ *   [GOTA_MASK_VERB + v]      v in 0..7. Verb 0 always 1; 1, 2, 6 are 1 while
+ *                             alive; 3, 4, 5, 7 are 1 iff their target row
+ *                             (for 4: some ability row) has an allowed slot.
+ *   [GOTA_MASK_ABILITY + a]   castTarget with ability a has an allowed target.
+ *   [GOTA_MASK_TARGET + r*25 + slot]  target rows r:
+ *     0 attackTarget: occupied, not self, a living enemy the hero may attack
+ *       (the engine's attack validator: enemy hero/creep/structure/god, a
+ *       fighting or resting neutral camp);
+ *     1..4 castTarget with ability 0..3: occupied, and the ability is
+ *       self-cast or the object is a living, visible spell target of the right
+ *       faction (Strike: not own; heal/buff: own);
+ *     5 castPoint, 6 useItemAt: occupied (the point anchor).
+ * Verbs 0, 1, 2, 6 ignore the target head (all slots allowed). Dead / not
+ * acting: only verb 0 is allowed. Range, cooldown, mana and charges are NOT
+ * masked (the engine rejects those as action errors, not decode noops).
+ * Conditional use (trainer and host): mask verb; then ability by
+ * [GOTA_MASK_ABILITY] if verb == 4, else unmasked; then target by the row
+ * of (verb, ability); point and item heads are never masked. A decision that
+ * follows the mask never decodes to an invalid noop (stats[21] stays 0).
+ * Hosted equivalent: manifest "decoder": {"mask_empty_targets": true}: the
+ * host computes this mask from the same frame and applies it before argmax or
+ * sampling, in the order above (sampling still draws one uniform per head in
+ * head order, verb..item, so RNG use is unchanged). Default off,
+ * byte-identical. For a package seat with the option this returns the mask
+ * the host applied. 0 ok, -1 bad args / not paused. */
+#define GOTA_MASK_VERB 0
+#define GOTA_MASK_ABILITY 8
+#define GOTA_MASK_TARGET 12
+#define GOTA_MASK_TARGET_ROWS 7
+#define GOTA_MASK_SIZE 187 /* 8 + 4 + 7 * 25 */
+int gota_action_mask(void *handle, int seat, uint8_t *out);
+
 /* Replays and diagnostics (config "record": true records every tick's hash
  * and command; "capture": false turns BC labeling of scripted seats off for
  * speed). gota_save_replay writes the replay (0, -1 not recording).
