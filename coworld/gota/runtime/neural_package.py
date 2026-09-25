@@ -151,9 +151,15 @@ def validate(data: bytes, obs_hash=OBS_HASH, action_hash=ACTION_HASH) -> dict:
         _goal(m["goal"]["blue"], "goal.blue")
     if "decoder" in m:
         d = m["decoder"]
-        _keys(d, {"mode", "temperature", "defer_script"}, "decoder")
-        if "defer_script" in d and not isinstance(d["defer_script"], bool):
-            raise PackageError("decoder.defer_script must be true or false")
+        _keys(d, {"mode", "temperature", "defer_script", "mask_empty_targets", "mask_mode"}, "decoder")
+        for flag in ("defer_script", "mask_empty_targets"):
+            if flag in d and not isinstance(d[flag], bool):
+                raise PackageError(f"decoder.{flag} must be true or false")
+        if "mask_mode" in d:
+            if d.get("mask_empty_targets") is not True:
+                raise PackageError("decoder.mask_mode needs mask_empty_targets true")
+            if d["mask_mode"] not in ("conditional", "static"):
+                raise PackageError("decoder.mask_mode must be conditional or static")
         mode = d.get("mode", "argmax")
         if mode == "argmax":
             if "temperature" in d:
@@ -213,6 +219,9 @@ def main():
     b.add_argument("--temperature", type=float)
     b.add_argument("--defer-script", action="store_true",
                    help="decoder.defer_script: verb 0 defers to policy.bas (e.g. base.bas verbatim)")
+    b.add_argument("--mask-empty-targets", action="store_true",
+                   help="decoder.mask_empty_targets: host applies the gota_action_mask before decode")
+    b.add_argument("--mask-mode", choices=["conditional", "static"])
     b.add_argument("--goal-red", type=float, nargs=16)
     b.add_argument("--goal-blue", type=float, nargs=16)
     a = ap.parse_args()
@@ -235,6 +244,10 @@ def main():
                 decoder["temperature"] = a.temperature
         if a.defer_script:
             decoder = dict(decoder or {}, defer_script=True)
+        if a.mask_empty_targets:
+            decoder = dict(decoder or {}, mask_empty_targets=True)
+            if a.mask_mode:
+                decoder["mask_mode"] = a.mask_mode
         goal = {"red": a.goal_red, "blue": a.goal_blue} if a.goal_red and a.goal_blue else None
         data = build(open(a.policy, "rb").read(), open(a.model, "rb").read(), a.period, decoder, goal)
         open(a.out, "wb").write(data)

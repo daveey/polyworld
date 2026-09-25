@@ -877,6 +877,8 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
   seat.temperature = package.temperature
   seat.telemetry = true
   seat.deferEnabled = package.deferScript
+  seat.maskTargets = package.maskTargets
+  seat.maskStatic = package.maskStatic
   seat.resetEpisode(game.world.matchSeed, i)
   game.heroVms[i] = HeroVm(
     runtime: initRuntime(program, host, limits),

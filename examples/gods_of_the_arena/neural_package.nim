@@ -27,6 +27,8 @@ type
     decoder*: DecoderMode
     temperature*: float32
     deferScript*: bool
+    maskTargets*, maskStatic*: bool
+      ## decoder.mask_empty_targets: action validity mask before decode.
       ## decoder.defer_script: verb 0 defers to policy.bas (residual track).
     manifest*: string
 
@@ -184,7 +186,20 @@ proc parsePackage*(bytes: string): NeuralPackage =
   result.temperature = 1
   if manifest.hasKey("decoder"):
     let decoder = manifest["decoder"]
-    decoder.requireKeys(["mode", "temperature", "defer_script"], "decoder")
+    decoder.requireKeys(["mode", "temperature", "defer_script",
+      "mask_empty_targets", "mask_mode"], "decoder")
+    if decoder.hasKey("mask_empty_targets"):
+      if decoder["mask_empty_targets"].kind != JBool:
+        raise newException(ValueError, "decoder.mask_empty_targets must be true or false")
+      result.maskTargets = decoder["mask_empty_targets"].getBool
+    if decoder.hasKey("mask_mode"):
+      if not result.maskTargets:
+        raise newException(ValueError, "decoder.mask_mode needs mask_empty_targets true")
+      case decoder["mask_mode"].getStr
+      of "conditional": discard
+      of "static": result.maskStatic = true
+      else:
+        raise newException(ValueError, "decoder.mask_mode must be conditional or static")
     if decoder.hasKey("defer_script"):
       if decoder["defer_script"].kind != JBool:
         raise newException(ValueError, "decoder.defer_script must be true or false")

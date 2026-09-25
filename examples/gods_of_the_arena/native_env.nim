@@ -624,6 +624,31 @@ proc gota_set_seat_defer_script(handle: pointer, seat: cint, path: cstring): cin
   env.shadows[seat] = ""
   0
 
+proc gota_action_mask(handle: pointer, seat: cint, output: ptr UncheckedArray[uint8]): cint {.exportc, dynlib, cdecl.} =
+  ## Validity mask of the paused decision frame (native_env.h).
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or seat notin 0..9 or output == nil or
+      not env.paused: return -1
+  let game = env.game
+  let s = game.neuralSeat(seat)
+  var mask: ActionMask
+  if s != nil and s.frameTick == game.world.tick:
+    mask = if s.mode == NeuralPackage and s.maskTargets: s.mask
+      else: actionMask(game.world, seat, s.frame)
+    if not s.acting or env.over:
+      mask = default(ActionMask)
+      mask[MaskVerb] = 1
+  else:
+    if env.scratch.len != ObservationSize:
+      env.scratch = newSeq[float32](ObservationSize)
+    var frame: DecisionFrame
+    buildObservation(game.world, seat, env.goals[seat], env.maxTicks,
+      game.world.stats, env.scratch, frame)
+    mask = actionMask(game.world, seat, frame)
+  for i in 0 ..< MaskSize:
+    output[i] = mask[i]
+  0
+
 proc gota_seat_defer_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int64]): cint {.exportc, dynlib, cdecl.} =
   let env = toEnv(handle)
   if env == nil or seat notin 0..9 or output == nil: return -1

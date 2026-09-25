@@ -2896,7 +2896,7 @@ proc applyAttackMove*(world: World, heroId, mapX, mapY: int32,
     offset
   )
 
-proc isEnemyTarget(world: World, hero: Hero, targetId: int32): bool =
+proc isEnemyTarget*(world: World, hero: Hero, targetId: int32): bool =
   ## Returns whether `targetId` is a living enemy the hero can chase.
   if targetId == 0:
     return false

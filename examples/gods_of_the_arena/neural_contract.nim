@@ -618,6 +618,70 @@ proc decodeAction*(frame: DecisionFrame, heads: Heads): NeuralCommand =
   else:
     discard
 
+# ---------------------------------------------------------------------------
+# Action validity mask (native_env.h gota_action_mask; manifest
+# decoder.mask_empty_targets). Optional decoder aid: not part of the contract
+# text, the decode rules above are unchanged.
+
+const
+  MaskVerb* = 0
+  MaskAbility* = 8
+  MaskTarget* = 12
+  MaskTargetRows* = 7
+  MaskSize* = MaskTarget + MaskTargetRows * ObjectSlots
+
+type ActionMask* = array[MaskSize, uint8]
+
+proc maskTargetRow*(verb, ability: int32): int =
+  ## Target row of (verb, ability); -1 = the verb ignores the target head.
+  case verb
+  of 3: 0
+  of 4: (if ability in 0'i32 .. 3'i32: 1 + int(ability) else: -1)
+  of 5: 5
+  of 7: 6
+  else: -1
+
+proc actionMask*(world: World, heroIndex: int, frame: DecisionFrame): ActionMask =
+  ## Which choices decode to a real order on this frame (native_env.h).
+  result[MaskVerb] = 1
+  if not frame.alive or world.gameOver:
+    return
+  let hero = world.heroes[heroIndex]
+  var specs: array[4, AbilitySpec]
+  for a in 0 ..< 4:
+    specs[a] = heroAbility(hero.class, HeroAbilitySlot(a)).abilitySpec()
+  for s in 0 ..< ObjectSlots:
+    let id = frame.ids[s]
+    if id == 0:
+      continue
+    result[MaskTarget + 5 * ObjectSlots + s] = 1
+    result[MaskTarget + 6 * ObjectSlots + s] = 1
+    if s != SlotSelf and world.isEnemyTarget(hero, id):
+      result[MaskTarget + s] = 1
+    var target: WorldObject
+    let usable = world.spellTarget(id, target) and target.alive and
+      world.visible(hero.team, target.position)
+    for a in 0 ..< 4:
+      let ok = specs[a].casting == SelfCast or (usable and
+        (if specs[a].kind == Strike: target.faction != hero.team.ord.int32
+         else: target.faction == hero.team.ord.int32))
+      if ok:
+        result[MaskTarget + (1 + a) * ObjectSlots + s] = 1
+  for v in [1, 2, 6]:
+    result[MaskVerb + v] = 1
+  proc anyRow(mask: ActionMask, row: int): bool =
+    for s in 0 ..< ObjectSlots:
+      if mask[MaskTarget + row * ObjectSlots + s] != 0:
+        return true
+  for a in 0 ..< 4:
+    result[MaskAbility + a] = uint8(result.anyRow(1 + a))
+  result[MaskVerb + 3] = uint8(result.anyRow(0))
+  result[MaskVerb + 4] = uint8(result[MaskAbility] != 0 or
+    result[MaskAbility + 1] != 0 or result[MaskAbility + 2] != 0 or
+    result[MaskAbility + 3] != 0)
+  result[MaskVerb + 5] = uint8(result.anyRow(5))
+  result[MaskVerb + 7] = uint8(result.anyRow(6))
+
 proc isInvalid*(frame: DecisionFrame, heads: Heads): bool =
   ## A non-noop verb that decoded to noop.
   frame.alive and heads[0] != 0 and decodeAction(frame, heads).kind == NoCommand

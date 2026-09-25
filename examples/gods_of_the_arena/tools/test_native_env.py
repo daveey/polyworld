@@ -205,11 +205,17 @@ def test_validation(lib):
         "extra file": lambda f: f.__setitem__("notes.txt", b"hi"),
         "missing model": lambda f: f.pop("model.bin"),
         "defer_script not a bool": edit_manifest("decoder", {"defer_script": 1}),
+        "mask_empty_targets not a bool": edit_manifest("decoder", {"mask_empty_targets": "yes"}),
+        "mask_mode without mask": edit_manifest("decoder", {"mask_mode": "static"}),
+        "bad mask_mode": edit_manifest("decoder", {"mask_empty_targets": True, "mask_mode": "greedy"}),
     }
     env = Env(lib, learner_seats=[])
     check("good package accepted by both", env.set_package(1, good) == 0)
     deferring = npk.build(BASE.encode(), model, decoder={"defer_script": True})
     check("defer_script package accepted by both", env.set_package(2, deferring) == 0)
+    for mode in ("conditional", "static"):
+        masked = npk.build(POLICY, model, decoder={"mask_empty_targets": True, "mask_mode": mode})
+        check(f"mask_empty_targets ({mode}) package accepted by both", env.set_package(3, masked) == 0)
     for name, fn in cases.items():
         bad = corrupt(good, fn)
         try:

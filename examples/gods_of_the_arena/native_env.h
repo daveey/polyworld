@@ -297,6 +297,12 @@ int gota_seat_defer_stats(void *handle, int seat, int64_t *out);
  * [GOTA_MASK_ABILITY] if verb == 4, else unmasked; then target by the row
  * of (verb, ability); point and item heads are never masked. A decision that
  * follows the mask never decodes to an invalid noop (stats[21] stays 0).
+ * Static mode (for trainers that sample heads independently with one mask
+ * per head): verb mask as above, ability unmasked, target mask = the union of
+ * the rows of the allowed target-reading verbs (3; 4 all abilities; 5; 7).
+ * It removes "no valid target at all" invalids but not cross-verb ones (a
+ * slot valid for castTarget sampled with attackTarget). Package key
+ * "mask_mode": "static" (default "conditional"; needs mask_empty_targets).
  * Hosted equivalent: manifest "decoder": {"mask_empty_targets": true}: the
  * host computes this mask from the same frame and applies it before argmax or
  * sampling, in the order above (sampling still draws one uniform per head in

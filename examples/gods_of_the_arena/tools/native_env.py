@@ -3,6 +3,51 @@ import ctypes, json, os
 import numpy as np
 
 SEATS, HEADS, STATS, ORDERS = 10, 5, 24, 16
+MASK_VERB, MASK_ABILITY, MASK_TARGET, MASK_SIZE = 0, 8, 12, 187
+
+
+def mask_target_row(verb, ability):
+    """Target row of (verb, ability) in the action mask; -1 = target unused."""
+    return {3: 0, 5: 5, 7: 6}.get(verb, 1 + ability if verb == 4 and 0 <= ability < 4 else -1)
+
+
+def static_masks(mask):
+    """mask_mode "static" (independent per-head masks): (verb bool[8], target bool[25]). The target mask is
+    the union of the rows of the allowed target-reading verbs."""
+    verb = mask[0:8] != 0
+    rows = mask[12:].reshape(7, 25) != 0
+    target = np.zeros(25, bool)
+    if verb[3]: target |= rows[0]
+    if verb[4]: target |= rows[1:5].any(0)
+    if verb[5]: target |= rows[5]
+    if verb[7]: target |= rows[6]
+    return verb, target
+
+
+def masked_argmax(logits, mask, static=False):
+    """The host's decoder.mask_empty_targets argmax (conditional: verb, ability, target by row; static:
+    verb + union target mask; point, item free)."""
+    import numpy as _np
+    def pick(lo, n, allowed):
+        seg = logits[lo:lo + n]
+        ok = _np.asarray(allowed, bool)
+        if not ok.any():
+            ok[:] = True
+        best = -1
+        for i in range(n):
+            if ok[i] and (best < 0 or seg[i] > seg[best]):
+                best = i
+        return best
+    verb = pick(0, 8, mask[0:8] != 0)
+    if static:
+        _, tmask = static_masks(mask)
+        return [verb, pick(8, 25, tmask), pick(33, 49, [True] * 49), pick(82, 4, [True] * 4), pick(86, 6, [True] * 6)]
+    ability = pick(82, 4, (mask[8:12] != 0) if verb == 4 else [True] * 4)
+    row = mask_target_row(verb, ability)
+    target = pick(8, 25, (mask[12 + row * 25:12 + row * 25 + 25] != 0) if row >= 0 else [True] * 25)
+    point = pick(33, 49, [True] * 49)
+    item = pick(86, 6, [True] * 6)
+    return [verb, target, point, ability, item]
 HEAD_SIZES = [8, 25, 49, 4, 6]
 STAT_NAMES = ["score", "outcome", "xp", "gold", "hero_kills", "assists", "deaths", "last_hits",
               "neutral_kills", "tower_damage", "structure_kills", "hero_damage", "damage_taken",
@@ -33,6 +78,8 @@ class Lib:
         if hasattr(L, "gota_set_seat_defer_script"):  # absent in libs built before the residual track
             L.gota_set_seat_defer_script.argtypes = [vp, ctypes.c_int, ctypes.c_char_p]
             L.gota_seat_defer_stats.argtypes = [vp, ctypes.c_int, i64p]
+        if hasattr(L, "gota_action_mask"):
+            L.gota_action_mask.argtypes = [vp, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8)]
         L.gota_set_seat_package.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int64]
         L.gota_seat_script_status.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_set_learner_seats.argtypes = [vp, ctypes.c_uint32]
@@ -126,6 +173,12 @@ class Env:
     def defer_stats(self, seat):
         out = np.zeros(2, np.int64)
         self.L.gota_seat_defer_stats(self.h, seat, ptr(out, ctypes.c_int64))
+        return out
+
+    def action_mask(self, seat):
+        """uint8[187]: verb[8] | castTarget ability[4] | 7 target rows x 25 (native_env.h)."""
+        out = np.zeros(MASK_SIZE, np.uint8)
+        assert self.L.gota_action_mask(self.h, seat, ptr(out, ctypes.c_uint8)) == 0
         return out
 
     def set_package(self, seat, data):

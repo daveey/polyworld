@@ -48,6 +48,10 @@ type
     absorbing*: bool
       ## Inside an override window: the script's contract commands are absorbed.
     deferDecisions*, overrideDecisions*: int
+    maskTargets*, maskStatic*: bool
+      ## decoder.mask_empty_targets (package seats): mask applied before decode.
+    mask*: ActionMask
+      ## The mask of the current decision frame (package seats with maskTargets).
 
 var shadowRunning {.threadvar.}: bool
   ## True while a shadow expert script runs: its host calls change nothing.
@@ -110,6 +114,95 @@ proc sampleHeads*(logits: openArray[float32], temperature: float32,
     result[h] = int32(choice)
     offset += n
 
+proc staticTargets*(mask: ActionMask): array[ObjectSlots, bool] =
+  ## mask_mode "static": the union of the target rows of every allowed
+  ## target-reading verb (independent per-head masks, as PufferLib samples).
+  for s in 0 ..< ObjectSlots:
+    if mask[MaskVerb + 3] != 0 and mask[MaskTarget + s] != 0: result[s] = true
+    for a in 0 ..< 4:
+      if mask[MaskVerb + 4] != 0 and mask[MaskTarget + (1 + a) * ObjectSlots + s] != 0:
+        result[s] = true
+    if mask[MaskVerb + 5] != 0 and mask[MaskTarget + 5 * ObjectSlots + s] != 0: result[s] = true
+    if mask[MaskVerb + 7] != 0 and mask[MaskTarget + 6 * ObjectSlots + s] != 0: result[s] = true
+
+proc pickHead(logits: openArray[float32], base, n: int, allowed: openArray[bool],
+    sampling: bool, temperature: float32, draw: float64): int32 =
+  ## One head among the allowed choices (all choices when none is allowed).
+  var found = false
+  for i in 0 ..< n:
+    if allowed[i]: found = true
+  template ok(i: int): bool = (not found) or allowed[i]
+  if not sampling:
+    var best = -1
+    for i in 0 ..< n:
+      if ok(i) and (best < 0 or logits[base + i] > logits[base + best]):
+        best = i
+    return int32(best)
+  var top = float32(-Inf)
+  for i in 0 ..< n:
+    if ok(i): top = max(top, logits[base + i])
+  var weights: array[64, float64]
+  var total = 0.0
+  for i in 0 ..< n:
+    weights[i] = if ok(i): exp(float64(logits[base + i] - top) /
+      float64(temperature)) else: 0.0
+    total += weights[i]
+  let u = draw * total
+  var acc = 0.0
+  var last = 0
+  for i in 0 ..< n:
+    if weights[i] > 0:
+      last = i
+      acc += weights[i]
+      if u < acc:
+        return int32(i)
+  int32(last)
+
+proc maskedHeads*(logits: openArray[float32], mask: ActionMask,
+    sampling: bool, temperature: float32, state: var uint64,
+    staticMode = false): Heads =
+  ## decoder.mask_empty_targets. Conditional (default): verb, then ability
+  ## (masked when verb is castTarget), then target by the (verb, ability)
+  ## row. Static: verb, and target by the union of the allowed verbs' rows.
+  ## Point and item are never masked. Sampling draws one uniform per head in
+  ## head order first (the same RNG use as sampleHeads), then resolves heads
+  ## in dependency order. Argmax: first maximum among allowed choices.
+  var offsets: array[ActionHeads, int]
+  var o = 0
+  for h in 0 ..< ActionHeads:
+    offsets[h] = o
+    o += HeadSizes[h]
+  var draws: array[ActionHeads, float64]
+  if sampling:
+    for h in 0 ..< ActionHeads:
+      draws[h] = float64(splitmix(state) shr 11) / 9007199254740992.0
+  var allowed: array[64, bool]
+  template pick(h: int): int32 =
+    pickHead(logits, offsets[h], HeadSizes[h], allowed, sampling, temperature,
+      draws[h])
+  for i in 0 ..< 8: allowed[i] = mask[MaskVerb + i] != 0
+  result[0] = pick(0)
+  let verb = result[0]
+  for i in 0 ..< 64: allowed[i] = true
+  if staticMode:
+    result[3] = pick(3)
+    let targets = staticTargets(mask)
+    for i in 0 ..< ObjectSlots: allowed[i] = targets[i]
+    result[1] = pick(1)
+  else:
+    if verb == 4:
+      for i in 0 ..< 4: allowed[i] = mask[MaskAbility + i] != 0
+    result[3] = pick(3)
+    for i in 0 ..< 64: allowed[i] = true
+    let row = maskTargetRow(verb, result[3])
+    if row >= 0:
+      for i in 0 ..< ObjectSlots:
+        allowed[i] = mask[MaskTarget + row * ObjectSlots + i] != 0
+    result[1] = pick(1)
+  for i in 0 ..< 64: allowed[i] = true
+  result[2] = pick(2)
+  result[4] = pick(4)
+
 proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   ## Clears per-match state (a new match or a native reset).
   seat.frameTick = -1
@@ -169,9 +262,14 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
         raise newException(BasicError, "neural inference failed: " & error.msg)
       inc seat.inferences
       seat.peakOps = max(seat.peakOps, seat.actor.operationCount)
-      seat.heads =
-        if seat.sampling: sampleHeads(seat.logits, seat.temperature, seat.rng)
-        else: argmaxHeads(seat.logits)
+      if seat.maskTargets:
+        seat.mask = actionMask(world, index, seat.frame)
+        seat.heads = maskedHeads(seat.logits, seat.mask, seat.sampling,
+          seat.temperature, seat.rng, seat.maskStatic)
+      else:
+        seat.heads =
+          if seat.sampling: sampleHeads(seat.logits, seat.temperature, seat.rng)
+          else: argmaxHeads(seat.logits)
       seat.headsReady = true
       seat.command = decodeAction(seat.frame, seat.heads)
       if seat.telemetry and (seat.inferences == 1 or
