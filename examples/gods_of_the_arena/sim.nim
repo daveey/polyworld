@@ -320,6 +320,11 @@ type
     draw*: bool
     winner*: Team
     collectingHits, resolvingHits: bool
+    hostileSlots: array[Team, seq[int32]]
+      ## Footman slots hostile to each team (hostile(), no resting camps), in
+      ## slot order, valid only while hostileTick == tick (the unit phase,
+      ## when footmen and camp states are frozen and hits are collected).
+    hostileTick: int32
     hits: seq[CombatHit]
     rewards: seq[DeathReward]
     rewardAlive: seq[bool]
@@ -616,6 +621,16 @@ proc hostile*(world: World, unit: Footman, team: Team,
     return unit.team != team
   let state = world.camps[unit.camp - 1].state
   state == FightingCamp or (engageResting and state == RestingCamp)
+
+iterator hostileCandidates(world: World, team: Team): int =
+  ## Slots that may be hostile to team, ascending: the frozen hostile set in
+  ## the unit phase, else every slot. Callers still test hostile().
+  if world.hostileTick == world.tick and world.hostileTick >= 0:
+    for slot in world.hostileSlots[team]:
+      yield int(slot)
+  else:
+    for slot in 0 ..< world.footmen.len:
+      yield slot
 
 proc startingForts(map: MapData): array[2, Fort] =
   ## Places both gods at the selected layout's fort centers.
@@ -3318,7 +3333,7 @@ proc updateTower*(world: World, tower: var Building) =
       bestSquared = int64(attackRange) * attackRange
       bestId = 0'i32
       bestPosition: WorldPoint
-    for i in 0 ..< world.footmen.len:
+    for i in world.hostileCandidates(tower.team):
       let footman {.byaddr.} = world.footmen[i]
       if not world.hostile(footman, tower.team) or footman.state == Dying or
           footman.hp <= 0:
@@ -3778,7 +3793,7 @@ proc updateFootman(world: World, footman: var Footman) =
       bestSquared = int64(FootmanSightRadius) * FootmanSightRadius
       bestId = 0'i32
       bestPosition: WorldPoint
-    for i in 0 ..< world.footmen.len:
+    for i in world.hostileCandidates(footman.team):
       let other {.byaddr.} = world.footmen[i]
       if not world.hostile(other, footman.team):
         continue
@@ -5391,11 +5406,18 @@ proc separateUnits(game: Game) =
   for iteration in 0 ..< 4:
     for offset in game.collisionOffsets.mitems:
       offset = FixedVec2Zero
-    game.collisionOrder.sort(proc(first, second: int): int =
-      ## Restricts pair checks to bodies close enough along the X axis.
-      cmp(game.collisionUnits[first].body.pos.x,
-        game.collisionUnits[second].body.pos.x)
-    )
+    # Stable insertion sort by X: the same permutation std sort (stable
+    # merge sort) produces from this input, and near-linear because the
+    # previous iteration's order is almost sorted already.
+    for k in 1 ..< count:
+      let
+        moving = game.collisionOrder[k]
+        key = game.collisionUnits[moving].body.pos.x
+      var j = k - 1
+      while j >= 0 and game.collisionUnits[game.collisionOrder[j]].body.pos.x > key:
+        game.collisionOrder[j + 1] = game.collisionOrder[j]
+        dec j
+      game.collisionOrder[j + 1] = moving
     var overlap = false
     for first in 0 ..< count:
       let
@@ -5789,6 +5811,18 @@ proc tickWorldFinish*(game: Game) =
     if game.nextHeroes[i] == nil:
       game.nextHeroes[i] = Hero()
     game.nextHeroes[i][] = hero[]
+  # Target scans below only read the pre-tick snapshot (world.footmen, camp
+  # states) while hits are collected, so the hostile sets are fixed.
+  world.hostileTick = -1
+  if world.collectingHits:
+    for team in Team:
+      world.hostileSlots[team].setLen(0)
+    for i in 0 ..< world.footmen.len:
+      let unit {.byaddr.} = world.footmen[i]
+      for team in Team:
+        if world.hostile(unit, team):
+          world.hostileSlots[team].add int32(i)
+    world.hostileTick = world.tick
   perfBlock PrFootmen, "footmen":
     for offset in 0 ..< world.footmen.len:
       let index = (world.tick.int + offset) mod world.footmen.len
@@ -5802,6 +5836,7 @@ proc tickWorldFinish*(game: Game) =
       let index = (world.tick.int + offset) mod world.heroes.len
       updateHero(world, game.nextHeroes[index])
 
+  world.hostileTick = -1
   swap(world.footmen, game.nextFootmen)
   for i, hero in game.nextHeroes:
     world.heroes[i][] = hero[]
