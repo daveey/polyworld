@@ -145,7 +145,10 @@ disables the seat the same way a BASIC runtime error does.
 Decision ticks are battle ticks 1, 1 + p, 1 + 2p, … where p is `decision_period`. At the start of the
 heroes' turn on a decision tick, before any seat's BASIC runs, every neural seat freezes its **decision
 frame**. The frame is the observation plus the 25 object slots, taken from the same frozen object frame
-BASIC reads. If the seat is alive, the host then runs the network (package seat) or takes the trainer's
+BASIC reads. The native env freezes the object frame at the same point, so native and hosted observations
+are identical. The time feature divides by the match length as the match actually runs it; a package
+seat reads that length at each decision. `tools/test_package_goal.py` checks that a native package seat and
+the headless runner's package seat produce identical hash and action streams. If the seat is alive, the host then runs the network (package seat) or takes the trainer's
 heads (native learner seat) and decodes one command. `policy.bas` issues that command by calling
 `gota_act()` during the seat's normal turn. The command goes through the same recorded host path as
 `walkTo`/`castTarget`/…, so replays contain ordinary actions and re-simulate without the network. Between
