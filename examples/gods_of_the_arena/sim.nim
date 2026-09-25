@@ -328,8 +328,8 @@ type
     hostileGridSide: int
     hostileGridStart: array[Team, seq[int32]]
     hostileGridSlots: array[Team, seq[int32]]
-      ## hostileSlots bucketed by FootmanSightRadius-sized cells (each cell's
-      ## slots ascending): cell c holds hostileGridSlots[start[c] ..< start[c+1]].
+      ## hostileSlots bucketed by FootmanSightRadius-tall Z bands (each band's
+      ## slots ascending): band r holds hostileGridSlots[start[r] ..< start[r+1]].
     hits: seq[CombatHit]
     rewards: seq[DeathReward]
     rewardAlive: seq[bool]
@@ -651,48 +651,42 @@ proc hostileCell(world: World, value: int32): int {.inline.} =
   clamp(int(cell), 0, world.hostileGridSide - 1)
 
 proc buildHostileGrid(world: World) =
-  ## Buckets each team's frozen hostile slots by cell, ascending within a cell.
+  ## Buckets each team's frozen hostile slots by row band (Z cell),
+  ## ascending within a band.
   world.hostileGridSide =
     (mapTiles() + 4) * int(WorldScale) div int(HostileCellSize) + 2
-  let cells = world.hostileGridSide * world.hostileGridSide
+  let rows = world.hostileGridSide
   for team in Team:
-    world.hostileGridStart[team].setLen(cells + 1)
+    world.hostileGridStart[team].setLen(rows + 1)
     for value in world.hostileGridStart[team].mitems:
       value = 0
     for slot in world.hostileSlots[team]:
-      let unit {.byaddr.} = world.footmen[slot]
-      let cell = world.hostileCell(unit.position.z) * world.hostileGridSide +
-        world.hostileCell(unit.position.x)
-      inc world.hostileGridStart[team][cell + 1]
-    for cell in 0 ..< cells:
-      world.hostileGridStart[team][cell + 1] += world.hostileGridStart[team][cell]
+      let row = world.hostileCell(world.footmen[slot].position.z)
+      inc world.hostileGridStart[team][row + 1]
+    for row in 0 ..< rows:
+      world.hostileGridStart[team][row + 1] += world.hostileGridStart[team][row]
     world.hostileGridSlots[team].setLen(world.hostileSlots[team].len)
     for slot in world.hostileSlots[team]:
-      let unit {.byaddr.} = world.footmen[slot]
-      let cell = world.hostileCell(unit.position.z) * world.hostileGridSide +
-        world.hostileCell(unit.position.x)
-      world.hostileGridSlots[team][world.hostileGridStart[team][cell]] = slot
-      inc world.hostileGridStart[team][cell]
-    # The fill advanced each start to the next cell's start: shift back.
-    for cell in countdown(cells, 1):
-      world.hostileGridStart[team][cell] = world.hostileGridStart[team][cell - 1]
+      let row = world.hostileCell(world.footmen[slot].position.z)
+      world.hostileGridSlots[team][world.hostileGridStart[team][row]] = slot
+      inc world.hostileGridStart[team][row]
+    # The fill advanced each start to the next band's start: shift back.
+    for row in countdown(rows, 1):
+      world.hostileGridStart[team][row] = world.hostileGridStart[team][row - 1]
     world.hostileGridStart[team][0] = 0
 
 iterator hostileNear(world: World, team: Team, position: WorldPoint): int =
   ## A superset of the hostile slots within FootmanSightRadius of position
-  ## (the 3x3 cells around it) in the unit phase, else every slot. The order
-  ## is not slot order: callers' nearest-target choice must not depend on it.
+  ## (the three row bands around it) in the unit phase, else every slot. The
+  ## order is not slot order: callers' nearest-target choice must not depend
+  ## on it.
   if world.hostileTick == world.tick and world.hostileTick >= 0:
+    let cz = world.hostileCell(position.z)
     let
-      side = world.hostileGridSide
-      cx = world.hostileCell(position.x)
-      cz = world.hostileCell(position.z)
-    for z in max(cz - 1, 0) .. min(cz + 1, side - 1):
-      let
-        first = world.hostileGridStart[team][z * side + max(cx - 1, 0)]
-        last = world.hostileGridStart[team][z * side + min(cx + 1, side - 1) + 1]
-      for k in first ..< last:
-        yield int(world.hostileGridSlots[team][k])
+      first = world.hostileGridStart[team][max(cz - 1, 0)]
+      last = world.hostileGridStart[team][min(cz + 1, world.hostileGridSide - 1) + 1]
+    for k in first ..< last:
+      yield int(world.hostileGridSlots[team][k])
   else:
     for slot in 0 ..< world.footmen.len:
       yield slot
