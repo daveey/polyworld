@@ -3544,26 +3544,19 @@ proc returnCamp(world: World, index: int) =
     world.emit GameEvent(kind: CampReturning, detail: index.int32,
       cause: CampReset, related: -1)
 
-var campMembers {.threadvar.}: seq[int]
-
-proc provokeCamp(world: World, index: int) =
+proc provokeCamp(world: World, index: int, members, laneUnits: openArray[int32]) =
   ## Starts group combat when a visible hero or lane creep gets too close.
   let camp = world.camps[index]
   var
     targetId, memberId: int32
     targetPoint, memberPoint: WorldPoint
     best = int64.high
-  # The living members, in slot order, gathered once instead of per intruder.
-  campMembers.setLen(0)
-  for slot in 0 ..< world.footmen.len:
-    let unit {.byaddr.} = world.footmen[slot]
-    if unit.camp != index + 1 or unit.hp <= 0 or unit.state == Dying:
-      continue
-    campMembers.add slot
+  # members: this camp's living (hp > 0, not Dying) units and laneUnits: the
+  # living lane creeps, both in slot order, gathered once by updateCamps.
   template consider(candidateId: int32, point: WorldPoint) =
     ## Finds the closest visible intruder to any living camp member.
     if within(point, camp.center, NeutralLeash):
-      for member in campMembers:
+      for member in members:
         let unit {.byaddr.} = world.footmen[member]
         let distance = distanceSquared(unit.position, point)
         if distance > best or
@@ -3581,9 +3574,9 @@ proc provokeCamp(world: World, index: int) =
   for hero in world.heroes:
     if hero.hp > 0 and hero.state != Dying:
       consider(hero.id, hero.position)
-  for unit in world.footmen:
-    if unit.camp == 0 and unit.hp > 0 and unit.state != Dying:
-      consider(unit.id, unit.position)
+  for slot in laneUnits:
+    let unit {.byaddr.} = world.footmen[slot]
+    consider(unit.id, unit.position)
   if targetId != 0:
     world.camps[index].state = FightingCamp
     world.camps[index].targetId = targetId
@@ -3594,10 +3587,30 @@ proc provokeCamp(world: World, index: int) =
         target: world.eventEntity(memberId), detail: index.int32,
         cause: Proximity, related: -1)
 
+var
+  campMembers {.threadvar.}: seq[seq[int32]]
+  campLaneUnits {.threadvar.}: seq[int32]
+
 proc updateCamps(world: World) =
   ## Handles whole-group leashes, full resets, and delayed full-camp respawns.
   var activity = newSeq[tuple[alive: int, away, outside: bool]](
     world.camps.len)
+  # Living camp members and lane creeps for provokeCamp, in slot order. A
+  # camp's own branch below only touches its own units (heal, return) and
+  # spawnCamp only appends units of the camp it spawns, so each camp's list
+  # stays exact until its turn.
+  if campMembers.len < world.camps.len:
+    campMembers.setLen(world.camps.len)
+  for members in campMembers.mitems:
+    members.setLen(0)
+  campLaneUnits.setLen(0)
+  for slot in 0 ..< world.footmen.len:
+    let unit {.byaddr.} = world.footmen[slot]
+    if unit.hp > 0 and unit.state != Dying:
+      if unit.camp == 0:
+        campLaneUnits.add int32(slot)
+      else:
+        campMembers[unit.camp - 1].add int32(slot)
   for unit in world.footmen:
     if unit.camp == 0 or unit.hp <= 0:
       continue
@@ -3662,7 +3675,7 @@ proc updateCamps(world: World) =
         elif world.tick - camp.lastSeenTick >= 3 * TickRate:
           world.returnCamp(index)
     elif camp.state == RestingCamp:
-      world.provokeCamp(index)
+      world.provokeCamp(index, campMembers[index], campLaneUnits)
 
 proc updateNeutral(world: World, unit: var Footman) =
   ## Runs camp melee combat or the ordinary cached path back home.
