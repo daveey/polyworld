@@ -232,6 +232,13 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
   if seat.frameTick == world.tick:
     return
   seat.frameTick = world.tick
+  if seat.mode == NeuralPackage:
+    # The match length as the match actually runs it. Read here, not at
+    # install: the hosted runner installs bots before it records the match
+    # config (game.config.maxTicks was 0 at install, so hosted seats saw a
+    # zero match length in their time features while the native env saw
+    # 28,800).
+    seat.maxTicks = game.config.maxTicks
   buildObservation(world, index, seat.goal, seat.maxTicks, world.stats,
     seat.obs, seat.frame)
   seat.acting = seat.frame.alive and not world.gameOver
