@@ -78,9 +78,10 @@ network's order stays held until the script issues a new one. A seat that is dea
 defers.
 
 An always-defer network is byte-identical to a plain seat running the script (state hash every tick and the
-replay bytes; `tools/test_defer.py` a). The VM limits are the neural-seat limits (40k instructions per tick,
-160 host functions). Plain base.bas peaks far below the 20k plain-seat limit, so the larger budget never
-changes its behaviour. Seats without the key keep verb 0 = noop.
+replay bytes; `tools/test_defer.py` a). The VM keeps the neural-seat structure limits (160 host functions)
+but the plain-seat budget of 20k instructions and 50k work units per tick. The network consult is host-side
+and costs no BASIC instructions, so the script runs out of budget exactly where a plain seat would. Seats
+without the key keep verb 0 = noop.
 
 The native equivalent is `gota_set_seat_defer_script(h, seat, path)` on a learner seat (see native_env.h).
 It uses the same code path, `deferConsult` in neural_host_hooks.nim, at the same point in the tick. The

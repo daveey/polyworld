@@ -418,3 +418,12 @@ proc neuralVmLimits*(): Limits =
   result.maxHostFunctions = 160
   result.maxInstructions = 40_000
   result.maxWorkUnits = 100_000
+
+proc deferVmLimits*(): Limits =
+  ## Defer-script seats (residual track): the neural-seat structure limits,
+  ## but the plain hero per-tick budget, so the script runs out of budget
+  ## exactly where it would on a plain seat (the network consult is host-side
+  ## and costs no BASIC instructions).
+  result = neuralVmLimits()
+  result.maxInstructions = heroVmLimits().maxInstructions
+  result.maxWorkUnits = heroVmLimits().maxWorkUnits

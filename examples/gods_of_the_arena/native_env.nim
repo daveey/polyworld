@@ -70,10 +70,11 @@ proc seatScore(game: Game, index: int): int64 =
     int(max(0'i32, game.world.battleTick()))))
 
 proc compileSeat(env: Env, game: Game, index: int, source: string,
-    neural: bool): bool =
+    neural: bool, deferring = false): bool =
   ## Compiles one seat's program; a failure leaves the seat idle.
   let heroId = game.world.heroes[index].id
-  let limits = if neural: neuralVmLimits() else: heroVmLimits()
+  let limits = if deferring: deferVmLimits()
+    elif neural: neuralVmLimits() else: heroVmLimits()
   var schema = initHeroHost(0)
   var host = initHeroHost(heroId)
   if neural:
@@ -195,7 +196,7 @@ proc resetEnv(env: Env, seed: int64): int =
       env.status[i] = SeatStatus(code: 0)
       let deferring = env.defers[i].len > 0
       let program = if deferring: env.defers[i] else: env.policyScript
-      if env.compileSeat(game, i, program, true):
+      if env.compileSeat(game, i, program, true, deferring):
         let seat = newNeuralSeat(NeuralLearner, env.period, env.maxTicks)
         seat.deferEnabled = deferring
         seat.goal = env.goals[i]

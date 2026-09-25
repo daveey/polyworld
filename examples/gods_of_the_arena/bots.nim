@@ -857,7 +857,7 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
         heroVmLimits(), i)
     raise newException(BasicError, message)
   let
-    limits = neuralVmLimits()
+    limits = if package.deferScript: deferVmLimits() else: neuralVmLimits()
     heroId = game.world.heroes[i].id
   var schema = initHeroHost(0)
   schema.addNeuralSeatFunctions(0)

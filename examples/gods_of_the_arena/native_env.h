@@ -237,7 +237,8 @@ int gota_set_seat_shadow(void *handle, int seat, const char *source, int32_t len
 /* Residual track (Amendment 3): verb 0 becomes DEFER on this LEARNER seat.
  * The seat's BASIC program becomes the script at script_path (relative paths
  * resolve against data_root; NULL or "" = off, the default, byte-identical),
- * compiled under the neural-seat VM limits and run every tick on the seat's
+ * compiled under the neural-seat structure limits with the plain-seat
+ * per-tick budget (20k instructions; the consult costs none), and run every tick on the seat's
  * own hero as its real program: it observes the true world, drafts, shops,
  * levels abilities and buys back itself (these non-contract calls always
  * execute), and it keeps its own persistent variables. policy.bas glue is
