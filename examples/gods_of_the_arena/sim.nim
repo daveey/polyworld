@@ -2461,10 +2461,15 @@ proc keyBefore(a, b: ScriptOrderKey): bool {.inline.} =
   elif a[1] != b[1]: a[1] < b[1]
   else: a[2] < b[2]
 
-proc sortScriptOrder(keys: var seq[ScriptOrderKey],
-    spare: var seq[ScriptOrderKey]) =
-  ## Ascending sort. The keys are distinct (the last field is a unique scan
-  ## position), so the result is the one order any correct sort gives.
+proc keyBefore(a, b: tuple[x: Fixed, index: int32]): bool {.inline.} =
+  ## Lexicographic (a < b) over a collision sort key.
+  if a.x != b.x: a.x < b.x
+  else: a.index < b.index
+
+proc sortDistinct[T](keys: var seq[T], spare: var seq[T]) =
+  ## Ascending sort by keyBefore. The keys are distinct (the last field is
+  ## a unique position), so the result is the one order any correct sort
+  ## gives, including a stable sort by the other fields.
   let n = keys.len
   if n < 2:
     return
@@ -2550,7 +2555,7 @@ proc ensureScriptObjects(world: World, heroId: int32): Team =
             (frozen.kind in [TowerObjectKind, BarracksObjectKind] and frozen.hp <= 0):
           continue
         scriptOrder.add frozen.scriptOrderKey(team, i)
-      sortScriptOrder(scriptOrder, scriptOrderSpare)
+      sortDistinct(scriptOrder, scriptOrderSpare)
       world.scriptObjects[team].setLen(scriptOrder.len)
       for i in 0 ..< scriptOrder.len:
         world.scriptObjects[team][i] = world.observedObjects[scriptOrder[i][2]]
@@ -2565,7 +2570,7 @@ proc ensureScriptObjects(world: World, heroId: int32): Team =
           continue
         scriptOrder.add value.scriptOrderKey(team, scriptScratch.len)
         scriptScratch.add value
-      sortScriptOrder(scriptOrder, scriptOrderSpare)
+      sortDistinct(scriptOrder, scriptOrderSpare)
       world.scriptObjects[team].setLen(scriptOrder.len)
       for i in 0 ..< scriptOrder.len:
         world.scriptObjects[team][i] = scriptScratch[scriptOrder[i][2]]
@@ -5574,6 +5579,10 @@ proc immobile(world: World, hero: Hero): bool =
   hero.portalEnds > 0 or hero.controls[StunControl].ends > world.tick or
     hero.controls[RootControl].ends > world.tick
 
+var
+  collisionKeys {.threadvar.}: seq[tuple[x: Fixed, index: int32]]
+  collisionKeysSpare {.threadvar.}: seq[tuple[x: Fixed, index: int32]]
+
 proc separateUnits(game: Game) =
   ## Accumulates collision corrections before moving any participant.
   let world = game.world
@@ -5605,11 +5614,14 @@ proc separateUnits(game: Game) =
     # which is almost sorted, so they use insertion sort; both are stable, so
     # the permutation equals std sort's (stable merge sort) on this input.
     if iteration == 0:
-      game.collisionOrder.sort(proc(first, second: int): int =
-        ## Restricts pair checks to bodies close enough along the X axis.
-        cmp(game.collisionUnits[first].body.pos.x,
-          game.collisionUnits[second].body.pos.x)
-      )
+      # Stable sort by X of the identity order = sort by (X, index).
+      collisionKeys.setLen(count)
+      for k in 0 ..< count:
+        collisionKeys[k] = (x: game.collisionUnits[k].body.pos.x,
+          index: int32(k))
+      sortDistinct(collisionKeys, collisionKeysSpare)
+      for k in 0 ..< count:
+        game.collisionOrder[k] = int(collisionKeys[k].index)
     else:
       for k in 1 ..< count:
         let
