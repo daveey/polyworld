@@ -3736,38 +3736,6 @@ proc provokeCamp(world: World, index: int, members, laneUnits: openArray[int32])
 var
   campMembers {.threadvar.}: seq[seq[int32]]
   campLaneUnits {.threadvar.}: seq[int32]
-  campLaneByZ {.threadvar.}: seq[tuple[z: int32, slot: int32]]
-  campLaneByZSpare {.threadvar.}: seq[tuple[z: int32, slot: int32]]
-  campNearLane {.threadvar.}: seq[int32]
-
-proc keyBefore(a, b: tuple[z: int32, slot: int32]): bool {.inline.} =
-  ## Lexicographic (a < b) over a lane-creep Z key.
-  if a.z != b.z: a.z < b.z
-  else: a.slot < b.slot
-
-proc gatherLaneUnitsNear(center: WorldPoint, radius: int32) =
-  ## Fills campNearLane with the lane creeps (from campLaneByZ) whose Z is
-  ## within radius of center, in ascending slot order: a superset of those within(radius) of center,
-  ## in the order campLaneUnits lists them.
-  campNearLane.setLen(0)
-  var lo = 0
-  var hi = campLaneByZ.len
-  let low = int64(center.z) - radius
-  while lo < hi:
-    let mid = (lo + hi) div 2
-    if int64(campLaneByZ[mid].z) < low: lo = mid + 1
-    else: hi = mid
-  let high = int64(center.z) + radius
-  var k = lo
-  while k < campLaneByZ.len and int64(campLaneByZ[k].z) <= high:
-    let slot = campLaneByZ[k].slot
-    var j = campNearLane.len
-    campNearLane.add slot
-    while j > 0 and campNearLane[j - 1] > slot:
-      campNearLane[j] = campNearLane[j - 1]
-      dec j
-    campNearLane[j] = slot
-    inc k
 
 proc updateCamps(world: World) =
   ## Handles whole-group leashes, full resets, and delayed full-camp respawns.
@@ -3782,16 +3750,13 @@ proc updateCamps(world: World) =
   for members in campMembers.mitems:
     members.setLen(0)
   campLaneUnits.setLen(0)
-  campLaneByZ.setLen(0)
   for slot in 0 ..< world.footmen.len:
     let unit {.byaddr.} = world.footmen[slot]
     if unit.hp > 0 and unit.state != Dying:
       if unit.camp == 0:
         campLaneUnits.add int32(slot)
-        campLaneByZ.add (z: unit.position.z, slot: int32(slot))
       else:
         campMembers[unit.camp - 1].add int32(slot)
-  sortDistinct(campLaneByZ, campLaneByZSpare)
   for unit in world.footmen:
     if unit.camp == 0 or unit.hp <= 0:
       continue
@@ -3856,11 +3821,7 @@ proc updateCamps(world: World) =
         elif world.tick - camp.lastSeenTick >= 3 * TickRate:
           world.returnCamp(index)
     elif camp.state == RestingCamp:
-      # Units farther than NeutralLeash in Z fail provokeCamp's within()
-      # test and do nothing there, so only the Z band is passed, in the
-      # same (slot) order.
-      gatherLaneUnitsNear(camp.center, NeutralLeash)
-      world.provokeCamp(index, campMembers[index], campNearLane)
+      world.provokeCamp(index, campMembers[index], campLaneUnits)
 
 proc updateNeutral(world: World, unit: var Footman) =
   ## Runs camp melee combat or the ordinary cached path back home.
