@@ -5,14 +5,14 @@
     "polyworld"
   ],
   "game": {
-    "name": "Gods of the Arena",
+    "name": "GOTA-RL",
     "description": "Two teams of five BASIC heroes battle to slay the enemy god. Score is lifetime XP minus 200 per simulated minute, rounded down to whole points and clamped to zero. Random pairings and a moving average of round scores determine standings.",
     "owner": "treeform",
     "player_runtime": "game-hosted",
     "runnable": {
       "type": "game",
-      "image": "{{GAME_IMAGE}}",
-      "source_url": "https://github.com/Metta-AI/polyworld/tree/main/examples/gods_of_the_arena"
+      "image": "{{GOTA_RL_IMAGE}}",
+      "source_url": "https://github.com/daveey/polyworld/tree/daveey/gota-rl-coworld/examples/gods_of_the_arena"
     },
     "config_schema": {
       "type": "object",

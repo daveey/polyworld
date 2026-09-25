@@ -1,6 +1,6 @@
 services:
-  game:
-    image: polyworld-gota-coworld:latest
+  gota-rl:
+    image: polyworld-gota-rl-coworld:latest
     platform: linux/amd64
     build:
       context: ../..
