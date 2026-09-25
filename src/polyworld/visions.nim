@@ -62,7 +62,7 @@ proc hash*(source: VisionSource): Hash =
     d = (uint64(cast[uint32](source.offsetX)) shl 32) or
       uint64(cast[uint32](source.offsetZ))
     h = mix(mix(mix(mix(a) xor b) xor c) xor d)
-  Hash(h xor (h shr 31))
+  cast[Hash](h xor (h shr 31))
 
 var
   visionRayOffsets: seq[VisionRayStep]
