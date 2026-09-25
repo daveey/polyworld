@@ -2,6 +2,7 @@
 ## on the simulation.
 
 import
+  std/math,
   polyworld/neural,
   bassy, fixxy,
   polyworld/[mailboxes, metrics, bodies, cli, controllers,
@@ -9,6 +10,9 @@ import
   content,
   maps,
   motions,
+  neural_actor,
+  neural_contract,
+  neural_package,
   observations,
   sim,
   replays,
@@ -283,6 +287,84 @@ proc sendChat*(
     if game.inboxes[recipient].push(id, text):
       inc result
 
+
+proc issueCommand(game: Game, heroId: int32, accepted: bool): bool =
+  ## Credits an accepted order to the hero's command metrics.
+  if accepted:
+    game.metrics.command(heroIndex(game.world, heroId), game.world.tick)
+  accepted
+
+proc recordingFailed(game: Game, error: ref ReplayError) {.noreturn.} =
+  game.recordingError = error.msg
+  raise newException(BasicError, "replay recording failed: " & error.msg)
+
+proc issueWalkTo*(game: Game, heroId, x, y: int32, offset: FixedVec2): bool =
+  ## Records and applies a walk order exactly as BASIC's walkTo does.
+  try:
+    if game.recorder != nil:
+      game.recorder.recordWalkTo(uint32(game.world.tick), heroId, x, y, offset)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, applyWalkTo(game.world, heroId, x, y, offset))
+
+proc issueAttackMove*(game: Game, heroId, x, y: int32, offset: FixedVec2): bool =
+  ## Records and applies the same attack-move order used by human players.
+  try:
+    if game.recorder != nil:
+      game.recorder.record ReplayAction(
+        tick: uint32(game.world.tick), heroId: heroId,
+        kind: ActionAttackMove, first: x, second: y, offset: offset
+      )
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, game.world.applyAttackMove(heroId, x, y, offset))
+
+proc issueAttackTarget*(game: Game, heroId, targetId: int32): bool =
+  ## Records and applies an attack order.
+  try:
+    if game.recorder != nil:
+      game.recorder.recordAttackTarget(uint32(game.world.tick), heroId, targetId)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, applyAttackTarget(game.world, heroId, targetId))
+
+proc issueUseItem*(game: Game, heroId, slot: int32): bool =
+  ## Records and applies an item use.
+  try:
+    if game.recorder != nil:
+      game.recorder.recordUseItem(uint32(game.world.tick), heroId, slot)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, applyUseItem(game.world, heroId, slot))
+
+proc issueUseItemAt*(game: Game, heroId, slot, x, y: int32,
+    offset: FixedVec2): bool =
+  ## Records and attempts a scroll channel at fractional map coordinates.
+  try:
+    game.recorder.recordUseItemAt(uint32(game.world.tick), heroId, slot, x, y, offset)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, game.world.applyUseItemAt(heroId, slot, x, y, offset))
+
+proc issueCastTarget*(game: Game, heroId, slot, targetId: int32): bool =
+  ## Records and attempts an explicit object-targeted spell.
+  try:
+    game.recorder.recordCast(uint32(game.world.tick), heroId, slot, targetId, 0, false)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, game.world.applyCastTarget(heroId, slot, targetId))
+
+proc issueCastPoint*(game: Game, heroId, slot, x, y: int32,
+    offset: FixedVec2): bool =
+  ## Records and attempts a ground-aimed spell.
+  try:
+    game.recorder.recordCast(uint32(game.world.tick), heroId, slot, x, y, true, offset)
+  except ReplayError as error:
+    game.recordingFailed(error)
+  game.issueCommand(heroId, game.world.applyCastPoint(heroId, slot, x, y, offset))
+
+include neural_host_hooks
+
 proc initHeroHost(heroId: int32): Host =
   ## Builds the bounded world-query and action interface for one hero.
   result = initHost()
@@ -469,80 +551,29 @@ proc initHeroHost(heroId: int32): Host =
   ): Value =
     let (x, y, offset) = splitTilePoint(fixedVec2(
       arguments[0].asFixed, arguments[1].asFixed))
-    try:
-      if activeGame.recorder != nil:
-        activeGame.recorder.recordWalkTo(
-          uint32(activeGame.world.tick),
-          heroId,
-          x,
-          y,
-          offset
-        )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(
-        BasicError,
-        "replay recording failed: " & error.msg
-      )
-    let accepted = applyWalkTo(
-      activeGame.world, heroId, x, y, offset
-    )
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    let command = NeuralCommand(kind: WalkCommand, point: fixedVec2(
+      arguments[0].asFixed, arguments[1].asFixed))
+    if activeGame.interceptCommand(heroId, command):
+      return 1'i32
+    int32(activeGame.issueWalkTo(heroId, x, y, offset))
   let attackMoveProc: NumericHostProc = proc(
       arguments: openArray[Value]
   ): Value =
     ## Records and applies the same attack-move order used by human players.
     let (x, y, offset) = splitTilePoint(fixedVec2(
       arguments[0].asFixed, arguments[1].asFixed))
-    try:
-      if activeGame.recorder != nil:
-        activeGame.recorder.record ReplayAction(
-          tick: uint32(activeGame.world.tick),
-          heroId: heroId,
-          kind: ActionAttackMove,
-          first: x,
-          second: y,
-          offset: offset
-        )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(BasicError, "replay recording failed: " & error.msg)
-    let accepted = activeGame.world.applyAttackMove(
-      heroId, x, y, offset
-    )
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    let command = NeuralCommand(kind: AttackMoveCommand, point: fixedVec2(
+      arguments[0].asFixed, arguments[1].asFixed))
+    if activeGame.interceptCommand(heroId, command):
+      return 1'i32
+    int32(activeGame.issueAttackMove(heroId, x, y, offset))
   let attackTargetProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    try:
-      if activeGame.recorder != nil:
-        activeGame.recorder.recordAttackTarget(
-          uint32(activeGame.world.tick),
-          heroId,
-          arguments[0]
-        )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(
-        BasicError,
-        "replay recording failed: " & error.msg
-      )
-    let accepted = applyAttackTarget(
-      activeGame.world, heroId, arguments[0]
-    )
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    if activeGame.interceptCommand(heroId,
+        NeuralCommand(kind: AttackTargetCommand, objectId: arguments[0])):
+      return 1
+    int32(activeGame.issueAttackTarget(heroId, arguments[0]))
   let itemIdProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
@@ -617,47 +648,21 @@ proc initHeroHost(heroId: int32): Host =
   let useItemProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    try:
-      if activeGame.recorder != nil:
-        activeGame.recorder.recordUseItem(
-          uint32(activeGame.world.tick),
-          heroId,
-          arguments[0]
-        )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(
-        BasicError,
-        "replay recording failed: " & error.msg
-      )
-    let accepted = applyUseItem(
-      activeGame.world, heroId, arguments[0]
-    )
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    if activeGame.interceptCommand(heroId,
+        NeuralCommand(kind: UseItemCommand, item: arguments[0])):
+      return 1
+    int32(activeGame.issueUseItem(heroId, arguments[0]))
 
   let useItemAtProc: NumericHostProc = proc(arguments: openArray[Value]): Value =
     ## Records and attempts a scroll channel at fractional map coordinates.
     let
-      (x, y, offset) = splitTilePoint(fixedVec2(
-        arguments[1].asFixed, arguments[2].asFixed))
+      point = fixedVec2(arguments[1].asFixed, arguments[2].asFixed)
+      (x, y, offset) = splitTilePoint(point)
       slot = arguments[0].asInt
-    try:
-      activeGame.recorder.recordUseItemAt(
-        uint32(activeGame.world.tick), heroId, slot, x, y, offset
-      )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(BasicError, "replay recording failed: " & error.msg)
-    let accepted = activeGame.world.applyUseItemAt(heroId, slot, x, y, offset)
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    if activeGame.interceptCommand(heroId,
+        NeuralCommand(kind: UseItemAtCommand, item: slot, point: point)):
+      return 1'i32
+    int32(activeGame.issueUseItemAt(heroId, slot, x, y, offset))
 
   let levelAbilityProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and spends a point through the shared upgrade validator.
@@ -696,46 +701,20 @@ proc initHeroHost(heroId: int32): Host =
 
   let castTargetProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and attempts an explicit object-targeted spell.
-    let slot = arguments[0]
-    try:
-      activeGame.recorder.recordCast(
-        uint32(activeGame.world.tick), heroId, slot, arguments[1], 0, false
-      )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(BasicError, "replay recording failed: " & error.msg)
-    let accepted = activeGame.world.applyCastTarget(heroId, slot, arguments[1])
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    if activeGame.interceptCommand(heroId, NeuralCommand(kind: CastTargetCommand,
+        ability: arguments[0], objectId: arguments[1])):
+      return 1
+    int32(activeGame.issueCastTarget(heroId, arguments[0], arguments[1]))
   let castPointProc: NumericHostProc = proc(arguments: openArray[Value]): Value =
     ## Records and attempts a ground-aimed spell.
-    let (x, y, offset) = splitTilePoint(fixedVec2(
-      arguments[1].asFixed, arguments[2].asFixed))
-    let slot = arguments[0].asInt
-    try:
-      activeGame.recorder.recordCast(
-        uint32(activeGame.world.tick),
-        heroId,
-        slot,
-        x,
-        y,
-        true,
-        offset
-      )
-    except ReplayError as error:
-      activeGame.recordingError = error.msg
-      raise newException(BasicError, "replay recording failed: " & error.msg)
-    let accepted = activeGame.world.applyCastPoint(
-      heroId, slot, x, y, offset
-    )
-    if accepted:
-      activeGame.metrics.command(
-        heroIndex(activeGame.world, heroId), activeGame.world.tick
-      )
-    int32(accepted)
+    let
+      point = fixedVec2(arguments[1].asFixed, arguments[2].asFixed)
+      (x, y, offset) = splitTilePoint(point)
+      slot = arguments[0].asInt
+    if activeGame.interceptCommand(heroId,
+        NeuralCommand(kind: CastPointCommand, ability: slot, point: point)):
+      return 1'i32
+    int32(activeGame.issueCastPoint(heroId, slot, x, y, offset))
   let abilityChargesProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads remaining charges for one of this hero's four ability slots.
     let index = heroIndex(activeGame.world, heroId)
@@ -844,6 +823,50 @@ proc initHeroHost(heroId: int32): Host =
       32
     )
 
+proc installPackageSeat*(game: Game, i: int, bytes: string) =
+  ## Loads a neural package into one seat: policy.bas runs as the seat's
+  ## BASIC program and the network runs natively at each decision tick.
+  activeGame = game
+  var package: NeuralPackage
+  try:
+    package = parsePackage(bytes)
+  except CatchableError:
+    let message = "neural package rejected: " & getCurrentExceptionMsg()
+    when defined(coworld):
+      playerLog(i, message & "\n")
+      discard compilePlayer("neural package rejected\n)", initHeroHost(0),
+        heroVmLimits(), i)
+    raise newException(BasicError, message)
+  let
+    limits = neuralVmLimits()
+    heroId = game.world.heroes[i].id
+  var schema = initHeroHost(0)
+  schema.addNeuralSeatFunctions(0)
+  let program =
+    when defined(coworld):
+      compilePlayer(package.policy, schema, limits, i)
+    else:
+      compile(package.policy, schema, limits)
+  bindHeroData(program)
+  var host = initHeroHost(heroId)
+  host.addNeuralSeatFunctions(heroId)
+  let seat = newNeuralSeat(NeuralPackage, package.decisionPeriod,
+    game.config.maxTicks)
+  seat.actor = package.actor
+  seat.goal = package.goals[game.world.heroes[i].team.ord]
+  seat.sampling = package.decoder == SampleDecoder
+  seat.temperature = package.temperature
+  seat.telemetry = true
+  seat.resetEpisode(game.world.matchSeed, i)
+  game.heroVms[i] = HeroVm(
+    runtime: initRuntime(program, host, limits),
+    limits: limits,
+    ready: true,
+    neural: seat
+  )
+  when defined(coworld):
+    game.heroVms[i].output = playerPrinter(i)
+
 proc loadBots*(
     game: Game,
     groups: openArray[BotGroup],
@@ -865,6 +888,9 @@ proc loadBots*(
     if kinds[i] == PlayerController:
       continue
     let source = sources[i]
+    if source.isPackage:
+      game.installPackageSeat(i, source)
+      continue
     let program =
       when defined(coworld):
         compilePlayer(source, schema, limits, int(i))
@@ -951,6 +977,8 @@ proc runHeroScript(game: Game, index: int) =
     vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
     discard vm.runtime.run(vm.output)
     inc vm.decisions
+    if vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
+      game.runOverride(index, NeuralSeat(vm.neural))
   except BasicError as error:
     vm.failed = true
     vm.lastError = error.msg
@@ -975,6 +1003,10 @@ proc runBotDecisions*(game: Game) {.measure.} =
   defer:
     if ownsFrame:
       game.world.thawObservations()
+  for vm in game.heroVms:
+    if vm != nil and vm.neural != nil:
+      game.neuralPrelude()
+      break
   for offset in 0 ..< game.world.heroes.len:
     let index = (game.world.heroTurnStart + offset) mod game.world.heroes.len
     runHeroScript(game, index)
