@@ -360,6 +360,36 @@ void gota_net_destroy(void *net);
 int gota_net_info(void *net, int64_t *eight);
 int gota_net_infer(void *net, const float *observation, float *state, float *logits);
 
+/* Reset to a real state (XR-c, branch daveey/gota-xreq). Re-simulates an
+ * uncompressed .replay in playback (hash-checked every tick) until `tick`
+ * ticks have run (the state whose hash the replay records at index tick-1),
+ * then continues LIVE: `learner_seat` becomes the episode's learner seat
+ * (< 0: the configured learner seats) and every other seat runs what the
+ * handle configures (package / script / default). The tape after `tick` is
+ * ignored: once the learner deviates the recorded actions no longer apply,
+ * so the recorded seats (ours included) cannot continue their tapes.
+ * Programs start fresh at `tick` (BASIC globals, recurrent state). Not with
+ * config record or replay_path. Returns 0, -2 seat compile failure, -3
+ * error, -4 tape diverged/ended or tick inside the draft, -5 the replay's
+ * map or max_ticks differs from this process's (gota_last_error). The
+ * handle is paused at the next decision frame, as after gota_reset.
+ * gota_episode_learner_seats: the current episode's learner mask.
+ * gota_world_tick: ticks run so far (draft included).
+ * gota_replay_hash_at: the loaded replay's recorded hash after `tick` ticks. */
+int gota_reset_from_replay(void *handle, const char *replay_path, int32_t tick, int learner_seat);
+uint32_t gota_episode_learner_seats(void *handle);
+int32_t gota_world_tick(void *handle);
+uint64_t gota_replay_hash_at(void *handle, int32_t tick);
+
+/* Behaviour verification (XR-a). gota_decode_heads: the command the seat's
+ * current decision frame decodes `heads` (5) into; int32[8] = kind, object
+ * id, ability, item, point x, point y (raw fixed), frame tick, isInvalid.
+ * gota_seat_commands: replay-mode capture seats, the contract commands the
+ * tape issued since the current decision frame began, 7 int32 each (kind,
+ * object id, ability, item, point x, point y, tick); returns the count. */
+int gota_decode_heads(void *handle, int seat, const int32_t *heads, int32_t *eight);
+int gota_seat_commands(void *handle, int seat, int32_t *out, int32_t capacity);
+
 #ifdef __cplusplus
 }
 #endif

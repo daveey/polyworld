@@ -406,6 +406,9 @@ proc interceptCommand*(game: Game, heroId: int32, command: NeuralCommand): bool 
   of NeuralCapture:
     if seat.frameTick >= 0:
       seat.writeLabel(game.world, tagged)
+      seat.captured.add tagged
+        ## Raw commands of the window (gota_seat_commands); cleared by
+        ## beginDecision, never read by the sim.
     false
   else:
     false
