@@ -579,6 +579,49 @@ proc gota_seat_script_status(handle: pointer, seat: cint, message: ptr char, cap
   copyText(status.message, message, capacity)
   cint(status.code)
 
+proc gota_seat_vm_array(handle: pointer, seat: cint, which: cint, name: cstring,
+    output: ptr UncheckedArray[int32], capacity: int32): cint {.exportc, dynlib, cdecl.} =
+  ## BASIC-distill lane: copies up to `capacity` elements of the global array `name` of a seat's
+  ## VM (which 0 = the seat's own VM, 1 = its learner shadow) into `output` (integers; a
+  ## non-integer element is written as low(int32)). Returns the count copied, or -1
+  ## (bad args / no VM / unknown array). Read-only: never changes the world or the VM.
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or seat notin 0..9 or name == nil or output == nil or capacity < 0: return -1
+  var vm = env.game.heroVms[seat]
+  if which == 1:
+    let s = env.game.neuralSeat(seat)
+    if s == nil or s.shadow == nil: return -1
+    vm = s.shadow
+  if vm == nil: return -1
+  try:
+    let n = min(vm.runtime.arrayLength($name), capacity)
+    for i in 0 ..< n:
+      let v = vm.runtime.getArrayValue($name, int32(i))
+      if v.kind == IntegerValue:
+        output[i] = v.asInt
+      else:
+        output[i] = low(int32)   # fixed-point / string element: not an integer feature
+    cint(n)
+  except CatchableError:
+    -1
+
+proc gota_seat_vm_stats(handle: pointer, seat: cint, which: cint,
+    output: ptr UncheckedArray[int64]): cint {.exportc, dynlib, cdecl.} =
+  ## BASIC-distill lane: {last instructions, last work, decisions, failed} of a seat's VM.
+  let env = toEnv(handle)
+  if env == nil or env.game == nil or seat notin 0..9 or output == nil: return -1
+  var vm = env.game.heroVms[seat]
+  if which == 1:
+    let s = env.game.neuralSeat(seat)
+    if s == nil or s.shadow == nil: return -1
+    vm = s.shadow
+  if vm == nil: return -1
+  output[0] = vm.lastInstructions
+  output[1] = vm.lastWork
+  output[2] = int64(vm.decisions)
+  output[3] = int64(vm.failed)
+  0
+
 proc gota_seat_orders(handle: pointer, seat: cint, output: ptr UncheckedArray[int32]): cint {.exportc, dynlib, cdecl.} =
   let env = toEnv(handle)
   if env == nil or env.game == nil or seat notin 0..9 or output == nil: return -1
