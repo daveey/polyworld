@@ -32,6 +32,10 @@ type
     maxTicks, period: int32
     learners: uint32
     episodeLearners: uint32
+    handoffTick: int32
+    handoffHash: uint64
+      ## reset_from_replay: the tick and state hash at the hand-over (before
+      ## any live tick runs).
       ## The learner seats of the current episode (reset_from_replay may
       ## move the learner to the replay seat).
     record, capture: bool
@@ -482,6 +486,8 @@ proc resetFromReplay(env: Env, path: string, tick: int32,
     lastError = "reset_from_replay: tick " & $tick & " is not a live battle tick"
     return -4
   # Hand over: live from here.
+  env.handoffTick = game.world.tick
+  env.handoffHash = game.stateHash()
   game.historyPlayback = false
   game.replayMode = false
   game.hashCheck = default(typeof(game.hashCheck))
@@ -1178,3 +1184,14 @@ proc gota_seat_commands(handle: pointer, seat: cint, output: ptr UncheckedArray[
     for n in 0 ..< min(int(capacity), s.captured.len):
       writeCommand(s.captured[n], cast[ptr UncheckedArray[int32]](addr output[n * 7]))
   cint(s.captured.len)
+
+proc gota_handoff_info(handle: pointer, output: ptr UncheckedArray[uint64]): cint {.exportc, dynlib, cdecl.} =
+  ## After gota_reset_from_replay: uint64[3] = hand-over tick, the state hash
+  ## at the hand-over (before any live tick), the replay's recorded hash there.
+  let env = toEnv(handle)
+  if env == nil or output == nil: return -1
+  output[0] = uint64(env.handoffTick)
+  output[1] = env.handoffHash
+  output[2] = (if env.handoffTick >= 1 and int(env.handoffTick) <= env.replay.hashes.len:
+    env.replay.hashes[env.handoffTick - 1] else: 0'u64)
+  0

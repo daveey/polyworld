@@ -380,6 +380,8 @@ int gota_reset_from_replay(void *handle, const char *replay_path, int32_t tick, 
 uint32_t gota_episode_learner_seats(void *handle);
 int32_t gota_world_tick(void *handle);
 uint64_t gota_replay_hash_at(void *handle, int32_t tick);
+/* uint64[3] = hand-over tick, state hash at the hand-over, recorded hash there. */
+int gota_handoff_info(void *handle, uint64_t *three);
 
 /* Behaviour verification (XR-a). gota_decode_heads: the command the seat's
  * current decision frame decodes `heads` (5) into; int32[8] = kind, object
