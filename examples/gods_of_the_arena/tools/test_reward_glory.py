@@ -2,7 +2,7 @@
 
   python3 test_reward_glory.py LIB [--old-lib OLD] [--seeds 1 2 3 4 5 6] [--jobs 6]
 
-For full ten-scripted-seat episodes (base.bas, capture off) and for short timeout episodes:
+For full ten-scripted-seat episodes (rusher.bas vs base.bas, capture off) and for short timeout episodes:
  a glory-on == glory-off in everything but stats[0] and rewards: same per-step state hash, same observations (bit for bit);
  b glory-on stats[0] is 0 and rewards are 0 on every step before the end; at the end stats[0] equals Emmett's Glory
    (winner: lifetime XP * 1440 // world tick, whole points; losers, draws and timeouts 0) recomputed here from the
@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from native_env import Env, Lib
 
-BASE = open(os.path.join(HERE, "../players/base.bas")).read()
+RUSHER = open(os.path.join(HERE, "../players/rusher.bas")).read()
 TPM = 1440  # ticks per minute (24 tps)
 
 
@@ -29,6 +29,9 @@ def play(args):
     if reward:
         cfg["reward"] = reward
     env = Env(lib, **cfg)
+    # rusher.bas against base.bas so games are decided: red rushes on odd seeds, blue on even seeds
+    for seat in (range(0, 5) if seed % 2 else range(5, 10)):
+        assert env.set_script(seat, RUSHER) == 0
     env.reset(seed)
     hashes, obs, rew, st0 = hashlib.sha256(), hashlib.sha256(), hashlib.sha256(), hashlib.sha256()
     first_nonzero_stat, first_nonzero_reward, total_reward, steps = None, None, 0.0, 0
