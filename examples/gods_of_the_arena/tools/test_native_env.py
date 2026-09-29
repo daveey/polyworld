@@ -8,9 +8,11 @@
 4 goals: a goal set before reset is the last 16 floats of the first observation.
 5 rewards: rewards[s] == delta(stats[s][0]) / 1000 every step.
 6 package parity (5b): a seat hosting a neural package and a learner seat driven through
-  gota_net_infer with the same weights produce identical worlds (w64/w128/w256).
+  gota_net_infer with the same weights produce identical worlds (w64/w128/w256/w384/w512).
 7 package validation: the Nim loader and neural_package.py reject the same corrupted packages.
-8 ops per tick (5d): gota_net_info operations for w64/w128/w256 against the 4,000,000 budget.
+8 ops per tick (5d): gota_net_info operations for w64/w128/w256/w384/w512 against the 4,000,000 budget.
+9 widths: w64/w128/w256/w384/w512 load in both the Nim loader and neural_package.py; every other width
+  (including ones whose parameter count fits) is rejected by both, with the dimensions error.
 """
 import os, sys, json, zipfile, io, hashlib
 import numpy as np
@@ -226,6 +228,36 @@ def test_validation(lib):
         check(f"reject {name}", py == "rejected" and nim == 2, f"py={py} nim={nim} {env.status(1)[1][:70]}")
 
 
+ACCEPT_WIDTHS = [64, 128, 256, 384, 512]
+REJECT_WIDTHS = [1, 32, 63, 65, 96, 192, 255, 257, 320, 383, 385, 448, 511, 513, 640]
+
+
+def test_widths(lib):
+    env = Env(lib, learner_seats=[])
+    for hidden in ACCEPT_WIDTHS + REJECT_WIDTHS:
+        model = random_model(hidden, 7)
+        want = hidden in ACCEPT_WIDTHS
+        try:
+            pyh, ops = npk.check_model(model); py = "accepted"
+        except npk.PackageError as e:
+            py, ops = "rejected: " + str(e), None
+        err = ctypes.create_string_buffer(512)
+        net = lib.L.gota_net_load(model, len(model), err, 512)
+        nim = "accepted" if net else "rejected: " + err.value.decode()
+        info = np.zeros(8, np.int64)
+        if net:
+            lib.L.gota_net_info(net, info.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
+            lib.L.gota_net_destroy(net)
+        seat = env.set_package(1, npk.build(POLICY, model)) if want else None
+        if want:
+            ok = (py == "accepted" and nim == "accepted" and seat == 0 and int(info[2]) == hidden
+                  and int(info[7]) == ops and ops == 2 * int(info[6]) + 32 * hidden and ops <= 4_000_000)
+        else:
+            ok = ("dimensions" in py and "dimensions" in nim)
+        check(f"width {hidden} {'accepted' if want else 'rejected'} by both", ok,
+              f"py={py[:60]} nim={nim[:60]}" + (f" ops={info[7]} params={info[6]}" if net else ""))
+
+
 def main():
     lib = Lib(sys.argv[1])
     quick = len(sys.argv) > 2 and sys.argv[2] == "quick"
@@ -236,7 +268,8 @@ def main():
     test_goal(lib)
     test_rewards(lib, steps)
     test_validation(lib)
-    test_package_parity(lib, steps if quick else 7200, [64, 128, 256])
+    test_widths(lib)
+    test_package_parity(lib, steps if quick else 7200, [64, 128, 256, 384, 512])
     print("ALL PASS" if not failures else f"FAILURES: {failures}")
     sys.exit(1 if failures else 0)
 

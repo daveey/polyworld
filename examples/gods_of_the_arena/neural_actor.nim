@@ -18,10 +18,15 @@ const
   ActorMagic* = "GOTANET1"
   MaxActorParameters* = 2_000_000
   MaxActorInputs* = 4096
-  ActorWidths* = [64, 128, 256]
+  ActorWidths* = [64, 128, 256, 384, 512]
+  MaxActorWidth* = 512
+    ## Largest accepted hidden width; sizes infer's fixed buffers.
   NeuralOpBudget* = 4_000_000
     ## Operations one seat may spend per tick on inference, separate from the
     ## BASIC instruction budget.
+
+static:
+  doAssert ActorWidths[^1] == MaxActorWidth
 
 proc finite(x: float32): bool = classify(x) notin {fcNan, fcInf, fcNegInf}
 
@@ -127,8 +132,8 @@ proc infer*(actor: Actor, obs: openArray[float32], state: var openArray[float32]
     if not finite(x):
       raise newException(ValueError, "nonfinite neural state")
   var
-    x, next, y: array[256, float32]
-    combined: array[768, float32]
+    x, next, y: array[MaxActorWidth, float32]
+    combined: array[3*MaxActorWidth, float32]
     output: array[1024, float32]
   let h = actor.hiddenSize
   for o in 0..<h:

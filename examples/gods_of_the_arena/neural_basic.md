@@ -121,7 +121,7 @@ first, so it uses the RNG exactly as unmasked sampling does. `tools/native_env.p
 The layout is paintbot-pw's PWNET001 with the magic changed to `GOTANET1`:
 `magic[8] | u32 version=1, inputs I, hidden H, outputs O, heads n, parameters P | obs sha256 hex[64] |
 action sha256 hex[64] | u32 head sizes[n] | f32 LE weights`. The weights come in this order: `W_enc[H][I]`
-(x = W_enc·obs, no bias, no activation), `W_rec[3H][H]`, then `W_dec[O][H]`. H must be 64, 128 or 256, and
+(x = W_enc·obs, no bias, no activation), `W_rec[3H][H]`, then `W_dec[O][H]`. H must be 64, 128, 256, 384 or 512, and
 P must equal `I·H + 3H² + O·H` ≤ 2,000,000.
 
 One MinGRU step, the same as PufferLib's `mingru_gate`:
@@ -134,8 +134,9 @@ y = sigmoid(proj) * state' + (1 - sigmoid(proj)) * x
 logits = W_dec · y
 ```
 
-The published cost is `2·P + 32·H` operations per inference: 218,496 for w64, 486,144 for w128 and
-1,168,896 for w256. A seat runs at most one inference per tick, against its own **4,000,000
+The published cost is `2·P + 32·H` operations per inference: 218,496 for w64, 486,144 for w128,
+1,168,896 for w256, 2,048,256 for w384 and 3,124,224 for w512. (A contract-v1 model.bin is 6.1 MB at w512,
+inside the 16 MiB package limit.) A seat runs at most one inference per tick, against its own **4,000,000
 operations per tick** budget. A model over budget is rejected at load. This budget is separate from
 BASIC's instruction budget. Nonfinite weights, inputs, state or outputs are errors. An inference error
 disables the seat the same way a BASIC runtime error does.
@@ -322,7 +323,7 @@ The trainer, the hosted seat and the mapping ceiling share one code path:
   - Wins: 2–3% vs 0%.
 - **Package vs ABI parity** (`tools/test_native_env.py`, full length): a package-hosted seat and a
   learner seat driven through `gota_net_infer` with the same weights produce identical worlds at w64,
-  w128 and w256.
+  w128, w256, w384 and w512. The same test checks that both loaders accept exactly those five widths.
 - **Concurrency** (`tools/test_native_concurrency.py`): N threads × M handles give the serial per-step
   hashes.
 - **Hosted canary** (`tools/canary.py`): the `-d:coworld` server runs 5 random-weight packages and 5
