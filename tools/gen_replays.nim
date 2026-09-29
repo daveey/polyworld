@@ -1,6 +1,6 @@
 ## Generates and verifies fresh demo replays under the ignored tmp directory.
 
-import std/[os, osproc]
+import std/[os, osproc, strutils]
 
 const
   Root = currentSourcePath().parentDir.parentDir
@@ -20,7 +20,7 @@ proc execute(arguments: openArray[string]) =
   if execCmd(command) != 0:
     raise newException(PolyworldToolsError, "Command failed: " & command)
 
-proc generate(name, directory: string, seats: int) =
+proc generate(name, directory: string, seats, ticks: int) =
   ## Checks two independent recordings and verifies every playback tick.
   let
     output = Root / "tmp/replays"
@@ -29,7 +29,10 @@ proc generate(name, directory: string, seats: int) =
     replay = output / (name & ".replay")
     repeated = output / (name & "-repeat.replay")
     duration =
-      if name == "heartleaf": @["--days", "7"]
+      # Heartleaf's seek mode records a prefix of its day-based match.
+      if ticks > 0 and name == "heartleaf": @["--seek-tick", $ticks]
+      elif ticks > 0: @["--ticks", $ticks]
+      elif name == "heartleaf": @["--days", "7"]
       else: @["--ticks", "28800"]
     arguments = @[
       binary, "--seed", "2026", "--bot",
@@ -37,7 +40,8 @@ proc generate(name, directory: string, seats: int) =
     ] & duration
   createDir(output)
   execute([
-    "nim", "c", "-d:headless", "-o:" & binary,
+    "nim", "c", "-d:headless", "--nimcache:" & output / "nimcache" / name,
+    "-o:" & binary,
     source / (name & ".nim")
   ])
   execute(arguments & @["--record", replay])
@@ -52,9 +56,21 @@ proc generate(name, directory: string, seats: int) =
   echo name, ": identical recordings and verified playback"
 
 setCurrentDir(Root)
-let selected =
-  if paramCount() == 0: @["gota", "cta", "lvd"]
-  else: commandLineParams()
+var
+  selected: seq[string]
+  ticks = 0
+for argument in commandLineParams():
+  if argument.startsWith("--ticks="):
+    try:
+      ticks = parseInt(argument[8 .. ^1])
+    except ValueError:
+      raise newException(PolyworldToolsError, "Invalid replay tick count")
+    if ticks <= 0 or ticks > int32.high:
+      raise newException(PolyworldToolsError, "Replay ticks must fit positive int32")
+  else:
+    selected.add argument
+if selected.len == 0:
+  selected = @["gota", "cta", "lvd"]
 for name in selected:
   var found = false
   for game in Games:
@@ -68,4 +84,4 @@ for name in selected:
 for name in selected:
   for game in Games:
     if game.name == name:
-      generate(game.name, game.directory, game.seats)
+      generate(game.name, game.directory, game.seats, ticks)

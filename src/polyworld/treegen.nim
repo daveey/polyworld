@@ -11,12 +11,21 @@ const
   LeafIndices* = 12
   EvergreenAspect = 1.4'f
   PresetNames* = ["Old oak", "Autumn", "Round sapling", "Blue spruce",
-    "Tall fir", "Young pine", "Haunted", "Twisted", "Dead sapling", "Stump"]
+    "Tall fir", "Young pine", "Haunted", "Twisted", "Dead sapling", "Stump",
+    "Low bush", "Small bush", "Medium bush", "Large bush", "Hedge",
+    "Daisies", "Blue wildflowers", "Lavender", "Sunflowers",
+    "Blossom tree", "Flowering bush", "Flowering hedge", "Mixed flowers"]
 
 type
   TreegenError* = object of CatchableError
   TreeKind* = enum
-    Leafless, Evergreen, Broadleaf, Stump
+    Leafless, Evergreen, Broadleaf, Stump, Bush, Hedge, FlowerPatch
+  BushSize* = enum
+    LowBush, SmallBush, MediumBush, LargeBush
+  FlowerKind* = enum
+    NoFlowers, Daisies, BlueFlowers, PinkFlowers, GoldenFlowers,
+    Lavender, BlueSpikes, Sunflowers, WhiteBlossoms, PinkBlossoms,
+    PurpleBlossoms, GoldenBlossoms, MixedFlowers
   BranchKind* = enum
     Spreading, Angular, Drooping
   BranchLayout* = enum
@@ -45,6 +54,11 @@ type
     separateLeaves*: bool
     colorVariation*, barkTexture*, barkDensity*: float32
     barkColor*, leafColor*: Vec3
+    bushSize*: BushSize
+    plantWidth*, plantDepth*, plantHeight*: float32
+    flowerKind*: FlowerKind
+    flowerDensity*, flowerSize*: float32
+    flowerColor*: Vec3
   TreeVertex* = object
     position*, normal*: Vec3
     uv*: Vec2
@@ -53,12 +67,13 @@ type
     vertices*: seq[TreeVertex]
     indices*: seq[uint32]
   TreeGeometry* = object
-    bark*, foliage*, cut*: TreeMesh
+    bark*, foliage*, cut*, flowers*, stems*, crown*: TreeMesh
     minimum*, maximum*: Vec3
     cards*, limbs*: int
     omittedCards*, shiftedCards*: int
+    blooms*: int
   TreeMaterials* = object
-    bark*, foliage*, cut*: Material
+    bark*, foliage*, cut*, flowers*, stems*, crown*: Material
   LeafFace = object
     points: seq[Vec3]
     normal: Vec3
@@ -66,6 +81,15 @@ type
   LeafPatch = object
     vertexStart, vertexCount, indexStart, indexCount: int
     minimum, maximum: Vec3
+
+proc setBushSize*(settings: var TreeSettings, size: BushSize) =
+  ## Applies coherent ground-plant dimensions without stretching leaf cards.
+  const Dimensions = [0.28'f, 0.55'f, 0.95'f, 1.5'f]
+  settings.bushSize = size
+  settings.plantHeight = Dimensions[size.ord]
+  settings.plantDepth = settings.plantHeight * 1.65'f
+  settings.plantWidth = settings.plantDepth *
+    (if settings.kind == Hedge: 3.0'f else: 1.15'f)
 
 proc preset*(index: int, seed = 42): TreeSettings =
   ## Returns a complete recipe with a caller-selected deterministic seed.
@@ -88,7 +112,10 @@ proc preset*(index: int, seed = 42): TreeSettings =
     separateLeaves: true,
     barkDensity: 0.65,
     barkColor: vec3(0.64, 0.35, 0.14),
-    leafColor: vec3(0.5, 0.72, 0.16)
+    leafColor: vec3(0.5, 0.72, 0.16),
+    bushSize: MediumBush, plantWidth: 1.8, plantDepth: 1.5,
+    plantHeight: 0.95, flowerDensity: 0.3, flowerSize: 0.24,
+    flowerColor: vec3(1)
   )
   case clamp(index, 0, PresetNames.high)
   of 1:
@@ -189,6 +216,39 @@ proc preset*(index: int, seed = 42): TreeSettings =
     result.forks = 0
   else:
     discard
+  if index in 10 .. 14 or index in 20 .. 21:
+    result.kind = (if index in [14, 21]: Hedge else: Bush)
+    result.setBushSize(
+      if index in 10 .. 13: BushSize(index - 10) else: MediumBush)
+    result.leafColor = vec3(0.53, 0.76, 0.13)
+    result.leafTile = PointedLeaves
+    if index >= 20:
+      result.flowerKind =
+        if index == 20: WhiteBlossoms else: PinkBlossoms
+  elif index in 15 .. 18 or index == 22:
+    result.kind = FlowerPatch
+    result.setBushSize(SmallBush)
+    result.plantWidth = 1.3
+    result.plantDepth = 1.0
+    result.leafColor = vec3(0.40, 0.63, 0.10)
+    result.flowerDensity = 0.75
+    result.flowerKind =
+      case index
+      of 15: Daisies
+      of 16: BlueFlowers
+      of 17: Lavender
+      of 18: Sunflowers
+      else: MixedFlowers
+    if index == 17:
+      result.plantHeight = 0.9
+      result.flowerSize = 0.46
+    elif index == 18:
+      result.plantHeight = 1.5
+      result.flowerSize = 0.55
+  elif index == 19:
+    result.flowerKind = PinkBlossoms
+    result.flowerSize = 0.5
+    result.flowerDensity = 0.35
 
 proc validate*(settings: TreeSettings) =
   ## Rejects unsafe recipes before any geometry or allocations are made.
@@ -199,6 +259,8 @@ proc validate*(settings: TreeSettings) =
   requireRange(settings.seed, 0, 1_000_000_000)
   if settings.kind == Stump:
     requireRange(settings.height, 0.3, 3)
+  elif settings.kind in {Bush, Hedge, FlowerPatch}:
+    requireRange(settings.height, 0.3, 16)
   else:
     requireRange(settings.height, 1, 16)
   requireRange(settings.trunkRadius, 0.06, 1.4)
@@ -245,9 +307,15 @@ proc validate*(settings: TreeSettings) =
   requireRange(settings.colorVariation, 0, 0.5)
   requireRange(settings.barkTexture, 0, 1)
   requireRange(settings.barkDensity, 0.1, 3)
+  requireRange(settings.plantWidth, 0.2, 12)
+  requireRange(settings.plantDepth, 0.2, 5)
+  requireRange(settings.plantHeight, 0.12, 3)
+  requireRange(settings.flowerDensity, 0, 1)
+  requireRange(settings.flowerSize, 0.08, 1.5)
   for i in 0 ..< 3:
     requireRange(settings.barkColor[i], 0, 1)
     requireRange(settings.leafColor[i], 0, 1)
+    requireRange(settings.flowerColor[i], 0, 1)
 
 proc jitter(rng: var Rand, amount: float32): float32 =
   ## Samples a symmetric range from a local seeded stream.
@@ -992,7 +1060,231 @@ proc canopy(geometry: var TreeGeometry, settings: TreeSettings,
   if settings.separateLeaves:
     geometry.separateFoliage(settings)
 
-proc generateGeometry*(settings: TreeSettings): TreeGeometry =
+proc appendMesh(target: var TreeMesh, source: TreeMesh, offset: Vec3) =
+  ## Merges a completed lobe after its individual leaf separation pass.
+  let start = target.vertices.len.uint32
+  for value in source.vertices:
+    var moved = value
+    moved.position += offset
+    target.vertices.add moved
+  for index in source.indices:
+    target.indices.add start + index
+
+proc flowerTile(kind: FlowerKind, rng: var Rand): int =
+  ## Selects a colored bloom without sampling the green leaf atlas.
+  case kind
+  of NoFlowers, Daisies: 0
+  of BlueFlowers: 1
+  of PinkFlowers: 2
+  of GoldenFlowers: 3
+  of Lavender: 4 + rng.rand(1) * 2
+  of BlueSpikes: 5 + rng.rand(1) * 2
+  of Sunflowers: 8 + rng.rand(3)
+  of WhiteBlossoms: 12
+  of PinkBlossoms: 13
+  of PurpleBlossoms: 14
+  of GoldenBlossoms: 15
+  of MixedFlowers: [0, 1, 2, 3, 4, 5][rng.rand(5)]
+
+proc flowerCard(mesh: var TreeMesh, center, right, vertical: Vec3,
+    tile: int) =
+  ## Adds a shallow folded bloom with its own padded atlas coordinates.
+  let
+    normal = normalize(cross(right, vertical))
+    start = mesh.vertices.len.uint32
+    column = (tile mod 4).float32
+    row = (tile div 4).float32
+  for pair in [vec2(0, 0), vec2(0, 1), vec2(1, 1), vec2(1, 0),
+      vec2(0.5, 0.5)]:
+    let
+      rise = (if pair.x == 0.5'f: length(right) * 0.12'f else: 0.0'f)
+      position = center + right * (pair.x - 0.5'f) +
+        vertical * (0.5'f - pair.y) + normal * rise
+      uv = vec2((column + 0.015'f + pair.x * 0.97'f) * 0.25'f,
+        (row + 0.015'f + pair.y * 0.97'f) * 0.25'f)
+    discard mesh.vertex(position, normal, uv)
+  for i in 0 ..< 4:
+    mesh.indices.add [start + i.uint32,
+      start + ((i + 1) mod 4).uint32, start + 4]
+
+proc addFlower(geometry: var TreeGeometry, settings: TreeSettings,
+    rng: var Rand, anchor, direction: Vec3, rooted = false) =
+  ## Places heads above their stems or crossed upright flower spikes.
+  let
+    tile = settings.flowerKind.flowerTile(rng)
+    size = settings.flowerSize * (1.0'f + rng.jitter(0.15'f))
+    normal = normalize(direction)
+    right = normalize(cross(Up, normal))
+    vertical = normalize(cross(normal, right))
+  if tile in 4 .. 7:
+    let center = anchor + Up * size * 0.35'f
+    geometry.flowers.flowerCard(center, right * size,
+      Up * size * 1.5'f, tile)
+    geometry.flowers.flowerCard(center, normal * size,
+      Up * size * 1.5'f, tile)
+  else:
+    geometry.flowers.flowerCard(anchor, right * size, vertical * size, tile)
+  let base =
+    if rooted: vec3(anchor.x * 0.88'f, 0.015'f, anchor.z * 0.88'f)
+    else: anchor - normal * size * 0.55'f
+  geometry.stems.tube([base, anchor], min(0.018'f, size * 0.04'f),
+    0.8'f, 4, 0, 0.65, endFraction = 0.3)
+  inc geometry.blooms
+
+proc flowerCanopy(geometry: var TreeGeometry, settings: TreeSettings) =
+  ## Anchors blossoms to actual leaf surfaces using an independent stream.
+  if settings.flowerKind == NoFlowers or settings.flowerDensity == 0:
+    return
+  var rng = initRand(settings.seed.int64 + 493_901)
+  for i in 0 ..< geometry.cards:
+    if geometry.blooms >= 240 or
+      rng.rand(1.0) > settings.flowerDensity.float64 * 0.48:
+        continue
+    var center, normal: Vec3
+    for j in 0 ..< LeafVertices:
+      let value = geometry.foliage.vertices[i * LeafVertices + j]
+      center += value.position / LeafVertices.float32
+      normal += value.normal
+    normal = normalize(normal)
+    if abs(normal.y) > 0.98'f:
+      normal = normalize(normal + vec3(0.2, 0, 0))
+    geometry.addFlower(settings, rng,
+      center + normal * settings.flowerSize * 0.28'f, normal)
+  if geometry.foliage.vertices.len >= geometry.cards * LeafVertices +
+    CapSlices + 1:
+      let start = geometry.cards * LeafVertices
+      let center = geometry.foliage.vertices[start].position
+      for i in 0 ..< max(1, round(settings.flowerDensity * 12).int):
+        let
+          rim = geometry.foliage.vertices[start + 1 + rng.rand(CapSlices - 1)]
+          anchor = mix(center, rim.position, rng.rand(0.75).float32)
+          direction = normalize(rim.normal + vec3(0.15, 0, 0.1))
+        geometry.addFlower(settings, rng,
+          anchor + direction * settings.flowerSize * 0.25'f, direction)
+
+proc crownVolume(mesh: var TreeMesh, radius, height: float32) =
+  ## Closes shrub interiors with a faceted ellipsoid beneath textured leaves.
+  const Slices = 10
+  var points: seq[Vec3]
+  for ring in 0 .. 4:
+    let
+      t = ring.float32 / 4.0'f
+      y = 0.02'f + height * t
+      spread = sqrt(max(0.015'f, 1.0'f - pow(t * 1.85'f - 0.9'f, 2)))
+    for i in 0 ..< Slices:
+      let angle = i.float32 * Tau / Slices.float32
+      points.add vec3(cos(angle) * radius * spread, y,
+        sin(angle) * radius * spread)
+  for ring in 0 ..< 4:
+    for i in 0 ..< Slices:
+      let
+        a = points[ring * Slices + i]
+        b = points[ring * Slices + (i + 1) mod Slices]
+        c = points[(ring + 1) * Slices + (i + 1) mod Slices]
+        d = points[(ring + 1) * Slices + i]
+        normal = normalize(cross(d - a, b - a))
+        start = mesh.vertices.len.uint32
+      for point in [a, b, c, d]:
+        discard mesh.vertex(point, normal, vec2(0.5))
+      mesh.quad(start, start + 3, start + 2, start + 1)
+  for ring in [0, 4]:
+    for i in 1 ..< Slices - 1:
+      let start = mesh.vertices.len.uint32
+      for j in [0, i, i + 1]:
+        discard mesh.vertex(points[ring * Slices + j],
+          (if ring == 0: -Up else: Up), vec2(0.5))
+      if ring == 0:
+        mesh.indices.add [start, start + 1, start + 2]
+      else:
+        mesh.indices.add [start, start + 2, start + 1]
+
+proc plantGeometry(settings: TreeSettings): TreeGeometry =
+  ## Builds low asymmetric shrubs and connected hedges from separate crowns.
+  let
+    hedge = settings.kind == Hedge
+    count =
+      if hedge:
+        clamp(ceil(settings.plantWidth / (settings.plantDepth * 0.6'f)).int,
+          2, 16)
+      else: 3
+  var rng = initRand(settings.seed.int64 + 126_317)
+  for i in 0 ..< count:
+    var local = settings
+    local.kind = Broadleaf
+    local.seed = (settings.seed + i * 173) mod 1_000_000_001
+    local.height = 1
+    local.crownBase = 0.015
+    local.crownHeight = settings.plantHeight *
+      (if i == 0: 1.0'f else: 0.8'f + rng.rand(0.2).float32)
+    local.crownRadius = min(settings.plantWidth, settings.plantDepth) *
+      (if hedge: 0.43'f else: 0.36'f)
+    local.crownCoverage = 1
+    local.crownShape = 0.5
+    local.stemClearance = 0.015
+    local.leafSize = min(0.55'f,
+      max(0.1'f, settings.plantHeight * 0.34'f)) *
+      settings.leafSize / 1.5'f
+    local.leafWidth = settings.leafWidth
+    local.rings = max(4, settings.rings div 2)
+    local.cardsPerRing = max(5, settings.cardsPerRing div 2)
+    local.packing = settings.packing * 0.75'f
+    local.capSize = 0.65
+    local.irregularity = max(0.12'f, settings.irregularity)
+    local.density = settings.density * 0.8'f
+    let
+      offset =
+        if hedge:
+          vec3((i.float32 / (count - 1).float32 - 0.5'f) *
+            max(0.0'f, settings.plantWidth - settings.plantDepth * 0.8'f),
+            0, rng.jitter(settings.plantDepth * 0.07'f))
+        else:
+          vec3((i.float32 - 1.0'f) * settings.plantWidth * 0.22'f,
+            0, (if i == 1: -0.1'f else: 0.1'f) * settings.plantDepth)
+      trunk = [vec3(0), Up]
+    var lobe: TreeGeometry
+    lobe.canopy(local, trunk)
+    lobe.crown.crownVolume(local.crownRadius * 1.05'f,
+      local.crownHeight * 0.97'f)
+    lobe.flowerCanopy(local)
+    result.foliage.appendMesh(lobe.foliage, offset)
+    result.flowers.appendMesh(lobe.flowers, offset)
+    result.stems.appendMesh(lobe.stems, offset)
+    result.crown.appendMesh(lobe.crown, offset)
+    result.cards += lobe.cards
+    result.blooms += lobe.blooms
+    result.omittedCards += lobe.omittedCards
+    result.shiftedCards += lobe.shiftedCards
+    result.bark.tube([offset, offset + Up * local.crownHeight * 0.5'f],
+      min(0.06'f, settings.plantHeight * 0.045'f),
+      1.2, 5, 0, settings.barkDensity)
+
+proc patchGeometry(settings: TreeSettings): TreeGeometry =
+  ## Grows stems and grounded leaf rosettes with a varied flower skyline.
+  var rng = initRand(settings.seed.int64 + 376_507)
+  let count = max(3, round(settings.flowerDensity *
+    (if settings.flowerKind == Sunflowers: 10.0'f else: 26.0'f)).int)
+  for i in 0 ..< count:
+    let
+      angle = i.float32 * 2.399963'f + rng.jitter(0.25'f)
+      radius = sqrt((i.float32 + 0.5'f) / count.float32) * 0.42'f
+      base = vec3(cos(angle) * radius * settings.plantWidth, 0.02,
+        sin(angle) * radius * settings.plantDepth)
+      height = settings.plantHeight * (0.6'f + rng.rand(0.4).float32)
+      direction = normalize(vec3(cos(angle), 1.1, sin(angle)))
+      center = base + Up * height
+    if settings.flowerKind != NoFlowers and settings.flowerDensity > 0:
+      result.addFlower(settings, rng, center, direction, rooted = true)
+    for j in 0 ..< 3:
+      let
+        phase = angle + j.float32 * Tau / 3.0'f
+        radial = vec3(cos(phase), 0, sin(phase))
+        size = min(0.45'f, settings.plantHeight * 0.4'f)
+        anchor = base + Up * size * 0.35'f
+      result.foliage.leafCard(anchor, radial, size, size * 0.7'f,
+        0.5, 0.1, 0, size, 7, 1, 0.015)
+      inc result.cards
+
+proc treeGeometry(settings: TreeSettings): TreeGeometry =
   ## Builds deterministic bark and foliage without touching GPU state.
   settings.validate()
   var
@@ -1092,6 +1384,18 @@ proc generateGeometry*(settings: TreeSettings): TreeGeometry =
     result.limb(settings, rng, origin, angle, length,
       radius, settings.forks)
   result.canopy(settings, trunk)
+  result.flowerCanopy(settings)
+
+proc generateGeometry*(settings: TreeSettings): TreeGeometry =
+  ## Builds deterministic trees, shrubs, hedges, or patches on the CPU.
+  settings.validate()
+  case settings.kind
+  of Bush, Hedge:
+    result = plantGeometry(settings)
+  of FlowerPatch:
+    result = patchGeometry(settings)
+  else:
+    result = treeGeometry(settings)
   result.minimum = vec3(Inf.float32)
   result.maximum = vec3(-Inf.float32)
   for vertex in result.bark.vertices:
@@ -1103,8 +1407,18 @@ proc generateGeometry*(settings: TreeSettings): TreeGeometry =
   for vertex in result.cut.vertices:
     result.minimum = min(result.minimum, vertex.position)
     result.maximum = max(result.maximum, vertex.position)
+  for vertex in result.flowers.vertices:
+    result.minimum = min(result.minimum, vertex.position)
+    result.maximum = max(result.maximum, vertex.position)
+  for vertex in result.stems.vertices:
+    result.minimum = min(result.minimum, vertex.position)
+    result.maximum = max(result.maximum, vertex.position)
+  for vertex in result.crown.vertices:
+    result.minimum = min(result.minimum, vertex.position)
+    result.maximum = max(result.maximum, vertex.position)
 
-proc loadMaterials*(textureStrength: float32): TreeMaterials =
+proc loadMaterials*(textureStrength: float32,
+    withFlowers = false): TreeMaterials =
   ## Loads leaf, repeating bark, and cut-wood textures for the tree materials.
   var atlas, bark, rings: Image
   try:
@@ -1157,6 +1471,30 @@ proc loadMaterials*(textureStrength: float32): TreeMaterials =
     name: "Stump rings", baseColor: rings, baseColorSampler: leafSampler,
     baseColorFactor: color(1, 1, 1, 1), roughnessFactor: 1,
     alphaMode: OpaqueAlphaMode)
+  let white = newImage(GeneratorTextureSize, GeneratorTextureSize)
+  white.fill(color(1, 1, 1, 1))
+  result.crown = Material(name: "Shrub core", baseColor: white,
+    baseColorSampler: leafSampler, baseColorFactor: color(1, 1, 1, 1),
+    roughnessFactor: 1, alphaMode: OpaqueAlphaMode)
+  if withFlowers:
+    var flowers: Image
+    try:
+      flowers = loadTexturePng(TreegenFlowerTexture)
+    except IOError, PixieError:
+      raise newException(TreegenError, "Cannot load flowers: " &
+        getCurrentExceptionMsg())
+    if flowers.width != GeneratorTextureSize or
+      flowers.height != GeneratorTextureSize:
+        raise newException(TreegenError, "Flower atlas must be 512 by 512")
+    result.flowers = Material(
+      name: "Colored flowers", baseColor: flowers,
+      baseColorSampler: leafSampler, baseColorFactor: color(1, 1, 1, 1),
+      roughnessFactor: 1, alphaMode: MaskAlphaMode,
+      alphaCutoff: 0.45, doubleSided: true)
+    result.stems = Material(
+      name: "Green stems", baseColor: bark, baseColorSampler: barkSampler,
+      baseColorFactor: color(0.32, 0.5, 0.08, 1), roughnessFactor: 1,
+      alphaMode: OpaqueAlphaMode)
 
 proc tint*(materials: TreeMaterials, settings: TreeSettings) =
   ## Updates material factors without rebuilding tree geometry.
@@ -1164,6 +1502,27 @@ proc tint*(materials: TreeMaterials, settings: TreeSettings) =
     settings.barkColor.x, settings.barkColor.y, settings.barkColor.z, 1)
   materials.foliage.baseColorFactor = color(
     settings.leafColor.x, settings.leafColor.y, settings.leafColor.z, 1)
+  if materials.flowers != nil:
+    materials.flowers.baseColorFactor = color(
+      settings.flowerColor.x, settings.flowerColor.y,
+      settings.flowerColor.z, 1)
+  if materials.crown != nil:
+    materials.crown.baseColorFactor = color(settings.leafColor.x * 0.65'f,
+      settings.leafColor.y * 0.65'f, settings.leafColor.z * 0.65'f, 1)
+
+proc copyMaterials*(materials: TreeMaterials): TreeMaterials =
+  ## Copies all tintable materials while retaining their shared image data.
+  template clone(target, source: untyped) =
+    ## Allocates a distinct factor container for each existing material.
+    if source != nil:
+      new(target)
+      target[] = source[]
+  clone(result.bark, materials.bark)
+  clone(result.foliage, materials.foliage)
+  clone(result.cut, materials.cut)
+  clone(result.flowers, materials.flowers)
+  clone(result.stems, materials.stems)
+  clone(result.crown, materials.crown)
 
 proc primitive(mesh: TreeMesh, material: Material): Primitive =
   ## Converts flat generator data into the shared toon renderer's format.
@@ -1180,16 +1539,28 @@ proc treeNode*(geometry: TreeGeometry, materials: TreeMaterials): Node =
   ## Makes one node with opaque bark, optional cut wood, and cutout leaves.
   result = Node(name: "Generated tree", visible: true,
     scale: vec3(1), rot: quat(0, 0, 0, 1), mesh: Mesh(name: "Tree"))
-  result.mesh.primitives.add geometry.bark.primitive(materials.bark)
+  if geometry.bark.vertices.len > 0:
+    result.mesh.primitives.add geometry.bark.primitive(materials.bark)
   if geometry.foliage.vertices.len > 0:
     result.mesh.primitives.add geometry.foliage.primitive(materials.foliage)
   if geometry.cut.vertices.len > 0:
     result.mesh.primitives.add geometry.cut.primitive(materials.cut)
+  if geometry.flowers.vertices.len > 0:
+    if materials.flowers == nil or materials.stems == nil:
+      raise newException(TreegenError,
+        "Flower geometry requires loadMaterials(withFlowers = true)")
+    result.mesh.primitives.add geometry.flowers.primitive(materials.flowers)
+    result.mesh.primitives.add geometry.stems.primitive(materials.stems)
+  if geometry.crown.vertices.len > 0:
+    if materials.crown == nil:
+      raise newException(TreegenError, "Shrub geometry requires a crown material")
+    result.mesh.primitives.add geometry.crown.primitive(materials.crown)
 
 proc generate*(settings: TreeSettings): Node =
   ## Builds a renderable tree node with its tinted materials and textures.
   let
     geometry = generateGeometry(settings)
-    materials = loadMaterials(settings.barkTexture)
+    materials = loadMaterials(settings.barkTexture,
+      withFlowers = settings.flowerKind != NoFlowers)
   materials.tint(settings)
   treeNode(geometry, materials)

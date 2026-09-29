@@ -22,6 +22,8 @@ type
     spawnIntervalTicks*: int32 = DefaultSpawnIntervalTicks
     playerSlot*: int32
     dayCount*: int32
+    headlessTickRate*: int32
+    waitForLlm*: bool
     when Preset isnot void:
       mapPreset*: Preset
 
@@ -50,7 +52,9 @@ proc gameConfig*[Preset](config: MatchConfig[Preset]): GameConfig =
     maxTicks: config.maxTicks,
     spawnIntervalTicks: config.spawnIntervalTicks,
     playerSlot: config.playerSlot,
-    dayCount: config.dayCount
+    dayCount: config.dayCount,
+    headlessTickRate: config.headlessTickRate,
+    waitForLlm: config.waitForLlm
   )
 
 proc withMapPreset*[Preset](
@@ -64,6 +68,8 @@ proc withMapPreset*[Preset](
     spawnIntervalTicks: config.spawnIntervalTicks,
     playerSlot: config.playerSlot,
     dayCount: config.dayCount,
+    headlessTickRate: config.headlessTickRate,
+    waitForLlm: config.waitForLlm,
     mapPreset: preset
   )
 

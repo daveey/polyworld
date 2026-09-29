@@ -14,7 +14,7 @@ const
 
 type
   PanelTab = enum
-    Trunk, Branches, Canopy, Leaves, Colors
+    Trunk, Branches, Canopy, Leaves, Flowers, Colors
   Options = object
     preset, seed, frames: int
     yaw, pitch: float32
@@ -83,6 +83,7 @@ proc geometryKey(settings: TreeSettings): TreeSettings =
   result = settings
   result.barkColor = vec3(0)
   result.leafColor = vec3(0)
+  result.flowerColor = vec3(0)
   result.barkTexture = 0
 
 proc releaseTrees(app: var TreeApp) =
@@ -95,7 +96,8 @@ proc releaseTrees(app: var TreeApp) =
 proc rebuild(app: var TreeApp) =
   ## Regenerates the selected seed and optional two neighboring seeds.
   app.releaseTrees()
-  app.materials = loadMaterials(app.settings.barkTexture)
+  app.materials = loadMaterials(app.settings.barkTexture,
+    withFlowers = app.settings.flowerKind != NoFlowers)
   app.materials.tint(app.settings)
   app.geometry = generateGeometry(app.settings)
   app.node = treeNode(app.geometry, app.materials)
@@ -207,6 +209,9 @@ template control(caption: string, target: untyped, low, high: untyped) =
 proc trunkControls(app: var TreeApp, window: Window) =
   ## Exposes trunk proportions, polygon resolution, and the root flare.
   let sk = app.sk
+  if app.settings.kind in {Bush, Hedge, FlowerPatch}:
+    text("Set ground-plant dimensions in Canopy.")
+    return
   if app.settings.kind == Stump:
     control("Cut height", app.settings.height, 0.3'f, 3.0'f)
   else:
@@ -228,6 +233,9 @@ proc trunkControls(app: var TreeApp, window: Window) =
 proc branchControls(app: var TreeApp, window: Window) =
   ## Exposes branch layout, growth direction, and bounded fork depth.
   let sk = app.sk
+  if app.settings.kind in {Bush, Hedge, FlowerPatch}:
+    text("Ground plants use short concealed stems.")
+    return
   if app.settings.kind == Stump:
     text("Stumps keep the trunk and roots.")
     text("Adjust Cut height in the Trunk tab.")
@@ -251,6 +259,20 @@ proc canopyControls(app: var TreeApp, window: Window) =
   let sk = app.sk
   if app.settings.kind in {Leafless, Stump}:
     text("This tree type has no canopy.")
+    return
+  if app.settings.kind in {Bush, Hedge, FlowerPatch}:
+    text("Bush size")
+    let previous = app.settings.bushSize
+    dropDown(app.settings.bushSize, [LowBush, SmallBush, MediumBush, LargeBush])
+    if previous != app.settings.bushSize:
+      app.settings.setBushSize(app.settings.bushSize)
+    control("Plant width / hedge length", app.settings.plantWidth, 0.2'f, 12.0'f)
+    control("Plant depth", app.settings.plantDepth, 0.2'f, 5.0'f)
+    control("Plant height", app.settings.plantHeight, 0.12'f, 3.0'f)
+    if app.settings.kind != FlowerPatch:
+      control("Leaf density", app.settings.density, 0.0'f, 2.0'f)
+      control("Leaf overlap", app.settings.packing, 0.5'f, 3.0'f)
+      control("Irregularity", app.settings.irregularity, 0.0'f, 0.65'f)
     return
   control("Crown radius", app.settings.crownRadius, 0.3'f, 5.0'f)
   control("Crown height", app.settings.crownHeight, 0.5'f, 12.0'f)
@@ -276,7 +298,7 @@ proc leafControls(app: var TreeApp, window: Window) =
   if app.settings.kind in {Leafless, Stump}:
     text("This tree type has no foliage.")
     return
-  if app.settings.kind == Broadleaf:
+  if app.settings.kind != Evergreen:
     text("Leaf trim")
     dropDown(app.settings.leafTile,
       [MixedLeaves, SoftLeaves, LobedLeaves, PointedLeaves])
@@ -297,6 +319,21 @@ proc leafControls(app: var TreeApp, window: Window) =
   else:
     text("Cards radiate out from each ring.")
   text("Their attachment stays at the top.")
+
+proc flowerControls(app: var TreeApp, window: Window) =
+  ## Exposes bloom artwork, amount, dimensions, and independent petal tint.
+  let sk = app.sk
+  text("Flower type")
+  dropDown(app.settings.flowerKind, [NoFlowers, Daisies, BlueFlowers,
+    PinkFlowers, GoldenFlowers, Lavender, BlueSpikes, Sunflowers,
+    WhiteBlossoms, PinkBlossoms, PurpleBlossoms, GoldenBlossoms, MixedFlowers])
+  control("Flower density", app.settings.flowerDensity, 0.0'f, 1.0'f)
+  control("Flower size", app.settings.flowerSize, 0.08'f, 1.5'f)
+  control("Petal red", app.settings.flowerColor.x, 0.0'f, 1.0'f)
+  control("Petal green", app.settings.flowerColor.y, 0.0'f, 1.0'f)
+  control("Petal blue", app.settings.flowerColor.z, 0.0'f, 1.0'f)
+  text("White tint preserves the painted flower colors.")
+  text($app.geometry.blooms & " blooms")
 
 proc colorControls(app: var TreeApp, window: Window) =
   ## Exposes independent bark and leaf RGB factors and scene lighting.
@@ -332,10 +369,12 @@ proc drawUi(app: var TreeApp, window: Window) =
     subWindow("Tree generator", app.showPanel, PanelPosition,
       vec2(PanelWidth, window.size.y.float32 - 24)):
         text("TREEGEN  /  procedural tree lab")
-        text($app.geometry.cards & " leaf cards   " &
-          $((app.geometry.bark.indices.len +
+        let triangles = (app.geometry.bark.indices.len +
           app.geometry.foliage.indices.len +
-          app.geometry.cut.indices.len) div 3) & " triangles")
+          app.geometry.cut.indices.len + app.geometry.flowers.indices.len +
+          app.geometry.stems.indices.len + app.geometry.crown.indices.len) div 3
+        text($app.geometry.cards & " leaf cards   " &
+          $triangles & " triangles")
         text("Presets")
         block:
           let previous = app.presetName
@@ -365,6 +404,19 @@ proc drawUi(app: var TreeApp, window: Window) =
               app.tab = Trunk
             elif previous == Stump:
               app.settings.height = max(app.settings.height, 1.0'f)
+        group "ground plants":
+          box RowWidth, 32
+          layout LeftToRight
+          let previous = app.settings.kind
+          radioButton("Bush", app.settings.kind, Bush)
+          radioButton("Hedge", app.settings.kind, Hedge)
+          radioButton("Flowers", app.settings.kind, FlowerPatch)
+          if app.settings.kind != previous:
+            app.settings.setBushSize(app.settings.bushSize)
+            app.tab = Canopy
+            if app.settings.kind == FlowerPatch and
+              app.settings.flowerKind == NoFlowers:
+                app.settings.flowerKind = Daisies
         text("Seed: " & $app.settings.seed)
         button "Randomize Seed":
           app.randomizeSeed()
@@ -379,9 +431,10 @@ proc drawUi(app: var TreeApp, window: Window) =
           box RowWidth, 32
           layout LeftToRight
           radioButton("Leaves", app.tab, Leaves)
+          radioButton("Flowers", app.tab, Flowers)
           radioButton("Colors", app.tab, Colors)
         frame "parameters":
-            size(RowWidth, max(120.0'f, window.size.y.float32 - 675))
+            size(RowWidth, max(120.0'f, window.size.y.float32 - 707))
             case app.tab
             of Trunk:
               app.trunkControls(window)
@@ -393,6 +446,8 @@ proc drawUi(app: var TreeApp, window: Window) =
               app.leafControls(window)
             of Colors:
               app.colorControls(window)
+            of Flowers:
+              app.flowerControls(window)
         group "file actions":
           box RowWidth, 32
           layout LeftToRight

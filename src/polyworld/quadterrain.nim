@@ -40,6 +40,9 @@ var
   shadowSoftness: Uniform[float32]
   shadingStrength: Uniform[float32]
   envLightLevel: Uniform[float32]
+  ambientMap: Uniform[Sampler2D]
+  ambientBounds: Uniform[Vec4]
+  ambientEnabled: Uniform[float32]
 
 const EnvironmentExposure = 1.15'f32
   ## Lifts the palette-graded environment back to the brightness the old
@@ -99,6 +102,23 @@ proc sampleSunShadow(shadowPos: Vec3): float32 =
     let lit = mix(
       sunLitFraction0(shadowPos), sunLitFraction1(shadowPos), shadowStep)
     result = 1.0'f - (1.0'f - lit) * shadowStrength
+
+proc ambientVisibility(position: Vec3): float32 =
+  ## Samples baked sky visibility at the receiver height, fading above the map.
+  result = 1.0'f
+  if ambientEnabled > 0.5'f:
+    let uv = (vec2(position.x, position.z) - ambientBounds.xy) / ambientBounds.zw
+    if uv.x >= 0.0'f and uv.x <= 1.0'f and uv.y >= 0.0'f and uv.y <= 1.0'f:
+      let values = texture(ambientMap, uv)
+      if position.y < 1.0'f:
+        result = mix(values.x, values.y, clamp(position.y, 0.0'f, 1.0'f))
+      elif position.y < 3.0'f:
+        result = mix(values.y, values.z, (position.y - 1.0'f) / 2.0'f)
+      elif position.y < 7.0'f:
+        result = mix(values.z, values.w, (position.y - 3.0'f) / 4.0'f)
+      else:
+        result = mix(values.w, 1.0'f, clamp((position.y - 7.0'f) / 4.0'f,
+          0.0'f, 1.0'f))
 
 proc envShade(albedo, normal: Vec3, sunFactor: float32): Vec3 =
   ## Palette-graded lighting: half-lambert toward the shared light scaled by
@@ -467,7 +487,8 @@ proc terrainFrag(
         color = vec3(0.88, 0.10, 0.08)
   # Palette-graded lighting: smooth vertex normals across connected
   # terrain, hard breaks at cliffs and walls, sun shadows folded in.
-  color = envShade(color, vertNormal, sampleSunShadow(shadowPos))
+  color = envShade(color, vertNormal, sampleSunShadow(shadowPos)) *
+    ambientVisibility(worldPos)
   let
     visibilityUv = vec2(
       (tilePos.x + visibilityOffset) * visibilityScale,
@@ -593,7 +614,8 @@ proc propFrag(
       texture(visibilityTex, visibilityUv).x
     )
     litColor = envShade(
-      fragmentColor, fragmentNormal, sampleSunShadow(shadowPos))
+      fragmentColor, fragmentNormal, sampleSunShadow(shadowPos)) *
+      ambientVisibility(fragmentPosition)
     gray = dot(litColor, vec3(0.30, 0.59, 0.11)) * 0.32
   fragColor = vec4(
     (litColor.x * visibility + gray * (1.0 - visibility)) * propTint.x,
@@ -658,7 +680,8 @@ proc treeFrag(
       texture(visibilityTex, visibilityUv).x
     )
     litColor = envShadeTwoSided(
-      texel.xyz * fragBrightness, fragmentNormal, sampleSunShadow(shadowPos))
+      texel.xyz * fragBrightness, fragmentNormal, sampleSunShadow(shadowPos)) *
+      ambientVisibility(fragmentPosition)
     gray = dot(litColor, vec3(0.30, 0.59, 0.11)) * 0.32
   fragColor = vec4(
     litColor.x * visibility + gray * (1.0 - visibility),
@@ -717,7 +740,8 @@ proc texturedPropFrag(
     paint = vec3(
       texel.x * fragTint.x, texel.y * fragTint.y, texel.z * fragTint.z)
     litColor = envShadeTwoSided(
-      paint, fragmentNormal, sampleSunShadow(shadowPos))
+      paint, fragmentNormal, sampleSunShadow(shadowPos)) *
+      ambientVisibility(fragmentPosition)
     gray = dot(litColor, vec3(0.30, 0.59, 0.11)) * 0.32
   fragColor = vec4(
     litColor.x * visibility + gray * (1.0 - visibility),
@@ -754,7 +778,8 @@ proc texturedInstantFrag(
       texel.y * propTint.y * fragTint.y,
       texel.z * propTint.z * fragTint.z)
     litColor = envShadeTwoSided(
-      paint, fragmentNormal, sampleSunShadow(shadowPos))
+      paint, fragmentNormal, sampleSunShadow(shadowPos)) *
+      ambientVisibility(fragmentPosition)
     gray = dot(litColor, vec3(0.30, 0.59, 0.11)) * 0.32
   fragColor = vec4(
     litColor.x * visibility + gray * (1.0 - visibility),
@@ -802,18 +827,25 @@ proc compileProgram(vertexSource, fragmentSource: string): GLuint =
     quit("terrain program failed:\n" & log)
 
 var
+  ambientTexture: GLuint
+  ambientOrigin: Vec2
+  ambientSpan = vec2(1)
   environmentHighlight = ToonPalettes[0].highlight
   environmentShadow = ToonPalettes[0].shadow
   environmentLight = ToonLightDirection  # direction the light travels
 
 type EnvLocations = object
   highlight, shadow, light, level: GLint
+  ambient, bounds, ambientOn: GLint
 
 proc envLocations(program: GLuint): EnvLocations =
   result.highlight = glGetUniformLocation(program, "envHighlight")
   result.shadow = glGetUniformLocation(program, "envShadow")
   result.light = glGetUniformLocation(program, "envLightDirection")
   result.level = glGetUniformLocation(program, "envLightLevel")
+  result.ambient = glGetUniformLocation(program, "ambientMap")
+  result.bounds = glGetUniformLocation(program, "ambientBounds")
+  result.ambientOn = glGetUniformLocation(program, "ambientEnabled")
 
 proc setEnvUniforms(loc: EnvLocations) =
   ## Uploads the environment palette to the program currently in use.
@@ -825,6 +857,13 @@ proc setEnvUniforms(loc: EnvLocations) =
   glUniform3f(loc.shadow, s.r, s.g, s.b)
   glUniform3f(loc.light, l.x, l.y, l.z)
   glUniform1f(loc.level, lightLevel)
+  glUniform1f(loc.ambientOn, if ambientTexture != 0: 1 else: 0)
+  glUniform4f(loc.bounds, ambientOrigin.x, ambientOrigin.y,
+    ambientSpan.x, ambientSpan.y)
+  glActiveTexture(GL_TEXTURE9)
+  glBindTexture(GL_TEXTURE_2D, ambientTexture)
+  glUniform1i(loc.ambient, 9)
+  glActiveTexture(GL_TEXTURE0)
 
 proc setEnvironmentPalette*(
     highlight, shadow: Color, lightDirection = ToonLightDirection
@@ -2224,6 +2263,32 @@ proc uploadTerrainVisibility*(
     unsafeAddr values[0]
   )
   glBindTexture(GL_TEXTURE_2D, 0)
+
+proc uploadAmbientOcclusion*(
+  values: openArray[uint8], size: int, origin, span: Vec2
+) =
+  ## Uploads sky visibility at heights 0, 1, 3 and 7, packed in RGBA channels.
+  if size <= 0 or values.len != size * size * 4 or span.x <= 0 or span.y <= 0:
+    raise newException(QuadTerrainError, "Invalid ambient occlusion field.")
+  if ambientTexture == 0:
+    glGenTextures(1, ambientTexture.addr)
+  glActiveTexture(GL_TEXTURE0)
+  glBindTexture(GL_TEXTURE_2D, ambientTexture)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR.GLint)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR.GLint)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE.GLint)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE.GLint)
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8.GLint, size.GLsizei, size.GLsizei,
+    0, GL_RGBA, GL_UNSIGNED_BYTE, unsafeAddr values[0])
+  glBindTexture(GL_TEXTURE_2D, 0)
+  ambientOrigin = origin
+  ambientSpan = span
+
+proc clearAmbientOcclusion*() =
+  ## Releases the optional map and restores unoccluded ambient lighting.
+  if ambientTexture != 0:
+    glDeleteTextures(1, ambientTexture.addr)
+    ambientTexture = 0
 
 proc uploadGroundMask*(values: openArray[uint8], size: int) =
   ## Uploads a square two-channel coverage mask (stone, dirt) the terrain
@@ -4107,7 +4172,8 @@ proc drawTexturedBatch(batch: TexturedBatch, mvp: Mat4) =
   glDrawArrays(GL_TRIANGLES, 0, (batch.mesh.len div 12).GLsizei)
   glBindVertexArray(0)
 
-proc drawTerrain*(viewProjection: Mat4, showEdges = false) =
+proc drawTerrain*(viewProjection: Mat4, showEdges = false,
+    drawGround = true) =
   ## Opaque terrain and prop passes. Disables back-face culling itself (the
   ## gltf PBR renderer's beginFrame leaves culling on and the terrain mesh
   ## is not consistently wound) and enables the depth test.
@@ -4135,7 +4201,8 @@ proc drawTerrain*(viewProjection: Mat4, showEdges = false) =
   glBindTexture(GL_TEXTURE_2D_ARRAY, terrainTextureArray)
   glUniform1i(terrainTexturesLocation, 0)
   glBindVertexArray(vertexArray)
-  glDrawArrays(GL_TRIANGLES, 0, meshVertexCount.GLsizei)
+  if drawGround:
+    glDrawArrays(GL_TRIANGLES, 0, meshVertexCount.GLsizei)
   glBindVertexArray(0)
 
   if propMesh.len > 0:

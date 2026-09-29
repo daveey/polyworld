@@ -77,9 +77,9 @@ ARM and x86 coverage. `tools/replay_probe.html` captures the Softmax iframe prot
 CTA stores authoritative per-hero banked gold and return flags.
 They are cloned, restored and hashed with the world. Surviving returned heroes tied
 for the most banked gold receive 1; every other hero receives 0. Light vs Dark
-also emits binary scores. GotA emits lifetime XP minus 200 per simulated minute
-as integer scores, rounded down and clamped to zero, in zero-based platform
-slot order.
+also emits binary scores. GotA emits Emmett's Glory: lifetime XP per elapsed
+minute for the winning team, rounded down to integers, and zero for losses,
+draws, or timeouts, in zero-based platform slot order.
 GotA uses random pairings and averages scores within each round, then updates
 standings with 15% of the new round average and 85% of the previous standing.
 Its league scheduler must preserve `strategy: "team_n"`, `team_count: 2`,

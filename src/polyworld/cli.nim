@@ -43,6 +43,10 @@ type
       ## Graphical window waits for the display when true.
     playerSlot*: int32
       ## One-based human controller slot. Zero means bots fill every slot.
+    headlessTickRate*: int32
+      ## Zero runs at unlimited speed; positive values pace wall-clock ticks.
+    waitForLlm*: bool
+      ## Waits for the whole tick's LLM request batch before advancing.
 
 proc fail*(message: string) {.noreturn.} =
   ## Prints one command-line error and exits.
@@ -228,6 +232,30 @@ proc takeCommonFlag*(
     argument: string
 ): bool =
   ## Handles one shared flag. Returns false when the game should try it.
+  if argument.startsWith("--headless-tick-rate:") or
+    argument.startsWith("--headless-tick-rate=") or
+    argument == "--headless-tick-rate":
+      let text =
+        if argument == "--headless-tick-rate":
+          arguments.argumentValue(index, argument)
+        else:
+          argument[21 .. ^1]
+      options.headlessTickRate = parseInt32(text, "--headless-tick-rate")
+      if options.headlessTickRate < 0 or options.headlessTickRate > 10000:
+        fail("--headless-tick-rate must be 0 .. 10000")
+      return true
+  if argument.startsWith("--llm-mode:") or
+    argument.startsWith("--llm-mode=") or argument == "--llm-mode":
+      let text =
+        if argument == "--llm-mode":
+          arguments.argumentValue(index, argument)
+        else:
+          argument[11 .. ^1]
+      case text.toLowerAscii()
+      of "async": options.waitForLlm = false
+      of "barrier": options.waitForLlm = true
+      else: fail("--llm-mode must be async or barrier")
+      return true
   if argument.startsWith("--bot:"):
     options.botGroups.addBotSpec(argument[6 .. ^1])
     return true

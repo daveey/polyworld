@@ -178,7 +178,10 @@ proc runLane(args: LaneWorkerArgs) {.thread.} =
             return 0
           doAssert action in 0 ..< GotaActionCount,
             "action outside GotaActionCount"
+          # Other lanes ticked while this one waited; point the shared
+          # globals back at this match before its heroes continue.
           activeGame = game
+          bindNavigation(game.world)
           action,
         1)
       inc limits.maxHostFunctions

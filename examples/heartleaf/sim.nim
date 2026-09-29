@@ -10,6 +10,7 @@ import
   polyworld/[bodies, hashes, pathing, profiles, rngs, tapes],
   content,
   maps,
+  obstacles,
   replays
 
 const
@@ -20,6 +21,7 @@ const
   VillagerBodyRadius = 0.22'fx
   BodyTurnRate = 0.35'fx
   PathArrive = 0.35'fx
+  PathTurn = 0.001'fx
   TalkCircleRadius = 1.5'fx
   TalkCircleRotations = 8
   TalkApproachSamples = 16
@@ -177,7 +179,25 @@ var
   pathTiles: seq[PathTile]
 
 proc hlfPathWalkable(layer, x, z: int): bool {.nimcall.} =
+  ## Reads the generated map without depending on renderer terrain state.
   layer == 0 and pathWorld.terrainOpen(int32(x), int32(z))
+
+proc hlfPathClearance(first, last: PathTile): bool {.nimcall.} =
+  ## Keeps both A* edges and pulled paths clear of thin fence rails.
+  if first.layer != 0 or last.layer != 0:
+    return false
+  let
+    a = tile2(first.x, first.z)
+    b = tile2(last.x, last.z)
+  if chebyshev(a, b) == 1:
+    pathWorld.map.canStep(a, b)
+  else:
+    pathWorld.map.propsClear(a, b)
+
+proc hlfPathTerrain(layer, x, z: int): bool {.nimcall.} =
+  ## Leaves sub-tile obstacles to the precise clearance test during smoothing.
+  layer == 0 and inGrid(x.int32, z.int32) and
+    pathWorld.map.terrain[tileIndex(x.int32, z.int32)] != 0
 
 proc hlfPathEnterCost(layer, x, z: int): int32 {.nimcall.} =
   if layer != 0 or not inGrid(int32(x), int32(z)):
@@ -188,21 +208,102 @@ proc hlfPathEnterCost(layer, x, z: int): int32 {.nimcall.} =
   else:
     0
 
-proc hlfTilesWalkable(pos: FixedVec2): bool {.nimcall.} =
-  ## Terrain only; villagers separate as circles.
+proc townPoint(pos: FixedVec2): tuple[x, z: int32] =
+  ## Converts body coordinates to the obstacle map's integer town origin.
+  (
+    int32(int64(int32(pos.x)) * ObstacleUnits div FixedScale) -
+      (GridSide div 2 * ObstacleUnits + ObstacleUnits div 2),
+    int32(int64(int32(pos.y)) * ObstacleUnits div FixedScale) -
+      (GridSide div 2 * ObstacleUnits + ObstacleUnits div 2)
+  )
+
+proc positionOpen*(w: World, pos: FixedVec2): bool =
+  ## Checks terrain and the villager's radius against solid village props.
   let (x, z) = cell(pos)
-  walkWorld != nil and walkWorld.terrainOpen(int32(x), int32(z))
+  if not inGrid(x, z) or w.map.terrain[tileIndex(x, z)] == 0:
+    return false
+  let point = townPoint(pos)
+  w.map.obstacles.obstaclesClear(point.x, point.z, point.x, point.z)
+
+proc travelClear*(
+  w: World, first, last: FixedVec2, clearance = VillagerClearance
+): bool =
+  ## Sweeps the whole move so narrow rails cannot be crossed within a tile.
+  let
+    a = townPoint(first)
+    b = townPoint(last)
+  if not w.map.obstacles.obstaclesClear(a.x, a.z, b.x, b.z, clearance):
+    return false
+  proc terrain(x, z: int32): bool =
+    ## Reads only floor and house tiles during exact grid traversal.
+    inGrid(x, z) and w.map.terrain[tileIndex(x, z)] != 0
+  let
+    start = cell(first)
+    finish = cell(last)
+    dx = int64(int32(last.x)) - int32(first.x)
+    dz = int64(int32(last.y)) - int32(first.y)
+    sx = cmp(dx, 0).int32
+    sz = cmp(dz, 0).int32
+  if not terrain(start.x, start.z) or not terrain(finish.x, finish.z):
+    return false
+  var
+    x = start.x
+    z = start.z
+    nextX =
+      if sx > 0: int64(x + 1) * FixedScale - int32(first.x)
+      else: int64(int32(first.x)) - int64(x) * FixedScale
+    nextZ =
+      if sz > 0: int64(z + 1) * FixedScale - int32(first.y)
+      else: int64(int32(first.y)) - int64(z) * FixedScale
+  while x != finish.x or z != finish.z:
+    let
+      crossX = nextX * abs(dz)
+      crossZ = nextZ * abs(dx)
+      takeX = sx != 0 and (sz == 0 or crossX <= crossZ)
+      takeZ = sz != 0 and (sx == 0 or crossZ <= crossX)
+    if takeX and takeZ and
+      (not terrain(x + sx, z) or not terrain(x, z + sz)):
+        return false
+    if takeX:
+      x += sx
+      nextX += FixedScale
+    if takeZ:
+      z += sz
+      nextZ += FixedScale
+    if not terrain(x, z):
+      return false
+  true
+
+proc hlfTilesWalkable(pos: FixedVec2): bool {.nimcall.} =
+  ## Keeps ordinary movement and villager separation outside solid scenery.
+  walkWorld != nil and walkWorld.positionOpen(pos)
 
 proc findPath(
-    w: World, start, goal: Tile2, path: var seq[Tile2]
+    w: World, position: FixedVec2, goal: Tile2, path: var seq[Tile2]
 ): bool {.measure.} =
   ## Asks the library for a route and stores string-pulled waypoints in walk
   ## order. Returns whether the goal was reached; on failure `path` holds
   ## the best partial route, still worth walking.
   path.setLen(0)
-  if not inGrid(start) or not inGrid(goal):
+  let origin = cell(position)
+  if not inGrid(origin.x, origin.z) or not inGrid(goal):
+    return false
+  var
+    start = NoTile
+    bestDistance = int64.high
+  for dz in -2'i32 .. 2'i32:
+    for dx in -2'i32 .. 2'i32:
+      let tile = tile2(origin.x + dx, origin.z + dz)
+      if not w.terrainOpen(tile.x.int32, tile.y.int32):
+        continue
+      let distance = lengthSquared(tileCenter(tile) - position)
+      if distance < bestDistance and w.travelClear(position, tileCenter(tile)):
+        start = tile
+        bestDistance = distance
+  if start == NoTile:
     return false
   if start == goal:
+    path.add goal
     return true
   inc pathSearches
   pathWorld = w
@@ -216,13 +317,15 @@ proc findPath(
     neighbors: EightNeighbors,
     walkable: hlfPathWalkable,
     enterCost: hlfPathEnterCost,
+    clearance: hlfPathClearance,
+    cutCorners: true,
     maxExpansions: MaxPathExpansions,
     orthogonalCost: OrthogonalCost,
     diagonalCost: DiagonalCost,
     partial: true
   ), pathTiles)
   pathExpansions += found.expansions
-  let pulled = smoothPathTiles(pathTiles)
+  let pulled = smoothPathTiles(pathTiles, hlfPathTerrain, hlfPathClearance)
   path.setLen(pulled.len)
   for i, tile in pulled:
     path[i] = tile2(int32(tile.x), int32(tile.z))
@@ -289,7 +392,7 @@ proc servePathQueue(w: World) {.measure.} =
     let v = w.villagers[request.slot]
     if not v.hasGoal or v.goal != request.goal or v.inHouse >= 0:
       continue
-    let complete = w.findPath(v.tile, v.goal, v.path)
+    let complete = w.findPath(v.body.pos, v.goal, v.path)
     v.pathGoal = v.goal
     v.pathIndex = 0
     if not complete and v.path.len == 0:
@@ -326,13 +429,15 @@ proc waypointPosition(v: Villager, tile: Tile2): FixedVec2 =
     result += v.goalOffset
 
 proc arrivedAt(v: Villager, tile: Tile2): bool =
-  ## Keeps fractional destinations precise while allowing broad path turns.
+  ## Keeps narrow turns precise and leaves room for others at shared goals.
   let radius =
     if v.hasGoal and tile == v.goal and
         v.goalOffset != FixedVec2Zero:
       fixed(1, 1000)
-    else:
+    elif v.hasGoal and tile == v.goal:
       PathArrive
+    else:
+      PathTurn
   length(v.waypointPosition(tile) - v.body.pos) <= radius
 
 proc steerVillager(w: World, slot: int32, toward: FixedVec2) =
@@ -341,6 +446,8 @@ proc steerVillager(w: World, slot: int32, toward: FixedVec2) =
   let v = w.villagers[slot]
   let before = v.body.pos
   steer(v.body, toward, moveSpeed(), BodyTurnRate, hlfTilesWalkable)
+  if not w.travelClear(before, v.body.pos):
+    v.body.pos = before
   v.applyBody()
   if v.body.pos == before:
     inc v.blockedTicks
@@ -357,14 +464,21 @@ proc advanceMovement(w: World, slot: int32) =
     return
   if v.arrivedAt(v.goal):
     return
-  if v.tile == v.goal:
-    w.steerVillager(
-      slot, v.waypointPosition(v.goal) - v.body.pos)
-    return
+  if v.tile == v.goal and
+    w.travelClear(v.body.pos, v.waypointPosition(v.goal)):
+      w.steerVillager(
+        slot, v.waypointPosition(v.goal) - v.body.pos)
+      return
   if v.path.len == 0:
     w.requestPath(slot)
     return
   while v.pathIndex < int32(v.path.len):
+    if v.pathIndex + 1 < int32(v.path.len) and
+      length(v.waypointPosition(v.path[v.pathIndex]) - v.body.pos) < FixedOne and
+      w.travelClear(v.body.pos,
+        v.waypointPosition(v.path[v.pathIndex + 1]), NavigationClearance):
+        inc v.pathIndex
+        continue
     let waypoint = v.path[v.pathIndex]
     if v.arrivedAt(waypoint):
       inc v.pathIndex
@@ -601,6 +715,11 @@ proc applyMove*(w: World, player, x, y: int32,
   let v = w.villagers[player]
   if v.inHouse >= 0 or not w.terrainOpen(x, y):
     return false
+  if not w.positionOpen(tileCenter(tile2(x, y)) + offset):
+    return false
+  if not w.travelClear(tileCenter(tile2(x, y)),
+    tileCenter(tile2(x, y)) + offset):
+      return false
   v.clearOrder(false)
   v.order = MoveOrder
   w.setGoal(player, tile2(x, y), offset)
@@ -659,6 +778,8 @@ proc arrangeConversation(w: World, group: set[0 .. VillagerCount - 1]) =
     ## Checks body clearance along the short move into the circle.
     for step in 0 .. TalkApproachSamples:
       let pos = start + (finish - start) * fixed(int32(step)) / fixed(TalkApproachSamples)
+      if not w.positionOpen(pos):
+        return false
       for dx in [-VillagerBodyRadius, VillagerBodyRadius]:
         for dy in [-VillagerBodyRadius, VillagerBodyRadius]:
           let (x, y) = cell(pos + fixedVec2(dx, dy))
@@ -1013,11 +1134,18 @@ proc tickWorld*(w: World, decide: proc(w: World) {.closure.}) {.measure.} =
       for j in i + 1 ..< VillagerCount:
         if w.villagers[j].inHouse >= 0:
           continue
+        let
+          beforeA = w.villagers[i].body.pos
+          beforeB = w.villagers[j].body.pos
         separatePair(
           w.villagers[i].body,
           w.villagers[j].body,
           hlfTilesWalkable
         )
+        if not w.travelClear(beforeA, w.villagers[i].body.pos):
+          w.villagers[i].body.pos = beforeA
+        if not w.travelClear(beforeB, w.villagers[j].body.pos):
+          w.villagers[j].body.pos = beforeB
     for v in w.villagers:
       if v.inHouse < 0:
         v.applyBody()

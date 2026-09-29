@@ -1,0 +1,73 @@
+{
+  "date": "2026-09-28",
+  "version": "2026.9.28.1",
+  "url": "https://softmax.com/gods-of-the-arena",
+  "coworld_id": "cow_50c99dea-4d3d-4fbd-9db3-b2b54ab28fb3",
+  "canonical": true,
+  "source_commit": "6951af1736c101ad4eea2a0046610f89fe052752",
+  "asset_commit": "32946b35b92e2b33f38945e96b293eb6e2c98ac9",
+  "replay_version": 64,
+  "changes": [
+    "Use Emmett's Glory: winning heroes receive floor(lifetime XP / elapsed minutes); losses, draws, and timeouts receive zero.",
+    "Use the same scoring in hosted results, BASIC observations, tournaments, and lockstep training.",
+    "Update game documentation and preserve random mixed five-versus-five matchmaking and 15% round-score smoothing.",
+    "Include the performance changes merged in PR #75 and fix the WASM build for bot kill and assist statistics."
+  ],
+  "checks": [
+    "Nim checks, the complete test suite, focused scoring and lockstep regressions, and tournament tests passed.",
+    "The WASM check and BASIC host regression tests passed after the portability fix.",
+    "All ten local certification checks and hosted certification passed.",
+    "All hosted smoke results matched Emmett's Glory.",
+    "Served JavaScript, WASM, and data SHA-256 hashes match the production build.",
+    "The Linux certification replay and a replay from the requested league round reproduced exactly on the native client."
+  ],
+  "browser_verification": {
+    "episode_id": "fdd08bbf-11d9-44b2-b23b-142195d74373",
+    "end_tick": 28909,
+    "coworld_id": "cow_50c99dea-4d3d-4fbd-9db3-b2b54ab28fb3",
+    "rendered": true,
+    "browser_errors": [],
+    "method": "Opened the deployed WASM viewer with its hosted smoke replay; observed animated combat and terrain rendering. No browser error logs were reported.",
+    "verified_at": "2026-09-28T23:59:22.749139+00:00"
+  },
+  "league_settings_preserved": true,
+  "known_issues": [],
+  "native_league_replay": {
+    "round_number": 924,
+    "id": "ereq_7a9274cf-8138-46d1-b425-e9a7d5e36a18",
+    "episode_id": "35df3c7a-2746-4d3d-9fcb-22caf426f7c0",
+    "replay_version": 64,
+    "sha256": "e25014fa7cbefd1211ba16342528e990842f22ed5a870a1ed7b1290eb3e44ee1",
+    "ticks": 29137,
+    "outcome": "time_limit"
+  },
+  "verification_round": {
+    "round_id": "round_1d3e56bf-eb80-41e8-a290-1dc459911aed",
+    "round_number": 924,
+    "status": "completed",
+    "games": 24,
+    "completed_games": 24,
+    "failed_games": 0,
+    "failures": [],
+    "coworld_id": "cow_50c99dea-4d3d-4fbd-9db3-b2b54ab28fb3",
+    "version": "2026.9.28.1",
+    "integer_scores_verified": 240,
+    "scoring": "Emmett's Glory",
+    "mixed_team_games_verified": 24,
+    "outcomes": {
+      "time_limit": 23,
+      "BlueTeam": 1
+    },
+    "replay_version": 64,
+    "watch_url": "https://softmax.com/gods-of-the-arena?e=848a5efa-4e29-438f-95c7-72604ec49684",
+    "verified_at": "2026-09-29T00:02:14.751740+00:00"
+  },
+  "manifest_hash": "sha256:316b5fc303054d82ef2392e59f2060fe1fea06f8037de6911c5c2445789089b1",
+  "viewer_sha256": {
+    "wasm": "71c066e1794a7bcdd77aad0ff8e7f1d4d20a248969d2e9cceddae4b44cd2049f",
+    "data": "6a1d07f38179cd0ce3498dbaefb725c634d74a7705426ded9a119a83dd98e3f0",
+    "js": "9743544d0f5006ec2442e5b5eb3d881d47dedc3d039a01c087ce07c05e98aede"
+  },
+  "ci_url": "https://github.com/Metta-AI/polyworld/actions/runs/36499948799",
+  "verified_at": "2026-09-29T00:02:53.951649+00:00"
+}

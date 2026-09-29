@@ -1,11 +1,8 @@
 ## Heartleaf map generation.
 ##
-## The village is generated entirely with integers from an explicit seed: a
-## ring of nine houses around a central stone plaza, dirt roads from every
-## door to the plaza and along the ring, three garden plots beside each
-## house, and a forest closing in from every edge. A gentle meadow rolls
-## under it all; the village interior is flattened so no doorstep sits on a
-## cliff.
+## The nine homes and winding lanes follow the supplied village reference.
+## Terrain detail varies deterministically with the seed. The simulation uses
+## integer road coverage and keeps every home and garden connected.
 ##
 ## This module writes the shared `pathing.layers` terrain model once at
 ## startup and then returns a `MapData` value. The simulation reads only the
@@ -13,9 +10,10 @@
 ## change how a game plays out.
 
 import
-  std/[heapqueue, strformat],
-  polyworld/[hashes, noises, pathing, profiles, rngs],
-  content
+  std/strformat,
+  vmath,
+  polyworld/[hashes, noises, pathing, profiles],
+  content, layouts, obstacles
 
 static:
   doAssert GridSide.int == GridTiles,
@@ -24,57 +22,40 @@ static:
 const
   MapCenter = GridSide div 2
   TerrainAmplitudeSteps = 6'i32
-  VillageFlatRadius = 36'i32
+  VillageFlatRadius = 48'i32
     ## Inside this ring the meadow is pressed almost flat.
-  VillageFadeRadius = 46'i32
+  VillageFadeRadius = 58'i32
     ## Between flat and fade the meadow rises back to full height.
-  PlazaStoneRadius* = 8'i32
+  PlazaStoneRadius* = 6'i32
     ## The plaza is a disc of paving this many tiles across from the middle.
-  RoadJoinMargin = 4'i32
-  RoadSeparation = 2'i32
-  ExistingRoadCost = 2'i32
-  NewRoadCost = 6'i32
-  ParallelRoadCost = 12'i32
-  PlazaRoadRadius = 9'i32
+  PlazaRoadRadius = 7'i32
     ## A one-tile road apron rings the paving.
   WellRadius* = 1'i32
-    ## The well in the middle of the plaza blocks this far around the
+    ## The tree in the middle of the plaza blocks this far around the
     ## centre tile; nobody walks through it.
-  HouseRingRadius = 26'i32
-  HouseRingJitter = 6'i32
-    ## Ring radius varies 26 .. 31 per house.
-  HousePlaceJitter = 5'i32
-    ## Centre offset varies -2 .. 2 per axis.
-  HouseFootprint* = 5'i32
+  HouseFootprint* = 3'i32
+  HouseRadiusSteps = int64(HouseHillRadius * 1000)
+  HouseCenterSteps = int64(HouseHillCenterZ * 1000)
+  HouseFacadeSteps = int64(HouseMeshOffset.z * 1000) + 750
   HousePadRadius = 2'i32
     ## Corners this close to a house centre sit exactly on the pad.
   HousePadFade = 4'i32
   ForestEdgeRadius* = 44'i32
-    ## Trees may appear outside this ring.
+    ## Retained for the standalone legacy decoration experiments.
   ForestWallRadius* = 58'i32
-    ## Beyond this the forest is a solid wall framing the map.
-  GardenMinReach = 4'i32
-  GardenMaxReach = 8'i32
-  GardenAttempts = 400
+    ## Retained for the standalone legacy decoration experiments.
   GenerationAttempts = 8
   GroundNoiseStream = 0xA0761D6478BD642F'u64
   GroundDetailStream = 0xE7037ED1A0B428DB'u64
-  ForestNoiseStream = 0xD1B54A32D192ED03'u64
   CornerSide = GridSide + 1
 
-  ## Unit circle at 40 degree steps, scaled by 1024. Integer by construction
-  ## so house placement never touches a float.
-  RingX: array[VillagerCount, int32] = [
-    1024'i32, 784, 178, -512, -962, -962, -512, 178, 784]
-  RingY: array[VillagerCount, int32] = [
-    0'i32, 658, 1009, 887, 350, -350, -887, -1009, -658]
 
 type
   House* = object
     center*: Tile2
-      ## Middle tile of the HouseFootprint square.
+      ## Anchor tile of the cottage mound.
     door*: Tile2
-      ## The walkable doorstep tile just outside the five-tile footprint.
+      ## The walkable doorstep tile in front of the cottage mound.
     facingX*, facingY*: int8
       ## Unit direction from the footprint toward the door.
     propKind*: uint8
@@ -85,10 +66,15 @@ type
     passable*: seq[uint8]
       ## Walkability per tile: slope, houses, and forest included. Nothing
       ## changes walkability after generation.
+    terrain*: seq[uint8]
+      ## Ground clearance before props, for precise movement through gates.
     kinds*: seq[uint8]
       ## Tile kind per cell, for gardens, the minimap, and debugging.
     heights*: seq[int16]
       ## Mean packed terrain height per tile.
+    obstacles*: seq[Obstacle]
+    steps*: seq[uint8]
+      ## Eight outgoing links per tile, including clearance past thin fences.
     houses*: array[VillagerCount, House]
     gardenTiles*: array[GardenCount, Tile2]
     hash*: uint64
@@ -108,37 +94,45 @@ proc centerDistanceSquared(x, y: int32): int32 =
   ## Squared straight-line distance from the middle of the map.
   (x - MapCenter) * (x - MapCenter) + (y - MapCenter) * (y - MapCenter)
 
+proc propsClear*(map: MapData, first, last: Tile2): bool =
+  ## Checks continuous clearance between two tile centers in the town.
+  map.obstacles.obstaclesClear(
+    (first.x.int32 - MapCenter) * ObstacleUnits,
+    (first.y.int32 - MapCenter) * ObstacleUnits,
+    (last.x.int32 - MapCenter) * ObstacleUnits,
+    (last.y.int32 - MapCenter) * ObstacleUnits,
+    NavigationClearance
+  )
+
+proc canStep*(map: MapData, first, last: Tile2): bool =
+  ## Reads a precomputed connection without crossing rails or blocked corners.
+  if not inGrid(first) or not inGrid(last):
+    return false
+  let
+    dx = last.x.int32 - first.x.int32
+    dz = last.y.int32 - first.y.int32
+  for i, offset in StepOffsets:
+    if dx == offset[0] and dz == offset[1]:
+      return (map.steps[tileIndex(first)] and (1'u8 shl i)) != 0
+  false
+
 ## Generation
 
 proc buildMap(seed: int32): MapData =
   ## Builds the terrain layers and village for one seed. May produce an
   ## unplayable layout on unlucky seeds; `generateMap` retries.
-  var rng = initRng(seed)
-
-  ## Houses first: their pads shape the heightfield.
   var houses: array[VillagerCount, House]
-  for slot in 0 ..< VillagerCount:
+  for slot, position in TownHouses:
     let
-      radius = HouseRingRadius + rng.below(HouseRingJitter)
-      jitterX = rng.below(HousePlaceJitter) - HousePlaceJitter div 2
-      jitterY = rng.below(HousePlaceJitter) - HousePlaceJitter div 2
-      centerX = MapCenter + RingX[slot] * radius div 1024 + jitterX
-      centerY = MapCenter + RingY[slot] * radius div 1024 + jitterY
-      towardX = MapCenter - centerX
-      towardY = MapCenter - centerY
-    var facingX, facingY = 0'i32
-    if abs(towardX) >= abs(towardY):
-      facingX = int32(cmp(towardX, 0'i32))
-    else:
-      facingY = int32(cmp(towardY, 0'i32))
+      centerX = MapCenter + position[0].int32
+      centerY = MapCenter + position[1].int32
+      doorway = houseOffset(slot, 0, 2)
     houses[slot] = House(
       center: tile2(centerX, centerY),
-      door: tile2(
-        centerX + facingX * (HouseFootprint div 2 + 1),
-        centerY + facingY * (HouseFootprint div 2 + 1)),
-      facingX: int8(facingX),
-      facingY: int8(facingY),
-      propKind: uint8(rng.below(7'i32))
+      door: tile2(centerX + doorway.x, centerY + doorway.z),
+      facingX: 0,
+      facingY: 1,
+      propKind: slot.uint8
     )
 
   ## Heights. Corner height is a pure function of the corner coordinate, so
@@ -201,6 +195,8 @@ proc buildMap(seed: int32): MapData =
 
   for y in 0'i32 ..< GridSide:
     for x in 0'i32 ..< GridSide:
+      if not insideTown(x - MapCenter, y - MapCenter):
+        continue
       groundTile(x, y) = Tile(
         flags: TileExists or TileConnectedEast or TileConnectedSouth,
         kind: GrassTile,
@@ -217,7 +213,7 @@ proc buildMap(seed: int32): MapData =
         groundTile(x, y).kind = StoneTile
       elif distance <= PlazaRoadRadius * PlazaRoadRadius:
         groundTile(x, y).kind = RoadTile
-  ## The well stands on the centre and blocks its footprint.
+  ## The central tree blocks its trunk footprint.
   for y in MapCenter - WellRadius .. MapCenter + WellRadius:
     for x in MapCenter - WellRadius .. MapCenter + WellRadius:
       groundTile(x, y).impassable = true
@@ -226,159 +222,56 @@ proc buildMap(seed: int32): MapData =
   for slot in 0 ..< VillagerCount:
     let
       center = houses[slot].center
-      reach = HouseFootprint div 2
-    for y in int32(center.y) - reach .. int32(center.y) + reach:
-      for x in int32(center.x) - reach .. int32(center.x) + reach:
-        groundTile(x, y).kind = HouseTileKind
-        groundTile(x, y).impassable = true
-
-  ## Roads. Wide plaza spokes and narrow neighborhood links that reuse
-  ## nearby streets.
-  proc stampRoad(x, y: int32) =
-    if not inGrid(x, y):
-      return
-    if groundTile(x, y).impassable:
-      return
-    if groundTile(x, y).kind == StoneTile:
-      return
-    groundTile(x, y).kind = RoadTile
-
-  proc carveLeg(fromX, fromY, toX, toY: int32, wide: bool) =
-    ## One axis-aligned road segment. A wide leg stamps its neighbour on the
-    ## crossing axis too.
-    var
-      x = fromX
-      y = fromY
-    let
-      stepX = cmp(toX, fromX)
-      stepY = cmp(toY, fromY)
-    while true:
-      stampRoad(x, y)
-      if wide:
-        if stepX != 0:
-          stampRoad(x, y + 1)
-        else:
-          stampRoad(x + 1, y)
-      if x == toX and y == toY:
-        break
-      x += int32(stepX)
-      y += int32(stepY)
-
-  proc carveDogleg(fromX, fromY, toX, toY: int32, wide, xFirst: bool) =
-    if xFirst:
-      carveLeg(fromX, fromY, toX, fromY, wide)
-      carveLeg(toX, fromY, toX, toY, wide)
-    else:
-      carveLeg(fromX, fromY, fromX, toY, wide)
-      carveLeg(fromX, toY, toX, toY, wide)
-
-  for slot in 0 ..< VillagerCount:
-    let door = houses[slot].door
-    var xFirst = rng.below(2'i32) == 0
-    # Doors near a plaza axis join its central street before the long leg.
-    if abs(int32(door.x) - MapCenter) <= RoadJoinMargin:
-      xFirst = true
-    elif abs(int32(door.y) - MapCenter) <= RoadJoinMargin:
-      xFirst = false
-    carveDogleg(
-      int32(door.x), int32(door.y), MapCenter, MapCenter,
-      wide = true, xFirst = xFirst)
-  proc connectNeighbors(start, goal: Tile2) =
-    ## Keeps neighborhood links local while favoring existing streets over
-    ## parallel strips of new paving.
-    let
-      minX = max(0'i32, min(int32(start.x), int32(goal.x)) - RoadJoinMargin)
-      maxX = min(GridSide - 1, max(int32(start.x), int32(goal.x)) + RoadJoinMargin)
-      minY = max(0'i32, min(int32(start.y), int32(goal.y)) - RoadJoinMargin)
-      maxY = min(GridSide - 1, max(int32(start.y), int32(goal.y)) + RoadJoinMargin)
-      startIndex = tileIndex(start)
-      goalIndex = tileIndex(goal)
-    var
-      costs = newSeq[int32](GridCells)
-      previous = newSeq[int32](GridCells)
-      frontier = initHeapQueue[tuple[cost: int32, index: int32]]()
-    for index in 0 ..< GridCells:
-      costs[index] = int32.high
-      previous[index] = -1
-    costs[startIndex] = 0
-    frontier.push((0'i32, startIndex))
-    while frontier.len > 0:
-      let current = frontier.pop()
-      if current.cost != costs[current.index]:
-        continue
-      if current.index == goalIndex:
-        break
-      let
-        x = int32(current.index mod GridSide)
-        y = int32(current.index div GridSide)
-      for (dx, dy) in [(0'i32, -1'i32), (1'i32, 0'i32),
-          (0'i32, 1'i32), (-1'i32, 0'i32)]:
+      turn = HouseTurns[slot]
+      anchor = houseAnchor(slot)
+    for dz in -9'i32 .. 9'i32:
+      for dx in -9'i32 .. 9'i32:
         let
-          nx = x + dx
-          ny = y + dy
-        if nx < minX or nx > maxX or ny < minY or ny > maxY:
-          continue
-        if groundTile(nx, ny).impassable:
-          continue
-        let index = tileIndex(nx, ny)
-        var stepCost = NewRoadCost
-        if groundTile(nx, ny).kind in {RoadTile, StoneTile}:
-          stepCost = ExistingRoadCost
-        else:
-          for oy in -RoadSeparation .. RoadSeparation:
-            for ox in -RoadSeparation .. RoadSeparation:
-              if inGrid(nx + ox, ny + oy) and
-                  groundTile(nx + ox, ny + oy).kind == RoadTile:
-                stepCost = ParallelRoadCost
-        let cost = current.cost + stepCost
-        if cost < costs[index]:
-          costs[index] = cost
-          previous[index] = current.index
-          frontier.push((cost, index))
-    if previous[goalIndex] < 0:
-      raise newException(ValueError, &"seed {seed}: no neighborhood road route")
-    var index = goalIndex
-    while index != startIndex:
-      stampRoad(int32(index mod GridSide), int32(index div GridSide))
-      index = previous[index]
+          px = dx.int64 * 1000 + TownHouses[slot][0] * 1000 - anchor.x
+          pz = dz.int64 * 1000 + TownHouses[slot][1] * 1000 - anchor.z
+          localX = (turn[0].int64 * px + turn[1].int64 * pz) div 1000
+          localZ = (-turn[1].int64 * px + turn[0].int64 * pz) div 1000
+          depth = localZ - HouseCenterSteps
+        if localZ <= HouseFacadeSteps and
+          localX * localX + depth * depth <=
+          HouseRadiusSteps * HouseRadiusSteps:
+            let
+              x = center.x.int32 + dx
+              y = center.y.int32 + dz
+            groundTile(x, y).kind = HouseTileKind
+            groundTile(x, y).impassable = true
 
-  for slot in 0 ..< VillagerCount:
-    # Reserve the link's draw so garden randomness is independent of routing.
-    discard rng.below(2'i32)
-    connectNeighbors(houses[slot].door, houses[(slot + 1) mod VillagerCount].door)
-
-  ## Forest. Purely noise-gated, thickening away from the village until it
-  ## becomes the solid wall that frames the map. Roads keep a clear margin.
-  proc nearRoad(x, y: int32): bool =
-    for dy in -2'i32 .. 2'i32:
-      for dx in -2'i32 .. 2'i32:
-        let
-          nx = x + dx
-          ny = y + dy
-        if not inGrid(nx, ny):
-          continue
-        if groundTile(nx, ny).kind == RoadTile or
-            groundTile(nx, ny).kind == StoneTile:
-          return true
-    false
-
+  ## Lanes follow the same centerlines used by the terrain material mask.
   for y in 0'i32 ..< GridSide:
     for x in 0'i32 ..< GridSide:
-      let ring = centerDistance(x, y)
-      if ring <= ForestEdgeRadius:
-        continue
-      if groundTile(x, y).kind != GrassTile:
-        continue
+      if groundTile(x, y).exists and
+        townRoad(x - MapCenter, y - MapCenter) and
+        not groundTile(x, y).impassable and
+        groundTile(x, y).kind != StoneTile:
+          groundTile(x, y).kind = RoadTile
+
+  ## The well garden is south of the central tree plaza.
+  for y in MapCenter + TownWell.y.int32 - 1 ..
+      MapCenter + TownWell.y.int32 + 1:
+    for x in MapCenter + TownWell.x.int32 - 1 ..
+        MapCenter + TownWell.x.int32 + 1:
+      groundTile(x, y).impassable = true
+
+  layers = @[groundLayer]
+  computeWalkable()
+  var terrain = newSeq[uint8](GridCells)
+  for i in 0 ..< GridCells:
+    terrain[i] = uint8(layerWalkable[0][i])
+  let solidProps = villageObstacles(seed)
+  for y in 0'i32 ..< GridSide:
+    for x in 0'i32 ..< GridSide:
       let
-        forest = valueNoise(seed, ForestNoiseStream, int(x), int(y), 12)
-        gate = MapBlendScale -
-          (ring - ForestEdgeRadius) * MapBlendScale div
-            (ForestWallRadius - ForestEdgeRadius)
-      if forest > gate or ring >= ForestWallRadius:
-        if nearRoad(x, y):
-          continue
-        groundTile(x, y).kind = TreeTile
+        px = (x - MapCenter) * ObstacleUnits
+        pz = (y - MapCenter) * ObstacleUnits
+      if not solidProps.obstaclesClear(px, pz, px, pz, NavigationClearance):
         groundTile(x, y).impassable = true
+  for tree in borderTrees(seed):
+    groundTile(MapCenter + tree.x, MapCenter + tree.z).kind = TreeTile
 
   layers = @[groundLayer]
   computeWalkable()
@@ -389,7 +282,10 @@ proc buildMap(seed: int32): MapData =
     passable: newSeq[uint8](GridCells),
     kinds: newSeq[uint8](GridCells),
     heights: newSeq[int16](GridCells),
-    houses: houses
+    houses: houses,
+    obstacles: solidProps,
+    terrain: terrain,
+    steps: newSeq[uint8](GridCells)
   )
   for y in 0'i32 ..< GridSide:
     for x in 0'i32 ..< GridSide:
@@ -402,41 +298,38 @@ proc buildMap(seed: int32): MapData =
           int32(tops[2]) + int32(tops[3])) div 4
       )
 
-  ## Gardens: three tilled plots in the grass near each house. A plot must be
-  ## walkable and keep a tile of spacing from its neighbours so gathering
-  ## villagers do not stand in each other's beds.
+  ## Three accessible planter beds sit beside each home's front approach.
   var placed = 0
-  for slot in 0 ..< VillagerCount:
-    let center = houses[slot].center
-    var found = 0
-    for attempt in 0 ..< GardenAttempts:
-      if found >= GardensPerHouse:
-        break
+  for slot, house in houses:
+    for local in HouseGardenOffsets:
       let
-        x = int32(center.x) +
-          rng.below(GardenMaxReach * 2 + 1) - GardenMaxReach
-        y = int32(center.y) +
-          rng.below(GardenMaxReach * 2 + 1) - GardenMaxReach
-        reach = max(abs(x - int32(center.x)), abs(y - int32(center.y)))
-      if reach < GardenMinReach or reach > GardenMaxReach:
-        continue
-      if not inGrid(x, y):
-        continue
-      let index = tileIndex(x, y)
-      if map.kinds[index] != uint8(GrassTile) or map.passable[index] == 0:
-        continue
-      var crowded = false
-      for existing in 0 ..< placed:
-        if chebyshev(map.gardenTiles[existing], tile2(x, y)) <= 1:
-          crowded = true
-          break
-      if crowded:
-        continue
-      map.gardenTiles[placed] = tile2(x, y)
-      map.kinds[index] = uint8(GardenTileKind)
+        offset = gardenOffset(slot, local[0], local[1])
+        garden = tile2(
+          house.center.x.int32 + offset[0],
+          house.center.y.int32 + offset[1]
+        )
+        index = tileIndex(garden)
+      map.gardenTiles[placed] = garden
+      map.kinds[index] = GardenTileKind.uint8
       groundLayer.tiles[index].kind = GardenTileKind
       inc placed
-      inc found
+
+  for y in 0'i32 ..< GridSide:
+    for x in 0'i32 ..< GridSide:
+      let first = tile2(x, y)
+      if map.passable[tileIndex(first)] == 0:
+        continue
+      for i, (dx, dz) in StepOffsets:
+        let last = tile2(x + dx, y + dz)
+        if not inGrid(last) or map.passable[tileIndex(last)] == 0:
+          continue
+        if dx != 0 and dz != 0 and
+          (map.terrain[tileIndex(x + dx, y)] == 0 or
+          map.terrain[tileIndex(x, y + dz)] == 0):
+            continue
+        if map.propsClear(first, last):
+          map.steps[tileIndex(first)] =
+            map.steps[tileIndex(first)] or (1'u8 shl i)
 
   ## Fingerprint. Covers the packed terrain, walkability, and every village
   ## placement, so a generator change is caught at replay load rather than
@@ -455,6 +348,15 @@ proc buildMap(seed: int32): MapData =
     hash.addHashy(map.passable[index])
     hash.addHashy(map.kinds[index])
     hash.addHashy(map.heights[index])
+    hash.addHashy(map.steps[index])
+    hash.addHashy(map.terrain[index])
+  for obstacle in map.obstacles:
+    hash.addHashy(obstacle.kind.uint8)
+    hash.addHashy(obstacle.ax)
+    hash.addHashy(obstacle.az)
+    hash.addHashy(obstacle.bx)
+    hash.addHashy(obstacle.bz)
+    hash.addHashy(obstacle.radius)
   for house in map.houses:
     hash.addHashy(house.center.x)
     hash.addHashy(house.center.y)
@@ -492,12 +394,14 @@ proc floodFrom(map: MapData, start: Tile2): seq[uint8] =
       let index = tileIndex(nextX, nextY)
       if map.passable[index] == 0 or result[index] == 1:
         continue
+      if not map.canStep(tile, tile2(nextX, nextY)):
+        continue
       result[index] = 1
       frontier.add tile2(nextX, nextY)
 
 const PlazaStart = tile2(MapCenter + WellRadius + 1, MapCenter)
   ## Where connectivity checks begin: the plaza paving just east of the
-  ## well, since the well itself is blocked.
+  ## tree, since the trunk itself is blocked.
 
 proc mapPlayable(map: MapData): bool =
   ## Quietly checks connectivity, for the retry loop.
@@ -538,10 +442,8 @@ proc validateMap*(map: MapData) =
       &"seed {seed}: house {slot} is unreachable from the plaza"
     doAssert house.facingX == 0 or house.facingY == 0,
       &"seed {seed}: house {slot} faces diagonally"
-    for y in int32(house.center.y) - 1 .. int32(house.center.y) + 1:
-      for x in int32(house.center.x) - 1 .. int32(house.center.x) + 1:
-        doAssert map.passable[tileIndex(x, y)] == 0,
-          &"seed {seed}: house {slot} footprint is walkable at ({x},{y})"
+    doAssert map.passable[tileIndex(house.center)] == 0,
+      &"seed {seed}: house {slot} footprint is walkable"
   for index, garden in map.gardenTiles:
     doAssert inGrid(garden),
       &"seed {seed}: garden {index} is off the map"

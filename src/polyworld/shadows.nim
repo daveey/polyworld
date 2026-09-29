@@ -208,25 +208,26 @@ proc sunRigAt(hour: float32): tuple[azimuth, elevation, sunUp: float32] =
     result.azimuth = 90 + t * 180
     result.elevation = sin(t * PI.float32) * 45
 
-proc applySunHour*(hour: float32) =
-  ## Drives the whole sun rig from a day clock. Lighting and strengths use
-  ## the smooth hour; the shadow maps use the two neighbouring SunStepHours
-  ## steps with a cross-fade, so shadow edges dissolve toward the next sun
-  ## position instead of re-rasterizing (and shimmering) every frame. Night
-  ## keeps real moon shading; the horizon band fades only the light.
+proc applySunHour*(
+  hour: float32, azimuthOffset = 0.0'f, elevationScale = 1.0'f
+) =
+  ## Drives daylight and moonlight from the clock, with an optional orbit tilt.
+  ## Neighboring quantized shadow maps cross-fade to avoid shimmering.
+  ## Lighting and both shadow steps use the same azimuth and elevation controls.
+  assert elevationScale > 0
   let
     smooth = sunRigAt(hour)
     h = ((hour mod 24) + 24) mod 24
     isDay = h >= 6 and h <= 20
-  sunAzimuth = smooth.azimuth
-  sunElevation = smooth.elevation
+  sunAzimuth = smooth.azimuth + azimuthOffset
+  sunElevation = smooth.elevation * elevationScale
   solarElevation =
     if isDay:
-      smooth.elevation
+      sunElevation
     else:
-      -smooth.elevation
+      -sunElevation
   lightLevel = horizonLight(solarElevation)
-  sunDirection = sunDirectionFor(smooth.azimuth, mapElevation(smooth.elevation))
+  sunDirection = sunDirectionFor(sunAzimuth, mapElevation(sunElevation))
   if isDay:
     let strength =
       0.15'f32 + 0.7'f32 * smoothstep(0.0'f32, 0.3'f32, smooth.sunUp)
@@ -240,8 +241,14 @@ proc applySunHour*(hour: float32) =
     rig0 = sunRigAt(step0)
     rig1 = sunRigAt(step0 + SunStepHours)
   sunShadowBlend = clamp((h - step0) / SunStepHours, 0.0'f32, 1.0'f32)
-  sunLightMvp0 = lightMatrixFor(rig0.azimuth, mapElevation(rig0.elevation))
-  sunLightMvp1 = lightMatrixFor(rig1.azimuth, mapElevation(rig1.elevation))
+  sunLightMvp0 = lightMatrixFor(
+    rig0.azimuth + azimuthOffset,
+    mapElevation(rig0.elevation * elevationScale)
+  )
+  sunLightMvp1 = lightMatrixFor(
+    rig1.azimuth + azimuthOffset,
+    mapElevation(rig1.elevation * elevationScale)
+  )
 
 ## Setup
 

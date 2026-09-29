@@ -6,17 +6,9 @@ proc main() =
   require(paramCount() == 3,
     "Usage: inspect_players REPLAY METADATA OUTPUT_JSON")
   let stats = inspectReplay(paramStr(1), readStats(paramStr(2)))
-  require(stats["replay_version"].getInt in 26 .. 33 or
-    stats["replay_version"].getInt in 40 .. 41,
-    "This replay version needs its reward accounting checked")
   for hero in stats["heroes"]:
-    let counts = objectiveCounts(
-      hero["xp"].getInt,
-      hero["gold"].getInt,
-      hero["kills"].getInt
-    )
-    hero["tower_kills"] = %counts[0]
-    hero["last_hits"] = %counts[1]
+    require(hero.hasKey("tower_kills") and hero.hasKey("last_hits"),
+      "The inspector must be compiled with replayEvents")
   saveJson(paramStr(3), stats)
 
 try:

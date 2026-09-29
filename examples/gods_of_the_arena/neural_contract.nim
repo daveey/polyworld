@@ -14,7 +14,7 @@ import
   std/[algorithm, math, strutils],
   crunchy, fixxy,
   polyworld/[bodies, metrics, pathing],
-  content, maps, observations, scores, sim, terrains
+  content, maps, motions, observations, scores, sim, terrains
 
 const
   ObsSelf* = 48
@@ -100,7 +100,7 @@ const
   SummaryNames = ["own_god_hp", "own_god_exposed", "own_towers",
     "own_barracks", "enemy_towers_known", "enemy_barracks_known",
     "enemy_god_hp_visible_or_-1", "own_heroes_alive", "enemy_heroes_visible",
-    "wave_timer", "own_levels/50", "visible_enemy_levels/50", "score/5000",
+    "wave_timer", "own_levels/50", "visible_enemy_levels/50", "glory/5000",
     "kills/10", "assists/10", "zero"]
 
 static:
@@ -113,8 +113,15 @@ static:
 
 proc observationContractText*(): string =
   ## The canonical text the observation hash pins.
-  result = "gota-neural-basic/1 observation v1 float32[" & $ObservationSize &
-    "] team-frame (blue rotated 180);\nself:" & SelfFeatureNames.join(",") &
+  result = "gota-neural-basic/2 observation v2 float32[" & $ObservationSize &
+    "] team-frame (blue rotated 180); canonical = upstream #83 david.bas: " &
+    "every cell is a Q16.16 value (raw/65536), slots of creeps/neutrals/" &
+    "structures ordered by the Q16.16 key (dx/16)^2+(dy/16)^2 with ties to " &
+    "the smaller id, object facing normalized in fixed point after tile " &
+    "scaling, targets_ally_hero includes the seat itself, glory/5000 is " &
+    "Emmett's Glory (0 until a win), observed after the seat's " &
+    "learn/shop glue of the same tick with frame-start host data;\nself:" &
+    SelfFeatureNames.join(",") &
     "\nability x4:" & AbilityFeatureNames.join(",") &
     "\nitem x6: onehot23(NoItem..ManaPotion),count/4,cooldown/240" &
     "\nobject slots 25 (0 self,1-4 allies seat order,5-9 enemies seat order " &
@@ -168,10 +175,6 @@ type
 
 template side(team: Team): int32 = (if team == RedTeam: 1'i32 else: -1'i32)
 
-proc clampf(x, lo, hi: float32): float32 {.inline.} = max(lo, min(hi, x))
-
-proc tiles(value: int32): float32 {.inline.} = float32(value) / float32(WorldScale)
-
 proc mapPoint*(p: WorldPoint): FixedVec2 =
   ## World position to BASIC map coordinates (tile centres at integers).
   let half = int64(mapTiles() div 2)
@@ -210,135 +213,145 @@ proc pointCandidate*(anchor: WorldPoint, team: Team, index: int,
 # ---------------------------------------------------------------------------
 # Observation
 
-proc objectKindIndex(kind: int32): int =
-  ## Object kinds 1..6 (god, hero, creep, tower, barracks, neutral) -> 0..5.
-  clamp(int(kind) - 1, 0, 5)
-
 proc heroAlive(hero: Hero): bool = hero.hp > 0 and hero.state != Dying
 
-proc terrainOpen(world: World, team: Team, layer: int32, mx, my: int): bool =
-  ## Known walkability at one map tile, as terrainWalkable reports it.
-  if mx < 0 or my < 0 or mx >= mapTiles() or my >= mapTiles():
-    return false
-  if terrainValue(int32(mx), int32(my), layer, TerrainWalkableField) == 0:
+type
+  HeroSnapshot* = object
+    ## The frame-start values BASIC receives as host data (`selfHp`,
+    ## `selfGold`, `selfAttackDamage`, ...): they do not follow the hero's own
+    ## learn/shop orders inside the tick, unlike the live `selfInfo`/`ability*`
+    ## /`item*` getters (spec upstream83.md D6).
+    captured*: bool
+    tick*, hp*, maxHp*, mana*, maxMana*, gold*, level*, layer*, klass*: int32
+    attackDamage*, target*, attackCooldown*, portalCooldown*: int32
+    channelTicks*, stunTicks*, rootTicks*, silenceTicks*, deaths*: int32
+    respawnTicks*: int32
+
+proc captureSnapshot*(world: World, hero: Hero): HeroSnapshot =
+  ## What runHeroVm hands the seat's program at the top of its decision.
+  HeroSnapshot(captured: true, tick: world.tick, hp: max(hero.hp, 0'i32),
+    maxHp: hero.maxHp, mana: hero.mana, maxMana: hero.maxMana,
+    gold: int32(hero.gold), level: int32(hero.level), layer: hero.navLayer,
+    klass: world.draftedClass(hero.id),
+    attackDamage: hero.heroAttackDamage(), target: hero.attackObjectId,
+    attackCooldown: world.heroAttackCooldown(hero),
+    portalCooldown: max(0'i32, hero.portalCooldownEnds - world.tick),
+    channelTicks: max(0'i32, hero.portalEnds - world.tick),
+    stunTicks: max(0'i32, hero.controls[StunControl].ends - world.tick),
+    rootTicks: max(0'i32, hero.controls[RootControl].ends - world.tick),
+    silenceTicks: max(0'i32, hero.controls[SilenceControl].ends - world.tick),
+    deaths: hero.deaths, respawnTicks: hero.respawnTicks())
+
+# Q16.16 helpers with the exact semantics of the BASIC operators david.bas
+# uses (fixxy.nim: `*` and `/` round to nearest, halves up; int operands of
+# `/` are converted to Fixed first).
+
+proc fx(value: int32): Fixed {.inline.} = fixed(value)
+proc fbool(value: bool): Fixed {.inline.} = (if value: FixedOne else: FixedZero)
+proc fdiv(a, b: int32): Fixed {.inline.} =
+  ## BASIC `a / b` on two integers (0 for a zero divisor, where BASIC halts).
+  if b == 0: FixedZero else: fixed(a) / fixed(b)
+proc fdiv(a: Fixed, b: int32): Fixed {.inline.} = a / fixed(b)
+proc fdiv(a: int32, b: Fixed): Fixed {.inline.} = fixed(a) / b
+proc clampfx(value: Fixed, low, high: int32): Fixed {.inline.} =
+  if value < fixed(low): fixed(low)
+  elif value > fixed(high): fixed(high)
+  else: value
+
+proc nnRatio(numerator, denominator: int32): Fixed =
+  ## david.bas nnRatio: an exact 16-bit fraction of two counters.
+  let d = if denominator <= 0: 1'i32 else: denominator
+  let n = if numerator < 0: 0'i32 else: numerator
+  var
+    remainder = n mod d
+    fraction = 0'i32
+  for i in 0 ..< 16:
+    if remainder >= d - remainder:
+      remainder = remainder - (d - remainder)
+      fraction += 32768'i32 shr i
+    else:
+      remainder = remainder * 2
+  if remainder >= d - remainder:
+    fraction += 1
+  fixed(n div d) + Fixed(fraction)
+
+proc terrainWalkableAt(world: World, team: Team, x, y, layer: int32): bool =
+  ## The `terrainWalkableAt` host call (known walkability under fog).
+  if terrainValue(x, y, layer, TerrainWalkableField) == 0:
     return false
   let floor = layers[int(layer)]
-  world.knownWalkable(team, int(layer), mx + mapOrigin() - floor.originX,
-    my + mapOrigin() - floor.originZ)
-
-proc writeObject(o: var openArray[float32], base: int, world: World,
-    hero: Hero, value: WorldObject, damage: int32, rangeUnits: int32,
-    alliedHeroIds: openArray[int32]) =
-  let
-    s = float32(hero.team.side)
-    dx = tiles(value.position.x - hero.position.x) * s
-    dy = tiles(value.position.z - hero.position.z) * s
-    dist = sqrt(dx*dx + dy*dy)
-  o[base + 0] = 1
-  o[base + 1] = clampf(dx / 16, -4, 4)
-  o[base + 2] = clampf(dy / 16, -4, 4)
-  o[base + 3] = clampf(dist / 16, 0, 8)
-  o[base + 4] = if value.maxHp > 0: clampf(float32(max(value.hp, 0)) / float32(value.maxHp), 0, 1) else: 0
-  o[base + 5] = float32(max(value.hp, 0)) / 2000
-  let faction = value.faction
-  o[base + 6] = if faction == 2: 0'f32 elif faction == hero.team.ord.int32: 1 else: -1
-  o[base + 7 + objectKindIndex(value.kind)] = 1
-  o[base + 13] = float32(value.alive)
-  o[base + 14] = float32(value.level) / 20
-  o[base + 15] = float32(value.mana) / 1000
-  o[base + 16] = float32(value.targetId != 0 and value.targetId == hero.id)
-  o[base + 17] = float32(value.id != 0 and value.id == hero.attackObjectId)
-  var targetsAlly = false
-  if value.targetId != 0 and value.targetId != hero.id:
-    for id in alliedHeroIds:
-      if id == value.targetId:
-        targetsAlly = true
-  o[base + 18] = float32(targetsAlly)
-  o[base + 19] = clampf(float32(value.controlTicks[StunControl]) / 72, 0, 2)
-  o[base + 20] = clampf(float32(value.controlTicks[RootControl]) / 72, 0, 2)
-  o[base + 21] = clampf(float32(value.controlTicks[SilenceControl]) / 72, 0, 2)
-  o[base + 22] = clampf(tiles(value.velocity.x) * s * 10, -4, 4)
-  o[base + 23] = clampf(tiles(value.velocity.z) * s * 10, -4, 4)
-  let flen = sqrt(float32(value.facing.x)*float32(value.facing.x) +
-    float32(value.facing.z)*float32(value.facing.z))
-  if flen > 0:
-    o[base + 24] = float32(value.facing.x) / flen * s
-    o[base + 25] = float32(value.facing.z) / flen * s
-  o[base + 26] = float32(dist * float32(WorldScale) <= float32(rangeUnits))
-  o[base + 27] = float32(value.hp > 0 and value.hp <= damage)
-  o[base + 28] = float32(value.returning)
-  if value.kind == 3:
-    o[base + 29] = float32(value.class)
-  elif value.kind == 6:
-    o[base + 29] = float32(value.class) / 3
-  if value.kind == 2 and value.class in 0'i32 .. 9'i32:
-    o[base + 30 + int(value.class)] = 1
-
-proc heroSelfObject(world: World, hero: Hero): WorldObject =
-  ## The seat's own hero in WorldObject form (it is always in its own frame).
-  result = WorldObject(id: hero.id, kind: 2, class: int32(hero.class.ord),
-    team: hero.team, position: hero.position, hp: hero.hp, maxHp: hero.maxHp,
-    alive: hero.heroAlive, level: int32(hero.level), mana: hero.mana,
-    facing: hero.facing, velocity: hero.velocity,
-    targetId: (if hero.heroAlive: hero.attackObjectId else: 0))
-  if result.alive:
-    for effect in ControlEffect:
-      result.controlTicks[effect] = max(0'i32, hero.controls[effect].ends - world.tick)
+  world.knownWalkable(team, int(layer), int(x) + mapOrigin() - floor.originX,
+    int(y) + mapOrigin() - floor.originZ)
 
 proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
     maxTicks: int32, stats: CombatStats, o: var openArray[float32],
-    frame: var DecisionFrame) =
-  ## Writes observation v1 for one hero from the current decision frame.
+    frame: var DecisionFrame, snap: HeroSnapshot = HeroSnapshot()) =
+  ## Writes observation v2 for one hero: `david.bas` (`nnObserve`, upstream #83)
+  ## reproduced in Q16.16, cell for cell. `snap` is the frame-start data
+  ## (`captureSnapshot` before the seat's glue ran); default = the live state.
   doAssert o.len == ObservationSize and goal.len == GoalSize
-  for i in 0 ..< o.len:
-    o[i] = 0
   frame = DecisionFrame(tick: world.tick, heroIndex: heroIndex)
   let
     hero = world.heroes[heroIndex]
     team = hero.team
-    s = float32(team.side)
-    alive = hero.heroAlive
+    snapshot = if snap.captured: snap else: captureSnapshot(world, hero)
+    side = int32(team.side)
+    selfTeam = int32(team.ord)
+    selfId = hero.id
+    selfX = worldToTiles(hero.position.x, WorldScale)
+    selfY = worldToTiles(hero.position.z, WorldScale)
+    attackRange = worldToTiles(hero.class.heroAttackRange(), WorldScale)
+    d16 = fixed(16)
   frame.team = team
-  frame.alive = alive
+  frame.alive = hero.heroAlive
   frame.selfPos = hero.position
+  var f {.noinit.}: array[ObservationSize, Fixed]
+  for i in 0 ..< ObservationSize:
+    f[i] = FixedZero
+  template clampAt(index: int, value: Fixed, low, high: int32) =
+    f[index] = clampfx(value, low, high)
   # Self.
   var p = ObsSelfOffset
-  o[p+0] = float32(alive)
-  o[p+1] = if hero.maxHp > 0: clampf(float32(max(hero.hp, 0)) / float32(hero.maxHp), 0, 1) else: 0
-  o[p+2] = if hero.maxMana > 0: clampf(float32(hero.mana) / float32(hero.maxMana), 0, 1) else: 0
-  o[p+3] = float32(hero.maxHp) / 2000
-  o[p+4] = float32(hero.maxMana) / 1000
-  o[p+5] = float32(hero.gold) / 1000
-  o[p+6] = float32(hero.level) / 20
-  o[p+7] = clampf(float32(hero.xp) / float32(max(1, xpForNextLevel(hero.level))), 0, 1)
-  o[p+8] = float32(hero.totalXp) / 20000
-  o[p+9] = tiles(hero.position.x) * s / 64
-  o[p+10] = tiles(hero.position.z) * s / 64
-  o[p+11] = float32(team.ord)
-  o[p+12] = clampf(float32(world.battleTick()) / float32(max(1'i32, maxTicks)), 0, 1)
-  o[p+13] = clampf(float32(world.heroAttackCooldown(hero)) / 48, 0, 2)
-  o[p+14] = tiles(hero.class.heroAttackRange()) / 10
-  o[p+15] = float32(hero.heroAttackDamage()) / 200
-  o[p+16] = tiles(hero.heroMoveSpeed()) * float32(TickRate) / 5
-  o[p+17] = float32(hero.attackObjectId != 0)
-  o[p+18] = clampf(float32(max(0'i32, hero.controls[StunControl].ends - world.tick)) / 72, 0, 2)
-  o[p+19] = clampf(float32(max(0'i32, hero.controls[RootControl].ends - world.tick)) / 72, 0, 2)
-  o[p+20] = clampf(float32(max(0'i32, hero.controls[SilenceControl].ends - world.tick)) / 72, 0, 2)
-  o[p+21] = clampf(float32(max(0'i32, hero.portalEnds - world.tick)) / 72, 0, 2)
-  o[p+22] = clampf(float32(max(0'i32, hero.portalCooldownEnds - world.tick)) / 1440, 0, 2)
-  o[p+23] = clampf(float32(hero.respawnTicks()) / 1440, 0, 2)
-  o[p+24] = float32(hero.abilityPoints()) / 4
-  o[p+25] = float32(hero.inOwnSpawn)
-  o[p+26] = float32(world.phase != Drafting and hero.canShop)
-  o[p+27] = float32(hero.deaths) / 10
-  o[p+28] = float32(hero.lastActionError != NoActionError)
+  f[p+0] = fbool(snapshot.hp > 0)
+  clampAt(p+1, fdiv(snapshot.hp, snapshot.maxHp), 0, 1)
+  clampAt(p+2, fdiv(snapshot.mana, snapshot.maxMana), 0, 1)
+  f[p+3] = fdiv(snapshot.maxHp, fixed(2000))
+  f[p+4] = fdiv(snapshot.maxMana, fixed(1000))
+  f[p+5] = nnRatio(snapshot.gold, 1000)
+  f[p+6] = fdiv(snapshot.level, fixed(20))
+  clampAt(p+7, fdiv(int32(hero.xp), int32(xpForNextLevel(hero.level))), 0, 1)
+  f[p+8] = nnRatio(int32(hero.totalXp), 20000)
+  f[p+9] = (selfX * side) / fixed(64)
+  f[p+10] = (selfY * side) / fixed(64)
+  f[p+11] = fx(selfTeam)
+  clampAt(p+12, nnRatio(world.battleTick(), maxTicks), 0, 1)
+  clampAt(p+13, fdiv(snapshot.attackCooldown, fixed(48)), 0, 2)
+  f[p+14] = attackRange / fixed(10)
+  f[p+15] = fdiv(snapshot.attackDamage, fixed(200))
+  f[p+16] = (worldToTiles(hero.heroMoveSpeed(), WorldScale) * int32(TickRate)) /
+    fixed(5)
+  f[p+17] = fbool(snapshot.target != 0)
+  clampAt(p+18, fdiv(snapshot.stunTicks, fixed(72)), 0, 2)
+  clampAt(p+19, fdiv(snapshot.rootTicks, fixed(72)), 0, 2)
+  clampAt(p+20, fdiv(snapshot.silenceTicks, fixed(72)), 0, 2)
+  clampAt(p+21, fdiv(snapshot.channelTicks, fixed(72)), 0, 2)
+  clampAt(p+22, fdiv(snapshot.portalCooldown, fixed(1440)), 0, 2)
+  clampAt(p+23, fdiv(snapshot.respawnTicks, fixed(1440)), 0, 2)
+  f[p+24] = fdiv(hero.abilityPoints(), fixed(4))
+  f[p+25] = fbool(hero.inOwnSpawn)
+  f[p+26] = fbool(world.phase != Drafting and hero.canShop)
+  f[p+27] = fdiv(snapshot.deaths, fixed(10))
+  f[p+28] = fbool(hero.lastActionError != NoActionError)
   let price = world.buybackPrice(hero.id)
-  o[p+29] = float32(price > 0 and hero.gold >= price)
-  o[p+30 + hero.class.ord] = 1
-  o[p+40 + hero.class.heroRole.ord] = 1
-  o[p+45] = clampf(tiles(hero.velocity.x) * s * 10, -4, 4)
-  o[p+46] = clampf(tiles(hero.velocity.z) * s * 10, -4, 4)
-  o[p+47] = float32(hero.hasMoveTarget)
+  f[p+29] = fbool(price > 0 and snapshot.gold >= price)
+  if snapshot.klass in 0'i32 .. 9'i32:
+    f[p+30 + int(snapshot.klass)] = FixedOne
+  f[p+40 + hero.class.heroRole.ord] = FixedOne
+  clampAt(p+45, (worldToTiles(hero.velocity.x, WorldScale) * side) * fixed(10),
+    -4, 4)
+  clampAt(p+46, (worldToTiles(hero.velocity.z, WorldScale) * side) * fixed(10),
+    -4, 4)
+  f[p+47] = fbool(hero.hasMoveTarget)
   # Abilities.
   for slot in HeroAbilitySlot:
     let
@@ -347,224 +360,281 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
       spec = heroAbility(hero.class, slot).abilitySpec(rank)
       cooldown = hero.cooldowns[slot]
       charges = hero.charges[slot]
-    o[b+0] = float32(rank) / float32(slot.abilityMaxLevel)
-    o[b+1] = float32(rank > 0)
-    o[b+2] = clampf(float32(cooldown) / 240, 0, 2)
-    o[b+3] = float32(charges) / 3
-    o[b+4] = clampf(float32(hero.recharges[slot]) / 240, 0, 2)
-    o[b+5] = float32(spec.manaCost) / 200
-    o[b+6] = float32(alive and rank > 0 and cooldown == 0 and charges > 0 and
-      hero.mana >= spec.manaCost and
-      hero.controls[SilenceControl].ends <= world.tick)
-    o[b+7] = float32(spec.damage) / 300
-    o[b+8] = float32(spec.heal) / 300
-    o[b+9] = float32(spec.restore) / 200
-    o[b+10] = tiles(spec.range) / 10
-    o[b+11 + spec.casting.ord] = 1
-    o[b+15] = tiles(spec.area.radius) / 3
+    f[b+0] = fdiv(rank, slot.abilityMaxLevel)
+    f[b+1] = fbool(rank > 0)
+    clampAt(b+2, fdiv(cooldown, fixed(240)), 0, 2)
+    f[b+3] = fdiv(charges, fixed(3))
+    clampAt(b+4, fdiv(hero.recharges[slot], fixed(240)), 0, 2)
+    f[b+5] = fdiv(spec.manaCost, fixed(200))
+    f[b+6] = fbool(snapshot.hp > 0 and rank > 0 and cooldown == 0 and
+      charges > 0 and snapshot.mana >= spec.manaCost and
+      snapshot.silenceTicks == 0)
+    f[b+7] = fdiv(spec.damage, fixed(300))
+    f[b+8] = fdiv(spec.heal, fixed(300))
+    f[b+9] = fdiv(spec.restore, fixed(200))
+    f[b+10] = worldToTiles(spec.range, WorldScale) / fixed(10)
+    f[b+11 + spec.casting.ord] = FixedOne
+    f[b+15] = worldToTiles(spec.area.radius, WorldScale) / fixed(3)
   # Items.
   for slot in 0 ..< InventorySlots:
     let b = ObsItemOffset + slot * ObsItemFeatures
-    o[b + hero.inventory[slot].ord] = 1
-    o[b + 23] = float32(hero.itemCounts[slot]) / 4
-    o[b + 24] = clampf(float32(hero.itemCooldown(slot, world.tick)) / 240, 0, 2)
-  # Objects.
-  var alliedHeroIds: seq[int32]
-  for other in world.heroes:
-    if other.team == team:
-      alliedHeroIds.add other.id
-  let
-    damage = hero.heroAttackDamage()
-    rangeUnits = hero.class.heroAttackRange()
+    f[b + hero.inventory[slot].ord] = FixedOne
+    f[b + 23] = fdiv(hero.itemCounts[slot], fixed(4))
+    clampAt(b + 24, fdiv(hero.itemCooldown(slot, world.tick), fixed(240)), 0, 2)
+  # Objects: david.bas's slot assignment over the hero's visible list.
   var
-    creeps, neutrals, enemyStructures: seq[(int64, WorldObject)]
-    enemyGod, ownGod: WorldObject
-    haveEnemyGod, haveOwnGod = false
-  proc distance2(value: WorldObject): int64 =
-    let
-      dx = int64(value.position.x - hero.position.x)
-      dz = int64(value.position.z - hero.position.z)
-    dx*dx + dz*dz
+    slotObj: array[ObjectSlots, int]
+    slotId: array[ObjectSlots, int32]
+    slotKey: array[ObjectSlots, Fixed]
+    visibleIds: array[512, int32]
+    ownAlive, enemyVisible, ownLevels, enemyLevels = 0'i32
+  for s in 0 ..< ObjectSlots:
+    slotObj[s] = -1
+    slotKey[s] = fixed(32767)
   var value: WorldObject
-  let count = world.worldObjectCount(hero.id)
-  var enemySeen: array[10, bool]
-  var enemyValues: array[10, WorldObject]
+  let count = min(world.worldObjectCount(hero.id), visibleIds.len)
+  for i in 0 ..< count:
+    if world.worldObjectAt(hero.id, i, value):
+      visibleIds[i] = value.id
   for i in 0 ..< count:
     if not world.worldObjectAt(hero.id, i, value):
       continue
-    case value.kind
-    of 1:
-      if value.team == team:
-        ownGod = value
-        haveOwnGod = true
-      else:
-        enemyGod = value
-        haveEnemyGod = true
-    of 2:
-      if value.team != team:
-        let index = world.heroIndex(value.id)
-        if index in 0 ..< 10:
-          enemySeen[index] = true
-          enemyValues[index] = value
-    of 3:
-      if value.alive:
-        creeps.add((value.distance2, value))
-    of 4, 5:
-      if value.team != team and value.hp > 0:
-        enemyStructures.add((value.distance2, value))
-    of 6:
-      if value.alive:
-        neutrals.add((value.distance2, value))
-    else:
-      discard
-  proc place(o: var openArray[float32], frame: var DecisionFrame, slot: int,
-      value: WorldObject) =
-    writeObject(o, ObsObjectOffset + slot * ObjectFeatures, world, hero,
-      value, damage, rangeUnits, alliedHeroIds)
-    frame.ids[slot] = value.id
-    frame.positions[slot] = value.position
-  place(o, frame, SlotSelf, heroSelfObject(world, hero))
-  var slot = SlotAllies
-  for i, other in world.heroes:
-    if other.team == team and i != heroIndex:
-      if other.heroAlive:
-        place(o, frame, slot, heroSelfObject(world, other))
-      inc slot
-  slot = SlotEnemies
-  for i, other in world.heroes:
-    if other.team != team:
-      if enemySeen[i]:
-        place(o, frame, slot, enemyValues[i])
-      inc slot
-  proc byDistance(a, b: (int64, WorldObject)): int =
-    result = cmp(a[0], b[0])
-    if result == 0:
-      result = cmp(a[1].id, b[1].id)
-  creeps.sort(byDistance)
-  neutrals.sort(byDistance)
-  enemyStructures.sort(byDistance)
-  for i in 0 ..< min(CreepSlots, creeps.len):
-    place(o, frame, SlotCreeps + i, creeps[i][1])
-  if haveOwnGod:
-    place(o, frame, SlotStructures, ownGod)
-  if haveEnemyGod:
-    place(o, frame, SlotStructures + 1, enemyGod)
-  # Own forward tower: the living allied tower nearest the enemy god.
-  block:
-    let enemyCenter = world.forts[1 - team.ord].center
-    var best = int64.high
-    var bestIndex = -1
-    for i, building in world.buildings:
-      if building.kind == TowerBuilding and building.team == team and building.hp > 0:
-        let
-          dx = int64(building.position.x - enemyCenter.x)
-          dz = int64(building.position.z - enemyCenter.z)
-          d = dx*dx + dz*dz
-        if d < best:
-          best = d
-          bestIndex = i
-    if bestIndex >= 0:
-      let building = world.buildings[bestIndex]
-      place(o, frame, SlotStructures + 2, WorldObject(id: building.id, kind: 4,
-        class: -1, team: building.team, position: building.position,
-        hp: building.hp, maxHp: building.maxHp,
-        alive: world.buildingExposed(building), facing: building.facing,
-        targetId: building.targetId))
-  if enemyStructures.len > 0:
-    place(o, frame, SlotStructures + 3, enemyStructures[0][1])
-  for i in 0 ..< min(NeutralSlots, neutrals.len):
-    place(o, frame, SlotNeutrals + i, neutrals[i][1])
-  # Spell warnings.
-  var warnings: seq[(int32, int64, SpellCast)]
-  let spellCount = world.visibleSpellCount(hero.id)
-  var spell: SpellCast
-  for i in 0 ..< spellCount:
-    if world.visibleSpellAt(hero.id, i, spell) and spell.impact >= world.tick:
-      let
-        dx = int64(spell.position.x - hero.position.x)
-        dz = int64(spell.position.z - hero.position.z)
-      warnings.add((spell.impact, dx*dx + dz*dz, spell))
-  warnings.sort(proc(a, b: (int32, int64, SpellCast)): int =
-    result = cmp(a[0], b[0])
-    if result == 0: result = cmp(a[1], b[1]))
-  for i in 0 ..< min(SpellSlots, warnings.len):
     let
-      b = ObsSpellOffset + i * SpellFeatures
-      w = warnings[i][2]
-      dx = tiles(w.position.x - hero.position.x) * s
-      dy = tiles(w.position.z - hero.position.z) * s
+      kind = value.kind
+      faction = value.faction
+      id = value.id
+      alive = value.alive
+      x = worldToTiles(value.position.x, WorldScale)
+      y = worldToTiles(value.position.z, WorldScale)
+    var
+      dx = (x - selfX) / d16
+      dy = (y - selfY) / d16
+      key = dx * dx + dy * dy
+      slot = -1
+      start = -1
+      last = -1
+    if kind == 1:
+      slot = 17
+      if faction != selfTeam:
+        slot = 18
+    elif kind == 2:
+      let roster = id - 100
+      if faction == selfTeam:
+        ownLevels += value.level
+        if alive:
+          inc ownAlive
+          slot = int(roster mod 5) + 1
+          if roster mod 5 > (selfId - 100) mod 5:
+            dec slot
+          if id == selfId:
+            slot = 0
+      else:
+        inc enemyVisible
+        enemyLevels += value.level
+        slot = 5 + int(roster mod 5)
+    elif kind == 3 and alive:
+      start = 10
+      last = 16
+    elif kind == 6 and alive:
+      start = 21
+      last = 24
+    elif (kind == 4 or kind == 5) and max(value.hp, 0'i32) > 0:
+      if faction != selfTeam:
+        start = 20
+        last = 20
+      elif kind == 4:
+        dx = (x - worldToTiles(world.forts[1 - team.ord].center.x,
+          WorldScale)) / d16
+        dy = (y - worldToTiles(world.forts[1 - team.ord].center.z,
+          WorldScale)) / d16
+        key = dx * dx + dy * dy
+        start = 19
+        last = 19
+    if start >= 0:
+      for s in start .. last:
+        if key < slotKey[s] or (key == slotKey[s] and id < slotId[s]):
+          for j in countdown(last, s + 1):
+            slotObj[j] = slotObj[j - 1]
+            slotId[j] = slotId[j - 1]
+            slotKey[j] = slotKey[j - 1]
+          slot = s
+          break
+    if slot >= 0:
+      slotObj[slot] = i
+      slotId[slot] = id
+      slotKey[slot] = key
+  var allyIds: array[10, int32]
+  var allyCount = 0
+  for other in world.heroes:
+    if other.team == team and allyCount < allyIds.len:
+      allyIds[allyCount] = other.id
+      inc allyCount
+  for s in 0 ..< ObjectSlots:
+    let index = slotObj[s]
+    if index < 0:
+      continue
+    if not world.worldObjectAt(hero.id, index, value):
+      continue
+    let
+      b = ObsObjectOffset + s * ObjectFeatures
+      kind = value.kind
+      xs = worldToTiles(value.position.x, WorldScale)
+      ys = worldToTiles(value.position.z, WorldScale)
+      dx = ((xs - selfX) * side) / d16
+      dy = ((ys - selfY) * side) / d16
+      distance = fixxy.sqrt(dx * dx + dy * dy)
+      hp = max(value.hp, 0'i32)
+    var target = value.targetId
+    if target != 0:
+      var seen = false
+      for i in 0 ..< count:
+        if visibleIds[i] == target:
+          seen = true
+          break
+      if not seen:
+        target = 0
+    f[b+0] = FixedOne
+    clampAt(b+1, dx, -4, 4)
+    clampAt(b+2, dy, -4, 4)
+    clampAt(b+3, distance, 0, 8)
+    clampAt(b+4, fdiv(hp, value.maxHp), 0, 1)
+    f[b+5] = fdiv(hp, fixed(2000))
+    f[b+13] = fbool(value.alive)
+    f[b+14] = fdiv(value.level, fixed(20))
+    f[b+15] = fdiv(value.mana, fixed(1000))
+    f[b+16] = fbool(target != 0 and target == selfId)
+    f[b+17] = fbool(value.id != 0 and value.id == snapshot.target)
+    clampAt(b+19, fdiv(value.controlTicks[StunControl], fixed(72)), 0, 2)
+    clampAt(b+20, fdiv(value.controlTicks[RootControl], fixed(72)), 0, 2)
+    clampAt(b+21, fdiv(value.controlTicks[SilenceControl], fixed(72)), 0, 2)
+    clampAt(b+22, (worldToTiles(value.velocity.x, WorldScale) * side) *
+      fixed(10), -4, 4)
+    clampAt(b+23, (worldToTiles(value.velocity.z, WorldScale) * side) *
+      fixed(10), -4, 4)
+    let facing = motions.normalized(fixedVec2(
+      worldToTiles(value.facing.x, WorldScale),
+      worldToTiles(value.facing.z, WorldScale)))
+    f[b+24] = facing.x * side
+    f[b+25] = facing.y * side
+    f[b+26] = fbool(distance <= attackRange / d16)
+    f[b+27] = fbool(hp > 0 and hp <= snapshot.attackDamage)
+    f[b+28] = fbool(value.returning)
+    if kind in 1'i32 .. 6'i32:
+      f[b+6+int(kind)] = FixedOne
+    if value.faction != 2:
+      f[b+6] = fixed(-1)
+      if value.faction == selfTeam:
+        f[b+6] = FixedOne
+    for a in 0 ..< allyCount:
+      if target != 0 and target == allyIds[a]:
+        f[b+18] = FixedOne
+    if kind == 3:
+      f[b+29] = fx(value.class)
+    elif kind == 6:
+      f[b+29] = fdiv(value.class, fixed(3))
+    elif kind == 2 and value.class in 0'i32 .. 9'i32:
+      f[b+30+int(value.class)] = FixedOne
+    frame.ids[s] = value.id
+    frame.positions[s] = value.position
+  # Spell warnings: (impact tick, distance key) insertion order.
+  var
+    warnIndex: array[SpellSlots, int]
+    warnTick: array[SpellSlots, int32]
+    warnDist: array[SpellSlots, Fixed]
+    warnSpell: array[SpellSlots, SpellCast]
+  for s in 0 ..< SpellSlots:
+    warnIndex[s] = -1
+    warnTick[s] = high(int32)
+    warnDist[s] = fixed(32767)
+  var spell: SpellCast
+  let spellCount = world.visibleSpellCount(hero.id)
+  for i in 0 ..< spellCount:
+    if not world.visibleSpellAt(hero.id, i, spell):
+      continue
+    let
+      dx = (worldToTiles(spell.position.x, WorldScale) - selfX) / d16
+      dy = (worldToTiles(spell.position.z, WorldScale) - selfY) / d16
+      distance = dx * dx + dy * dy
+    for s in 0 ..< SpellSlots:
+      if spell.impact < warnTick[s] or
+          (spell.impact == warnTick[s] and distance < warnDist[s]):
+        for j in countdown(SpellSlots - 1, s + 1):
+          warnIndex[j] = warnIndex[j - 1]
+          warnTick[j] = warnTick[j - 1]
+          warnDist[j] = warnDist[j - 1]
+          warnSpell[j] = warnSpell[j - 1]
+        warnIndex[s] = i
+        warnTick[s] = spell.impact
+        warnDist[s] = distance
+        warnSpell[s] = spell
+        break
+  for s in 0 ..< SpellSlots:
+    if warnIndex[s] < 0:
+      continue
+    let
+      b = ObsSpellOffset + s * SpellFeatures
+      w = warnSpell[s]
       caster = world.heroIndex(w.heroId)
-      allied = caster >= 0 and world.heroes[caster].team == team
-      spec = w.ability.abilitySpec
-    o[b+0] = 1
-    o[b+1] = clampf(dx / 16, -4, 4)
-    o[b+2] = clampf(dy / 16, -4, 4)
-    o[b+3] = clampf(sqrt(dx*dx + dy*dy) / 16, 0, 8)
-    o[b+4] = clampf(float32(w.impact - world.tick) / 72, 0, 4)
-    o[b+5] = float32(not allied)
-    o[b+6] = float32(spec.kind != Strike)
-    o[b+7] = float32(w.ability.ord) / 40
+    f[b+0] = FixedOne
+    clampAt(b+1, ((worldToTiles(w.position.x, WorldScale) - selfX) * side) /
+      d16, -4, 4)
+    clampAt(b+2, ((worldToTiles(w.position.z, WorldScale) - selfY) * side) /
+      d16, -4, 4)
+    clampAt(b+3, fixxy.sqrt(warnDist[s]), 0, 8)
+    clampAt(b+4, fdiv(warnTick[s] - snapshot.tick, fixed(72)), 0, 4)
+    f[b+5] = fbool(caster < 0 or world.heroes[caster].team != team)
+    f[b+6] = fbool(w.ability.abilitySpec.kind != Strike)
+    f[b+7] = fdiv(int32(w.ability.ord), fixed(40))
   # Summary.
   p = ObsSummaryOffset
-  let
-    ownFort = world.forts[team.ord]
-    enemyFort = world.forts[1 - team.ord]
-  o[p+0] = float32(max(ownFort.hp, 0)) / float32(FortHp)
-  o[p+1] = float32(world.fortExposed(team))
-  var ownT, ownTAll, ownB, ownBAll, enT, enTAll, enB, enBAll = 0
-  for building in world.buildings:
-    let mine = building.team == team
-    if building.kind == TowerBuilding:
-      if mine:
-        inc ownTAll
-        if building.hp > 0: inc ownT
-      else:
-        inc enTAll
-        if building.knownAlive[team]: inc enT
-    else:
-      if mine:
-        inc ownBAll
-        if building.hp > 0: inc ownB
-      else:
-        inc enBAll
-        if building.knownAlive[team]: inc enB
-  o[p+2] = float32(ownT) / float32(max(1, ownTAll))
-  o[p+3] = float32(ownB) / float32(max(1, ownBAll))
-  o[p+4] = float32(enT) / float32(max(1, enTAll))
-  o[p+5] = float32(enB) / float32(max(1, enBAll))
-  o[p+6] = if haveEnemyGod: float32(max(enemyFort.hp, 0)) / float32(FortHp) else: -1
-  var ownAlive, enemyVisible, ownLevels, enemyLevels = 0
-  for i, other in world.heroes:
-    if other.team == team:
-      ownLevels += other.level
-      if other.heroAlive: inc ownAlive
-    elif enemySeen[i]:
-      inc enemyVisible
-      enemyLevels += int(enemyValues[i].level)
-  o[p+7] = float32(ownAlive) / 5
-  o[p+8] = float32(enemyVisible) / 5
-  o[p+9] = clampf(float32(world.spawnTimerTicks) / float32(max(1'i32, world.spawnIntervalTicks)), 0, 1)
-  o[p+10] = float32(ownLevels) / 50
-  o[p+11] = float32(enemyLevels) / 50
-  o[p+12] = float32(score(hero.totalXp, int(max(0'i32, world.battleTick())))) / 5000
+  f[p+0] = f[ObsObjectOffset + 17 * ObjectFeatures + 4]
+  f[p+1] = f[ObsObjectOffset + 17 * ObjectFeatures + 13]
+  for k in 0 ..< 4:
+    let
+      enemy = k >= 2
+      barracks = (k mod 2) == 1
+    var known, total = 0'i32
+    for building in world.buildings:
+      if (building.team != team) == enemy and
+          (building.kind == BarracksBuilding) == barracks:
+        inc total
+        if (if enemy: building.knownAlive[team] else: building.hp > 0):
+          inc known
+    if total > 0:
+      f[p+2+k] = fdiv(known, total)
+  f[p+6] = fixed(-1)
+  if slotId[18] != 0:
+    f[p+6] = f[ObsObjectOffset + 18 * ObjectFeatures + 4]
+  f[p+7] = fdiv(ownAlive, fixed(5))
+  f[p+8] = fdiv(enemyVisible, fixed(5))
+  f[p+9] = fdiv(world.spawnTimerTicks, world.spawnIntervalTicks)
+  f[p+10] = fdiv(ownLevels, fixed(50))
+  f[p+11] = fdiv(enemyLevels, fixed(50))
+  let glory = score(int(hero.totalXp), int(world.tick),
+    world.gameOver and not world.draw and hero.team == world.winner)
+  f[p+12] = nnRatio(int32(glory), 5000)
   if stats != nil and heroIndex < stats.values.len:
-    o[p+13] = float32(stats.values[heroIndex][KillsMetric]) / 10
-    o[p+14] = float32(stats.values[heroIndex][AssistsMetric]) / 10
+    f[p+13] = fdiv(int32(stats.values[heroIndex][KillsMetric]), fixed(10))
+    f[p+14] = fdiv(int32(stats.values[heroIndex][AssistsMetric]), fixed(10))
   # Terrain: 9x9 known-walkable patch, stride 2 tiles, team frame, row-major.
   let
-    center = mapPoint(hero.position)
-    cx = int((int64(int32(center.x)) + FixedScale div 2) shr 16)
-    cy = int((int64(int32(center.y)) + FixedScale div 2) shr 16)
-    layer = hero.navLayer
+    origin = int32(mapTiles() div 2)
+    centerX = int32((int64(int32(selfX)) + int64(origin) * FixedScale) shr 16)
+    centerY = int32((int64(int32(selfY)) + int64(origin) * FixedScale) shr 16)
   var t = ObsTerrainOffset
+  var terrainY = centerY - 8 * side
   for row in 0 ..< TerrainSide:
+    var terrainX = centerX - 8 * side
     for col in 0 ..< TerrainSide:
-      let
-        ox = (col - TerrainSide div 2) * TerrainStride * int(team.side)
-        oy = (row - TerrainSide div 2) * TerrainStride * int(team.side)
-      o[t] = float32(world.terrainOpen(team, layer, cx + ox, cy + oy))
+      f[t] = fbool(world.terrainWalkableAt(team, terrainX, terrainY,
+        snapshot.layer))
+      terrainX += 2 * side
       inc t
-  # Goal.
+    terrainY += 2 * side
+  # Q16.16 -> float32 exactly as the #83 native kernel reads them; the goal
+  # is training-time conditioning and stays as the trainer set it.
+  for i in 0 ..< ObsGoalOffset:
+    o[i] = f[i].toFloat32
   for i in 0 ..< GoalSize:
     o[ObsGoalOffset + i] = goal[i]
 

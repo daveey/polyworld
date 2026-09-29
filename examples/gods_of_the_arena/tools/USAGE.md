@@ -92,7 +92,7 @@ recovery in that last ambiguous case still requires server-side deduplication.
 The player statistics table combines both formats, with one appearance per
 policy per completed game. Mono games average all five heroes before being
 combined with mixed games. Wins, losses and timeouts are separate counts.
-XP is lifetime earned XP without the ladder's time penalty, including the
+XP is lifetime earned XP before division by elapsed minutes, including the
 1,000 XP per hero awarded when the enemy god dies. Towers and barracks grant
 200 XP to the hero landing the finishing blow. Gold is earned gold,
 excluding starting gold; unspent gold is the final balance. Levels, kills,
@@ -118,21 +118,22 @@ release. Use `--stats-worker PATH` for a preserved older build. A mismatched
 inspector reports an error and leaves the game result intact. Plain
 `--report-only` is offline and rebuilds from the saved counters.
 
-For replay versions 26 through 29, the inspector recovers tower and footman
-finishing blows from exact reward accounting after subtracting hero kills.
-Footmen award 25 XP and 15 gold, towers 100 XP and 75 gold, and heroes 150 XP
-and 100 gold. Both remaining totals must give nonnegative integer kill counts.
-This accounting needs review when a later replay version changes rewards.
+The inspector counts finishing blows from each verified tick's death events.
+Tower kills include barracks; footman last hits exclude neutral camps, whose
+kills are saved separately. Shared XP and god bonuses do not affect these
+counters. Result validation allows battle time plus all ten draft deadlines.
 
-Win/loss is average binary team victory, with no MMR adjustment. Score is lifetime
-XP minus 200 per simulated minute, including fractional minutes, rounded down
-to whole points and clamped to zero for each hero before averaging. Glory gives winners that same time-adjusted XP
-and everyone else zero. Score keeps losing players' time-adjusted XP. Mono
-policies average their five heroes. Timeouts score zero for
-win/loss and glory, while Score retains their XP minus time.
+Win/loss is average binary team victory, with no MMR adjustment. XP / minute
+is lifetime XP divided by elapsed simulated minutes, including fractional
+minutes and drafting, rounded down to whole points per hero before averaging.
+Emmett's Glory awards that value to winners and zero to everyone else. Losses,
+draws, timeouts, and zero-duration games therefore earn zero Glory. Mono
+policies average their five heroes. The XP / minute comparison panel includes
+all outcomes, while Emmett's Glory requires a win. There is no fixed time
+penalty. New tournament runs use schema 2 and do not resume old scoring runs.
 
-The live GotA ladder uses this same Score formula. It averages each player's
-scores within a round, then updates their standing with 15% of that round's
+The hosted GotA ladder uses Emmett's Glory. It averages each player's scores
+within a round, then updates their standing with 15% of that round's
 average and 85% of their previous standing. The first scored round establishes
 the initial standing. Pairings are random and higher standings rank first.
 The tournament reports themselves show cumulative arithmetic averages.

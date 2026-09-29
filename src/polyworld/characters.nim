@@ -173,17 +173,17 @@ proc toggleShading*(scene: CharacterScene) =
   scene.shading =
     if scene.shading == ToonCharacters: PbrCharacters else: ToonCharacters
 
-proc setToonHour*(scene: CharacterScene, hour: float32) =
-  ## Follows a game's clock: the toon palette blends through the day, and
-  ## the sun rig (polyworld/shadows) tracks the same hour — where the light
-  ## comes from, how strong the sun or moon casts, and the horizon fade
-  ## that hides the swap — so one clock drives the whole atmosphere.
-  ## TOON_HOUR=<h> pins it for tuning and captures.
+proc setToonHour*(
+  scene: CharacterScene, hour: float32, azimuthOffset = 0.0'f,
+  elevationScale = 1.0'f
+) =
+  ## Follows the game clock with a shared palette and optional orbit adjustment.
+  ## TOON_HOUR pins the time for tuning and captures.
   var h = hour
   if existsEnv("TOON_HOUR"):
     h = getEnv("TOON_HOUR").parseFloat.float32
   scene.toon.setPalette(paletteAtHour(h))
-  applySunHour(h)
+  applySunHour(h, azimuthOffset, elevationScale)
   # TOON_LIGHT keeps its override; otherwise characters and terrain are lit
   # from wherever the sun (or moon) actually is.
   if not existsEnv("TOON_LIGHT"):

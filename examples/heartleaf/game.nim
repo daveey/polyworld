@@ -39,15 +39,15 @@ Heartleaf, a village dinner-party week between nine BASIC villagers.
 
 Compile with -d:headless for a command-line game.
 Compile with -d:emscripten for the web backend.
-Compile with -d:takeScreenshot for a deterministic capture."""
+Compile with -d:takeScreenshot to save a PNG without showing a window.
+Set SCREENSHOT_PATH for the output (default heartleaf.png).
+Use --seek-tick or --seek-event with --play=false to capture that state."""
 
 proc parseGameOptions(): (GameOptions, int32) =
   ## Reads the command line into a validated game description.
   var options = GameOptions(
     seed: DefaultSeed,
-    speed: 1,
-    windowWidth: 1024,
-    windowHeight: 576
+    speed: 1
   )
   var dayCount = DefaultDayCount
   let arguments = commandLineParams()

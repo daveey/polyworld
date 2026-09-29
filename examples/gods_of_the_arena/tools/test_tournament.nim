@@ -29,7 +29,9 @@ proc resultFor(game: JsonNode, outcome = "RedTeam", ticks = 720): JsonNode =
     "seed": game["seed"], "total_xp": []}
   for slot, policy in game["seats"].elems:
     result["total_xp"].add %((policy.getInt + 1) * 100 + slot)
-    result["scores"].add %score(result["total_xp"][slot].getInt, ticks)
+    result["scores"].add %score(
+      result["total_xp"][slot].getInt, ticks, result.seatWin(slot) == 1
+    )
 
 proc completed(run: JsonNode): seq[JsonNode] =
   ## Creates one completed authoritative record per fixture game.
@@ -176,33 +178,33 @@ echo "Checking whole-point scores, timeouts, and mono averages"
 for mode in ["mixed", "mono"]:
   let run = fixture(1, mode)
   let game = run["schedule"][0]
-  for outcome in ["RedTeam", "BlueTeam", "time_limit"]:
+  for outcome in ["RedTeam", "BlueTeam", "time_limit", "draw"]:
     let raw = resultFor(game, outcome, 721)
     validateResult(raw, game, run)
-    let values = gameValues(game, raw, run)
+    let values = gameValues(game, raw)
     for policy, value in values:
       var adjusted, wins, count, published: float64
       for slot, participant in game["seats"].elems:
         if participant.getInt == policy:
-          adjusted += max(0, raw["total_xp"][slot].getInt - 101).float64
+          adjusted += (raw["total_xp"][slot].getInt * 1440 div 721).float64
           wins += raw.seatWin(slot).float64
           doAssert raw["scores"][slot].kind == JInt
           published += raw["scores"][slot].getFloat
           count += 1
       doAssert abs(value[0] - wins / count) < 1e-9
       doAssert abs(value[1] - adjusted / count) < 1e-9
-      doAssert abs(value[1] - published / count) < 1e-9
+      doAssert abs(value[2] - published / count) < 1e-9
       let glory = if wins > 0: adjusted / count else: 0.0
       doAssert abs(value[2] - glory) < 1e-9
   let raw = resultFor(game, "time_limit", 28800)
   for slot in 0 ..< 10:
     raw["total_xp"].elems[slot] = %0
-  for policy, values in gameValues(game, raw, run):
+  for policy, values in gameValues(game, raw):
     doAssert values == [0.0, 0.0, 0.0]
   let victory = resultFor(game, "RedTeam", 28800)
   for slot in 0 ..< 10:
     victory["total_xp"].elems[slot] = %0
-  for policy, values in gameValues(game, victory, run):
+  for policy, values in gameValues(game, victory):
     doAssert values[1] == 0.0
     doAssert values[2] == 0.0
   raw["scores"].elems[0] = %"invalid score"
@@ -213,7 +215,22 @@ for mode in ["mixed", "mono"]:
     rejected = true
   doAssert rejected
 
-echo "Checking the zero floor precedes hero and game averages"
+echo "Checking result duration includes bounded drafting time"
+block:
+  let
+    run = fixture(1, "mixed")
+    game = run["schedule"][0]
+  for ticks in [28800, 28909, 31200]:
+    validateResult(resultFor(game, "time_limit", ticks), game, run)
+  for ticks in [-1, 31201]:
+    var rejected = false
+    try:
+      validateResult(resultFor(game, "time_limit", ticks), game, run)
+    except TournamentError:
+      rejected = true
+    doAssert rejected
+
+echo "Checking zero XP and victory gating precede policy averages"
 block:
   let
     run = fixture(1, "mono")
@@ -221,39 +238,35 @@ block:
     raw = resultFor(game, "RedTeam", 1440)
   for slot in 0 ..< 10:
     raw["total_xp"].elems[slot] = %(if slot mod 5 == 0: 0 else: 1000)
-  for policy, values in gameValues(game, raw, run):
-    doAssert values[1] == 640.0
-    doAssert values[2] == 640.0 * values[0]
+  for policy, values in gameValues(game, raw):
+    doAssert values[1] == 800.0
+    doAssert values[2] == 800.0 * values[0]
 
-echo "Checking frozen penalties and legacy run compatibility"
-for rate in [0, 100, 200]:
+echo "Checking Emmett's Glory reports survive resume"
+block:
   let
-    directory = fresh("penalty-" & $rate)
+    directory = fresh("emmetts-glory")
     run = fixture(40)
     records = completed(run)
-  doAssert run["settings"]["xp_per_minute"].getInt == 200
-  if rate == 0:
-    run["settings"].delete("xp_per_minute")
-  else:
-    run["settings"]["xp_per_minute"] = %rate
+  doAssert not run["settings"].hasKey("xp_per_minute")
   for record in records:
-    record["result"]["ticks"] = %1440
+    record["result"]["ticks"] = %2880
     record["result"]["total_xp"] = %repeat(1000, 10)
-  let
-    summary = summarize(run, records, "completed")
-    expected = if rate == 200: 800.0 else: 900.0
+  let summary = summarize(run, records, "completed")
   for panel in summary["panels"]:
+    if panel["ladder"].getStr == "glory":
+      doAssert panel["title"].getStr == "Emmett's Glory"
     for row in panel["rows"]:
       if row["appearances"].getInt == 0:
         continue
       if panel["ladder"].getStr == "score":
-        doAssert row["value"].getFloat == expected
+        doAssert row["value"].getFloat == 500.0
       elif panel["ladder"].getStr == "glory":
         let index = if panel["format"].getStr == "mixed": 0 else: 3
         for wins in summary["panels"][index]["rows"]:
           if wins["id"] == row["id"]:
             doAssert abs(row["value"].getFloat -
-              expected * wins["value"].getFloat) < 1e-9
+              500.0 * wins["value"].getFloat) < 1e-9
   saveJson(directory / "run.json", run)
   let resumed = readJson(directory / "run.json")
   validateResume(resumed, parseArguments(@["--run", "fixture"]))

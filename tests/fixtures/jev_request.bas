@@ -1,0 +1,20 @@
+if request = 0 then
+  ok = oracleStateText("game", "Gods of the Arena, a team lane battle")
+  ok = oracleStateText("situation", "Early game at 120 seconds. Our warrior has 90% health, level 3, and little gold. Allied towers are healthy. Mid has safe enemy creeps to farm and a nearby ally. Two healthy enemies are visible in top lane. No enemy hero is visible in bottom lane.")
+  ok = oracleQuestion("strategy", 2, "Choose our next macro strategy.")
+  ok = oracleCriterion("strategy", "farm", "Kill lane creeps for gold and experience.")
+  ok = oracleCriterion("strategy", "gank", "Join an ally to attack an enemy hero.")
+  ok = oracleCriterion("strategy", "push", "Advance to damage enemy structures.")
+  ok = oracleCriterion("strategy", "defend", "Protect our threatened base.")
+  ok = oracleCriterion("strategy", "regroup", "Move toward nearby teammates.")
+  ok = oracleQuestion("lane", 2, "Choose the lane for this strategy.")
+  ok = oracleCriterion("lane", "top", "Top lane with two visible enemies.")
+  ok = oracleCriterion("lane", "mid", "Mid lane with safe creeps and an ally.")
+  ok = oracleCriterion("lane", "bottom", "Bottom lane with no visible enemy heroes.")
+  request = oracleAsk()
+else
+  answers = oraclePoll(request)
+  strategy = oracleAnswer(request, "strategy")
+  lane = oracleAnswer(request, "lane")
+  model$ = jsonGet$(llmResponse$(request), "/model")
+end if

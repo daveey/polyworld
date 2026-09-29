@@ -4,7 +4,8 @@
 
 import
   std/strformat,
-  polyworld/pathing,
+  pixie,
+  polyworld/[common, pathing],
   ../examples/heartleaf/[content, maps, ground]
 
 const Seed = 1988'i32
@@ -132,4 +133,52 @@ block gardensDoNotPaintTerrain:
     map.kinds[tileIndex(garden)] = uint8(GrassTile)
   doAssert buildGroundMask(map, Seed) == original
 
+
+echo "Testing the reference town's ground mask"
+block townCoverage:
+  let mask = buildTownGroundMask(Seed)
+  doAssert mask.len == MaskSize * MaskSize * MaskChannels
+
+  proc at(x, z: int): (uint8, uint8) =
+    ## Samples a world-space tile center in the reference mask.
+    let
+      tx = (x + GridSide.int div 2) * MaskTexelsPerTile +
+        MaskTexelsPerTile div 2
+      tz = (z + GridSide.int div 2) * MaskTexelsPerTile +
+        MaskTexelsPerTile div 2
+      index = (tz * MaskSize + tx) * MaskChannels
+    (mask[index], mask[index + 1])
+
+  doAssert at(0, 0) == (0'u8, 0'u8), "The tree bed must remain grassy"
+  doAssert at(5, 0) == (255'u8, 255'u8), "The plaza needs cream paving"
+  doAssert at(0, -20) == (0'u8, 255'u8), "Lanes must be dirt, not cobble"
+  doAssert at(2, 15) == (0'u8, 0'u8), "The well belongs in a garden"
+  doAssert at(40, 30) == (0'u8, 0'u8), "Woodland must stay grassy"
+  var feathered = 0
+  for i in 0 ..< MaskSize * MaskSize:
+    if mask[i * MaskChannels + 1] in 1'u8 .. 254'u8:
+      inc feathered
+  doAssert feathered > 1000, "The golden paths lost their soft edges"
+
 echo "test_hlf_ground: all checks passed"
+
+block referenceLayerRegistration:
+  let
+    reference = readImage(DataRoot &
+      "/terrain/heartleaf/layers/01-grass-and-paths.png")
+    mask = buildReferenceGroundMask(reference)
+  proc coverage(px, py: int): tuple[stone, dirt: uint8] =
+    ## Samples registered reference pixels in the runtime material mask.
+    let
+      x = int(((px - 560).float32 * 0.044'f + HalfGrid) *
+        MaskTexelsPerTile.float32)
+      y = int(((py - 650).float32 * 0.057'f + HalfGrid) *
+        MaskTexelsPerTile.float32)
+      index = (y * MaskSize + x) * MaskChannels
+    (mask[index], mask[index + 1])
+  doAssert coverage(555, 314).dirt > 180
+  doAssert coverage(600, 400).dirt < 30
+  doAssert coverage(549, 553).stone > 120
+  doAssert coverage(549, 650).stone < 30
+  doAssert coverage(549, 650).dirt < 30
+  echo "Reference layer paths, plaza and planted islands register correctly."

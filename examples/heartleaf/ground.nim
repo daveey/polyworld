@@ -13,7 +13,7 @@ import
   pixie,
   polyworld/[noises, pathing, rngs],
   content,
-  maps
+  maps, layouts
 
 type
   StoneStyle* = object
@@ -396,3 +396,56 @@ proc buildGroundMask*(map: MapData, seed: int32): seq[uint8] =
       let stone = max(plazaStone, max(roadCoverage, houseCoverage))
       result[texel] = toByte(stone)
       result[texel + 1] = if stone > 0.0'f32: 255'u8 else: toByte(dirt)
+
+proc buildTownGroundMask*(seed: int32): seq[uint8] =
+  ## Paints cream plaza paving and golden lanes with soft grassy edges.
+  result = newSeq[uint8](MaskSize * MaskSize * MaskChannels)
+  for ty in 0 ..< MaskSize:
+    for tx in 0 ..< MaskSize:
+      let
+        x = (tx.float32 + 0.5'f) / MaskTexelsPerTile.float32 -
+          HalfGrid - 0.5'f
+        z = (ty.float32 + 0.5'f) / MaskTexelsPerTile.float32 -
+          HalfGrid - 0.5'f
+      if x < TownMinX.float32 - 1 or x > TownMaxX.float32 + 1 or
+        z < TownMinZ.float32 - 1 or z > TownMaxZ.float32 + 1:
+          continue
+      let
+        distance = roadClearance(x, z)
+        edge = wobble(seed, DirtWobbleStream, tx, ty) * 0.4'f +
+          wobble(seed, RoadStoneWobbleStream, tx * 3, ty * 3) * 0.18'f
+        dirt = smoothstep(-0.48'f, 0.28'f, -distance + edge)
+        radius = length(vec2(x, z) - TownPlaza)
+        stone = clamp((TownPlazaRadius - radius) / 0.35'f, 0'f, 1'f) *
+          clamp((radius - 1.8'f) / 0.25'f, 0'f, 1'f)
+        index = (ty * MaskSize + tx) * MaskChannels
+      result[index] = toByte(stone)
+      result[index + 1] = toByte(max(stone, dirt))
+
+proc buildReferenceGroundMask*(reference: Image): seq[uint8] =
+  ## Registers material coverage from the supplied grass and paths layer.
+  result = newSeq[uint8](MaskSize * MaskSize * MaskChannels)
+  for ty in 0 ..< MaskSize:
+    for tx in 0 ..< MaskSize:
+      let
+        x = (tx.float32 + 0.5'f) / MaskTexelsPerTile.float32 - HalfGrid
+        z = (ty.float32 + 0.5'f) / MaskTexelsPerTile.float32 - HalfGrid
+        px = int(round(x / 0.044'f + 560))
+        py = int(round(z / 0.057'f + 650))
+      if px < 1 or py < 1 or
+        px >= reference.width - 1 or py >= reference.height - 1:
+          continue
+      var dirt, stone: float32
+      for dy in -1 .. 1:
+        for dx in -1 .. 1:
+          let
+            pixel = reference[px + dx, py + dy]
+            warm = pixel.r.float32 - pixel.g.float32
+            coverage = smoothstep(5'f, 20'f, warm)
+            paving = smoothstep(0.66'f, 0.78'f,
+              pixel.b.float32 / max(1'f, pixel.g.float32))
+          dirt += coverage
+          stone += coverage * paving
+      let index = (ty * MaskSize + tx) * MaskChannels
+      result[index] = toByte(stone / 9)
+      result[index + 1] = toByte(dirt / 9)

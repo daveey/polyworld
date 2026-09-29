@@ -18,6 +18,22 @@ proc parseCommon(
     inc index
   result.validateGameOptions(liveBotCount, liveBotMessage)
 
+echo "Testing independent pacing and barrier controls"
+block:
+  let defaults = parseCommon(@[])
+  doAssert not defaults.waitForLlm
+  doAssert defaults.headlessTickRate == 0
+  for flags in [
+    @["--headless-tick-rate:24", "--llm-mode:barrier"],
+    @["--headless-tick-rate=24", "--llm-mode=barrier"],
+    @["--headless-tick-rate", "24", "--llm-mode", "barrier"]
+  ]:
+    let options = parseCommon(flags)
+    doAssert options.waitForLlm
+    doAssert options.headlessTickRate == 24
+  let disabled = parseCommon(@["--llm-mode:async"])
+  doAssert not disabled.waitForLlm
+
 echo "Testing bot path and count parsing"
 block:
   var groups: seq[BotGroup]

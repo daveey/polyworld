@@ -52,6 +52,7 @@ const
     DataRoot & "/terrain/treegen/stump-rings.png"
   ]
   RockgenTexture* = DataRoot & "/terrain/rockgen/rock-trim-atlas.png"
+  TreegenFlowerTexture* = DataRoot & "/terrain/treegen/flower-atlas.png"
   DefaultTerrainAssets* = TerrainAssets(
     grass: true, water: true, size: 1024, materials: CartoonMaterials
   )

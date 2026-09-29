@@ -207,9 +207,10 @@ block conversationsAreVoluntaryAndBounded:
   let w = newWorld(gameMap, 7)
   for slot in 0 .. 4:
     let v = w.villagers[slot]
-    v.tile = tile2(70 + int32(slot mod 2) * 2, 70 + int32(slot div 2))
+    v.tile = tile2(62 + int32(slot mod 2) * 2, 84 + int32(slot div 2))
     v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx,
       fixed(int32(v.tile.y)) + 0.5'fx)
+    doAssert w.positionOpen(v.body.pos)
   w.villagers[0].body.facing = FixedPi
   doAssert not w.applyTalk(0, 0)
   doAssert not w.applyTalk(0, -1)
@@ -247,8 +248,8 @@ block threeSpeakersLeaveTheLine:
   let w = newWorld(gameMap, 7)
   for slot in 0 .. 2:
     let v = w.villagers[slot]
-    v.tile = tile2(70 + int32(slot) * 2, 70)
-    v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx, 70.5'fx)
+    v.tile = tile2(62 + int32(slot) * 2, 84)
+    v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx, 84.5'fx)
   doAssert w.applyTalk(0, 1)
   doAssert w.applyTalk(1, 0)
   doAssert w.applyTalk(2, 1)
@@ -279,8 +280,8 @@ block scriptedConversationEnds:
     game.world.gardens[garden] = EmptyGarden
   for slot in 0 .. 1:
     let v = game.world.villagers[slot]
-    v.tile = tile2(70 + int32(slot) * 2, 70)
-    v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx, 70.5'fx)
+    v.tile = tile2(62 + int32(slot) * 2, 84)
+    v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx, 84.5'fx)
   var answered, departed, walkedAway = false
   var departureOrigin: Tile2
   for tick in 0 ..< 30 * TickRate:
@@ -314,8 +315,10 @@ block isolatedVillagerSeeksDistantCompany:
     game.world.gardens[garden] = EmptyGarden
   for slot in 0 .. 1:
     let v = game.world.villagers[slot]
-    v.tile = tile2(60 + int32(slot) * 30, 70)
-    v.body.pos = fixedVec2(fixed(int32(v.tile.x)) + 0.5'fx, 70.5'fx)
+    v.tile = gameMap.houses[if slot == 0: 5 else: 2].door
+    v.body.pos = fixedVec2(fixed(v.tile.x.int32) + 0.5'fx,
+      fixed(v.tile.y.int32) + 0.5'fx)
+    doAssert game.world.positionOpen(v.body.pos)
   var soughtCompany = false
   for tick in 0 ..< 40 * TickRate:
     game.world.tickWorld(proc(w: World) = runBotDecisions(game))
@@ -513,7 +516,7 @@ for seed in [1'i32, 7, 1988, DefaultSeed]:
       doAssert validParty, &"seed {seed} had no dinner on day {w.day}"
       for v in game.world.villagers:
         doAssert not v.curfewMissed,
-          &"{VillagerNames[v.slot]} missed curfew on day {game.world.day}"
+          &"seed {seed}: {VillagerNames[v.slot]} missed curfew on day {game.world.day}"
   doAssert samples > 0
   doAssert outsidePlaza > samples * VillagerCount div 2,
     &"seed {seed}: villagers spent most of the afternoon in the plaza"

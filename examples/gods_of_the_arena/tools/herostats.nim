@@ -10,6 +10,10 @@ const
   StatsLeague* = "league_3c60897b-25cf-4b37-9d1a-8554c1198f28"
   StatsApi* = "https://softmax.com/api/observatory/v2"
   StatsSchema* = 1
+  FootmanKind = 3
+  TowerKind = 4
+  BarracksKind = 5
+  NeutralKind = 6
 
 type
   HeroStatsError* = object of CatchableError
@@ -173,15 +177,34 @@ proc inspectReplay*(path: string, metadata: JsonNode): JsonNode =
   requireStats(data.hashes.len > 0, "Replay contains no recorded ticks")
   game.replayPlayer = initReplayPlayer(data)
   game.historyPlayback = true
+  when defined(replayEvents):
+    var
+      towerKills = newSeq[int](game.world.heroes.len)
+      lastHits = newSeq[int](game.world.heroes.len)
+      neutralKills = newSeq[int](game.world.heroes.len)
   while game.world.tick < data.hashes.len:
     let before = game.world.tick
     game.tickWorld(nil)
     requireStats(game.world.tick > before, "Replay stopped before its end")
     requireStats(game.hashCheck.mismatches == 0, game.hashCheck.error)
+    when defined(replayEvents):
+      for event in game.world.events:
+        let slot = event.actor.player.int
+        if event.kind != Death or slot notin 0 ..< towerKills.len:
+          continue
+        case event.target.kind
+        of FootmanKind:
+          inc lastHits[slot]
+        of TowerKind, BarracksKind:
+          inc towerKills[slot]
+        of NeutralKind:
+          inc neutralKills[slot]
+        else:
+          discard
   requireStats(game.replayPlayer.finished, "Unconsumed replay actions")
   let
     victories = game.world.scores()
-    seatScores = scores(game.world.totalXp(), int(game.world.tick))
+    seatScores = scores(game.world.totalXp(), int(game.world.tick), victories)
     observed = metadata{"participant_scores"}
     players = metadata{"participants"}
   requireStats(observed != nil and observed.len == seatScores.len,
@@ -193,7 +216,7 @@ proc inspectReplay*(path: string, metadata: JsonNode): JsonNode =
       "Invalid or duplicate score position")
     positions.incl(slot)
     requireStats(score["score"].getFloat == seatScores[slot].float64,
-      "Replay XP and duration differ from the league seat scores")
+      "Replay XP, duration, or outcome differs from the league seat scores")
   result = %*{"schema": StatsSchema, "id": metadata["id"],
     "verified": true, "ticks": game.world.tick, "hash_mismatches": 0,
     "replay_version": data.header.gameVersion,
@@ -220,6 +243,10 @@ proc inspectReplay*(path: string, metadata: JsonNode): JsonNode =
       "player_name": participant{"player_name"}.getStr,
       "policy_version_id": participant{"policy_version_id"}.getStr,
       "is_filler": participant{"is_filler"}.getBool}
+    when defined(replayEvents):
+      result["heroes"][slot]["tower_kills"] = %towerKills[slot]
+      result["heroes"][slot]["last_hits"] = %lastHits[slot]
+      result["heroes"][slot]["neutral_kills"] = %neutralKills[slot]
 
 proc wilson*(wins, games: int): array[2, float64] =
   ## Computes a descriptive 95 percent Wilson interval for game outcomes.

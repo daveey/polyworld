@@ -364,8 +364,8 @@ if (day + selfSlot) mod 3 = 0 then
 end if
 
 if dinnerDone = 1 then
-  ' Collect leftovers until it is time to get home for curfew.
-  homeMinutes = distTo(doorX(selfSlot), doorY(selfSlot)) * 2 + 30
+  ' Allow for detours through gates and around planted gardens on the way home.
+  homeMinutes = distTo(doorX(selfSlot), doorY(selfSlot)) * 4 + 60
   if 1260 - minuteOfDay <= homeMinutes or minuteOfDay >= 1200 then
     returningHome = 1
   end if
@@ -425,10 +425,10 @@ else
     end if
   end if
 
-  ' Leave in time. The walk costs about two game minutes per tile, plus a
-  ' half-hour margin for door crowds; five o'clock is the hard deadline.
+  ' Budget extra time for fences and shrubs, plus a half-hour for door crowds.
+  ' Five o'clock is the hard deadline for starting the walk to dinner.
   minutesLeft = 1080 - minuteOfDay
-  walkMinutes = distTo(doorX(target), doorY(target)) * 2
+  walkMinutes = distTo(doorX(target), doorY(target)) * 4
   going = 0
   if minutesLeft <= walkMinutes + 30 then
     going = 1

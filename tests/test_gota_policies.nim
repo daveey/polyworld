@@ -4,8 +4,10 @@ import
   polyworld/[bodies, cli],
   ../examples/gods_of_the_arena/[bots, content, maps, replays, sim]
 
-const Policies = currentSourcePath().parentDir.parentDir /
-  "examples/gods_of_the_arena/players"
+const
+  Policies = currentSourcePath().parentDir.parentDir /
+    "examples/gods_of_the_arena/players"
+  IdlePolicy = currentSourcePath().parentDir / "policies/idle.bas"
 
 type
   Scenario = enum
@@ -29,7 +31,10 @@ proc decision(policy: string, team: Team, class: HeroClass,
   ## Runs the actual policy in a mirrored scenario with stable actor identities.
   let game = newGame(generateMap(7), 100_000, 10, false,
     ReplayData(), drafting = false)
-  game.loadBots([BotGroup(path: Policies / policy, count: 10)])
+  game.loadBots([
+    BotGroup(path: Policies / policy, count: 1),
+    BotGroup(path: IdlePolicy, count: 9)
+  ])
   game.recorder = initReplayRecorder(game.currentSetup(1000))
   let
     origin =

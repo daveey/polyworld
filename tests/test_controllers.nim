@@ -97,3 +97,22 @@ block:
   doAssert config.players[1].displayName(1) == "Player 2"
 
 echo "Controller tests passed"
+
+echo "Testing hosted and replay inference settings round trip"
+block:
+  let config = """{
+    "headless_tick_rate": 12, "wait_for_llm": true
+  }""".fromJson(GameConfig)
+  doAssert config.waitForLlm
+  doAssert config.headlessTickRate == 12
+  let restored = config.toJson().fromJson(GameConfig)
+  doAssert restored == config
+  let defaults = "{}".fromJson(GameConfig)
+  doAssert not defaults.waitForLlm
+  doAssert defaults.headlessTickRate == 0
+  let options = GameOptions(
+    headlessTickRate: 12, waitForLlm: true
+  )
+  let local = options.localGameConfig(0)
+  doAssert local.waitForLlm
+  doAssert local.headlessTickRate == 12

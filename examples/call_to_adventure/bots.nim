@@ -7,7 +7,7 @@
 import
   polyworld/neural,
   bassy,
-  polyworld/[mailboxes, bodies, metrics, cli, controllers,
+  polyworld/[llms, mailboxes, bodies, metrics, cli, controllers,
     pathing, profiles],
   content,
   sim,
@@ -95,6 +95,8 @@ proc issueHeroAction(action: ReplayAction): int32 =
 proc heroLimits(): Limits =
   ## Defines one isolated hero VM's source, memory, and decision budgets.
   result = defaultLimits()
+  result.maxStrings = 1024
+  result.maxStringLength = 64 * 1024
   result.maxStringBytes = 256 * 1024
   result.maxSourceBytes = 128 * 1024
   result.maxCodeInstructions = 50_000
@@ -126,10 +128,11 @@ proc sendChat*(
     if distance in 0 .. 16 and game.inboxes[recipient].push(-2, text):
       inc result
 
-proc buildHeroHost(heroId: int32): Host =
+proc buildHeroHost(heroId: int32, llm: LlmClient = nil): Host =
   ## Builds the world-query and high-level action API for one hero.
   result = initHost()
-  result.addNeuralFunctions()
+  let services = if llm == nil: newLlmClient(0, LlmConfig()) else: llm
+  services.addFunctions(result)
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Sends script text through the game's routing rules.
     let player = int(heroId - 100)
@@ -281,6 +284,7 @@ proc loadBots*(
   for slot in 0 ..< PartySize:
     if kinds[slot] == PlayerController:
       continue
+    let llm = newLlmClient(slot)
     let source = sources[slot]
     let program =
       when defined(coworld):
@@ -293,11 +297,14 @@ proc loadBots*(
     game.heroVms[slot] = HeroVm(
       runtime: initRuntime(
         program,
-        buildHeroHost(int32(100 + slot)),
+        buildHeroHost(int32(100 + slot), llm),
         limits
       ),
       ready: true,
+      prepareDecision: llm.decisionCallback(),
+      pollRequests: llm.requestPoller()
     )
+    llm.bindRuntime(game.heroVms[slot].runtime)
     when defined(coworld):
       game.heroVms[slot].output = playerPrinter(int(slot))
 
@@ -315,6 +322,8 @@ proc runBotDecisions*(game: Game, slot: int32) {.measure.} =
   let objective = game.objectiveTile(slot)
   try:
     game.heroVms[slot].runtime.restart()
+    if game.heroVms[slot].prepareDecision != nil:
+      game.heroVms[slot].prepareDecision(game.world.tick)
     game.heroVms[slot].runtime.setData(heroDataIds[DataSelfId], actor.id)
     game.heroVms[slot].runtime.setData(
       heroDataIds[DataSelfClass],

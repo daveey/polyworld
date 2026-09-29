@@ -5,7 +5,7 @@
 
 import
   std/strutils,
-  cli, configs
+  cli, configs, policies
 
 when defined(coworld):
   import coworld
@@ -39,6 +39,8 @@ proc localGameConfig*(options: GameOptions, slotCount: int): GameConfig =
     maxTicks: options.maximumTicks,
     spawnIntervalTicks: options.spawnIntervalTicks,
     playerSlot: options.playerSlot,
+    headlessTickRate: options.headlessTickRate,
+    waitForLlm: options.waitForLlm,
     players: unnamedPlayers(slotCount)
   )
   var next = 0
@@ -64,7 +66,7 @@ proc expandBotSources*(
       when defined(coworld):
         readPlayerSource(group.path)
       else:
-        readFile(group.path)
+        readPolicyBytes(group.path)
     for _ in 0 ..< group.count:
       while next < kinds.len and kinds[next] == PlayerController:
         inc next

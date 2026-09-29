@@ -19,6 +19,8 @@ import
 type
   HeroVm* = ref object
     output*: PrintProc
+    prepareDecision*: proc(tick: int32) {.closure.}
+    pollRequests*: proc(): bool {.closure.}
     ## One compiled BASIC program for a party slot. Not simulation state.
     runtime*: Runtime
     ready*: bool

@@ -177,11 +177,11 @@ for attacker in Team:
     doAssert world.gameOver and not world.draw
     doAssert world.winner == attacker
     doAssert world.forts[defender.ord].hp == 0
-    let finalScores = scores(world.totalXp(), world.tick.int)
+    let finalScores = scores(world.totalXp(), world.tick.int, world.scores())
     for i, hero in world.heroes:
       let reward = if hero.team == attacker: 1000 else: 0
       doAssert hero.totalXp == 2000 + reward
-      doAssert finalScores[i] == 1000 + reward
+      doAssert finalScores[i] == (if hero.team == attacker: 600 else: 0)
       doAssert hero.gold == before.heroes[i].gold
       if before.heroes[i].state == Dying:
         doAssert hero.state == Dying and hero.hp == 0

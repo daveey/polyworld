@@ -13,7 +13,7 @@
 import
   polyworld/neural,
   bassy,
-  polyworld/[mailboxes, bodies, metrics, profiles],
+  polyworld/[llms, mailboxes, bodies, metrics, profiles],
   content,
   sim
 
@@ -244,6 +244,8 @@ proc overlordLimits*(): Limits =
   ## unit will exceed it and fail the script, which is the pressure that
   ## pushes authors onto `nearestEnemy` and friends.
   result = defaultLimits()
+  result.maxStrings = 1024
+  result.maxStringLength = 64 * 1024
   result.maxStringBytes = 256 * 1024
   result.maxSourceBytes = 256 * 1024
   result.maxCodeInstructions = 100_000
@@ -287,7 +289,7 @@ proc sendChat*(
     if game.inboxes[recipient].push(id, text):
       inc result
 
-proc buildOverlordHost*(playerId: int32): Host =
+proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
   ## Builds the complete world-query and command interface for one player.
   ##
   ## The same builder makes both the compile-time schema and each player's
@@ -300,7 +302,8 @@ proc buildOverlordHost*(playerId: int32): Host =
   ## cost far more than their own cycles, so a script's budget prices its
   ## demand on the simulation rather than only its own arithmetic.
   result = initHost()
-  result.addNeuralFunctions()
+  let services = if llm == nil: newLlmClient(0, LlmConfig()) else: llm
+  services.addFunctions(result)
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Sends script text through the game's routing rules.
     let player = int(playerId)
@@ -609,6 +612,7 @@ proc loadBots*(
     when not defined(coworld):
       if sources[player].len == 0:
         continue
+    let llm = newLlmClient(int(player))
     let source = sources[player]
     let program =
       when defined(coworld):
@@ -616,9 +620,12 @@ proc loadBots*(
       else:
         compile(source, schema, limits)
     game.brains[player] = OverlordVm(
-      runtime: initRuntime(program, buildOverlordHost(player), limits),
+      runtime: initRuntime(program, buildOverlordHost(player, llm), limits),
       ready: true,
+      prepareDecision: llm.decisionCallback(),
+      pollRequests: llm.requestPoller()
     )
+    llm.bindRuntime(game.brains[player].runtime)
     if not bound:
       bindOverlordData(program)
       bound = true
@@ -644,6 +651,8 @@ proc runDecision(game: Game, player: int32) =
 
   try:
     game.brains[player].runtime.restart()
+    if game.brains[player].prepareDecision != nil:
+      game.brains[player].prepareDecision(game.world.tick)
     let
       economy = addr game.world.players[player]
       ids = overlordDataIds

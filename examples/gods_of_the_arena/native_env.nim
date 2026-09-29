@@ -9,6 +9,8 @@
 ## every handle of the process must stay on one thread.)
 ## One handle = one ten-seat match. See native_env.h and neural_basic.md.
 
+{.define: gotaNoLlm.}
+
 import std/[json, locks, os], jsony, scores, polyworld/visions
 include bots
 
@@ -68,8 +70,14 @@ proc copyText(text: string, buffer: ptr char, capacity: int32) =
   dest[n] = '\0'
 
 proc seatScore(game: Game, index: int): int64 =
-  int64(score(game.world.heroes[index].totalXp,
-    int(max(0'i32, game.world.battleTick()))))
+  ## The trainer's reward/score channel (ABI v1): lifetime XP minus 200 per
+  ## minute, floored at 0 (the pre-Glory score, unchanged so the reward terms
+  ## keep their meaning). The observation cell 1306 is Glory, see neural_contract.
+  let
+    ticks = int64(max(0'i32, game.world.battleTick()))
+    scaled = int64(game.world.heroes[index].totalXp) * int64(TickRate * 60) -
+      200'i64 * ticks
+  max(0'i64, scaled) div int64(TickRate * 60)
 
 proc compileSeat(env: Env, game: Game, index: int, source: string,
     neural: bool, deferring = false): bool =
@@ -684,7 +692,7 @@ proc gota_set_seat_override(handle: pointer, seat: cint, enabled: int32): cint {
 proc gota_set_seat_package(handle: pointer, seat: cint, zip: pointer, length: int64): cint {.exportc, dynlib, cdecl.} =
   let env = toEnv(handle)
   if env == nil or seat notin 0..9 or zip == nil or length <= 0 or
-      length > MaxPackageBytes: return -1
+      length > neural_package.MaxPackageBytes: return -1
   var bytes = newString(length)
   copyMem(addr bytes[0], zip, length)
   try:

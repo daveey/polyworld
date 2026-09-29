@@ -30,7 +30,7 @@ proc checkMesh(mesh: TreeMesh, atlas = false) =
 
 proc testRecipes() =
   ## Exercises every preset, reproducible variation, and UV region choice.
-  for i in 0 .. PresetNames.high:
+  for i in 0 .. 9:
     for seed in [0, 42, 999, 1_000_000_000]:
       let
         settings = preset(i, seed)
@@ -61,7 +61,7 @@ proc testRecipes() =
 
 proc testNodes() =
   ## Checks the game-facing generator returns directly renderable nodes.
-  for i in 0 .. PresetNames.high:
+  for i in 0 .. 9:
     let
       settings = preset(i)
       node = generate(settings)
@@ -638,6 +638,75 @@ proc testFiles() =
   doAssert older.capSize == 1 and older.capSlope == 20
   removeDir(directory)
 
+proc testPlants() =
+  ## Checks plant silhouettes, texture isolation, seeds, and portable exports.
+  for i in 10 .. PresetNames.high:
+    for seed in [0, 42, 999]:
+      let
+        settings = preset(i, seed)
+        geometry = generateGeometry(settings)
+      for mesh in [geometry.bark, geometry.foliage, geometry.cut,
+          geometry.flowers, geometry.stems, geometry.crown]:
+        mesh.checkMesh()
+        for vertex in mesh.vertices:
+          for axis in 0 ..< 3:
+            doAssert vertex.position[axis] >= geometry.minimum[axis]
+            doAssert vertex.position[axis] <= geometry.maximum[axis]
+      doAssert geometry == generateGeometry(settings)
+      doAssert geometry.foliage.indices.len > 0
+      doAssert geometry.foliage.indices.len < 60_000
+      if settings.kind in {Bush, Hedge, FlowerPatch}:
+        doAssert geometry.minimum.y >= -0.05
+      if settings.flowerKind != NoFlowers:
+        doAssert geometry.blooms > 0 and geometry.flowers.indices.len > 0
+        let node = generate(settings)
+        doAssert node.mesh.primitives.len >= 3
+        var found = false
+        for primitive in node.mesh.primitives:
+          if primitive.material.name == "Colored flowers":
+            found = true
+            doAssert primitive.material.baseColorFactor.r == 1
+            doAssert primitive.material.alphaMode == MaskAlphaMode
+            doAssert primitive.material.doubleSided
+            doAssert primitive.material.baseColor.width == 512
+        doAssert found
+      if settings.kind != FlowerPatch:
+        var bare = settings
+        bare.flowerKind = NoFlowers
+        let leaves = generateGeometry(bare)
+        doAssert leaves.foliage == geometry.foliage
+        doAssert leaves.bark == geometry.bark
+    doAssert generateGeometry(preset(i, 42)) != generateGeometry(preset(i, 43))
+  var previous = 0.0'f
+  for size in BushSize:
+    var settings = preset(12)
+    settings.setBushSize(size)
+    let geometry = generateGeometry(settings)
+    doAssert geometry.maximum.y > previous
+    previous = geometry.maximum.y
+  var hedge = preset(14)
+  hedge.plantWidth = 8
+  let shape = generateGeometry(hedge)
+  doAssert shape.maximum.x - shape.minimum.x >
+    (shape.maximum.z - shape.minimum.z) * 3
+  let
+    directory = getTempDir() / "polyworld-flower-tests"
+    path = directory / "flowers.glb"
+  preset(20).exportTree(path)
+  let imported = loadModel(path)
+  var primitives = 0
+  for node in imported.walkNodes():
+    if node.mesh != nil:
+      primitives += node.mesh.primitives.len
+      for primitive in node.mesh.primitives:
+        doAssert primitive.material.baseColor.width == 512
+  doAssert primitives == 5
+  preset(21).saveSettings(directory / "hedge.json")
+  doAssert loadSettings(directory / "hedge.json") == preset(21)
+  removeDir(directory)
+
+echo "Testing bushes, hedges, and flower layers"
+testPlants()
 echo "Testing tree recipes and deterministic seeds"
 testRecipes()
 echo "Testing game-facing renderable tree nodes"

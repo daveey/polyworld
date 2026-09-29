@@ -135,6 +135,36 @@ proc seek*(player: ClipPlayer, time: float32) =
   player.fadeDuration = 0
   player.pose()
 
+proc copyPlayback*(player, source: ClipPlayer) =
+  ## Transfers named clips and clocks while retaining the destination's rig.
+  if player == source:
+    return
+
+  proc matching(clip: int): int =
+    ## Resolves a source clip by name in the destination library.
+    if clip < 0:
+      return -1
+    player.clipIndex(source.root.animations[clip].name)
+
+  player.current = matching(source.current)
+  player.previous = matching(source.previous)
+  player.lastLoop = matching(source.lastLoop)
+  player.currentTime =
+    if player.current >= 0:
+      player.clipTime(player.current, source.currentTime)
+    else:
+      0
+  player.previousTime = source.previousTime
+  player.timeScale = source.timeScale
+  player.paused = source.paused
+  player.fadeTime = source.fadeTime
+  player.fadeDuration = source.fadeDuration
+  player.outgoingFrozen = false
+  # A frozen composite pose belongs to the source rig's bind transforms.
+  if source.outgoingFrozen:
+    player.fadeTime = player.fadeDuration
+  player.pose()
+
 proc update*(player: ClipPlayer, dt: float32) =
   ## Advances time, chains finished one-shots, and poses the tree.
   let root = player.root

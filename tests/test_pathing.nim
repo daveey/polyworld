@@ -350,3 +350,28 @@ block:
             doAssert tile.z + other.tiles[i].z == Side - 1
           inc checked
   echo "Mirrored path searches checked: ", checked
+
+echo "Testing fences between walkable tiles survive path smoothing"
+block:
+  let floor = QuadLayer(width: 5, depth: 5, tiles: newSeq[Tile](25))
+  for tile in floor.tiles.mitems:
+    tile = openTile()
+  layers = @[floor]
+  computeWalkable()
+  proc gateClear(first, last: PathTile): bool {.nimcall.} =
+    ## Allows crossing the fence between columns one and two at its south gate.
+    if (first.x <= 1 and last.x >= 2) or
+      (last.x <= 1 and first.x >= 2):
+        return min(first.z, last.z) == 4
+    true
+  for neighbors in PathNeighbors:
+    let
+      raw = findTilePath(PathQuery(
+        startX: 0, startZ: 0, finishX: 4, finishZ: 0,
+        neighbors: neighbors, clearance: gateClear
+      ))
+      pulled = smoothPathTiles(raw.tiles, clearance = gateClear)
+    doAssert raw.complete
+    doAssert pulled.len > 2, "Smoothing erased the detour to the gate"
+    for i in 1 ..< pulled.len:
+      doAssert gateClear(pulled[i - 1], pulled[i])

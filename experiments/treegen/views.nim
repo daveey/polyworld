@@ -52,7 +52,8 @@ proc exportTree*(settings: TreeSettings, path: string) =
   ## Exports a portable GLB with the tree's textures embedded.
   let
     geometry = generateGeometry(settings)
-    materials = loadMaterials(settings.barkTexture)
+    materials = loadMaterials(settings.barkTexture,
+      withFlowers = settings.flowerKind != NoFlowers)
   materials.tint(settings)
   try:
     createDir(path.parentDir)

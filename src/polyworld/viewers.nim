@@ -9,7 +9,7 @@ when defined(emscripten):
   {.emit: "#include <emscripten.h>".}
 
 const
-  DefaultWindowSize* = ivec2(1280, 800)
+  DefaultWindowSize* = ivec2(1920, 1080)
   HudIconSize = 64
   SplashName* = "logo"
   SplashSeconds* = 3.0
@@ -141,8 +141,14 @@ proc initGameWindow*(
     vsync = true,
     msaa = msaaDisabled
 ): (Window, Silky) =
-  ## Creates the spectator window, GL context, and Silky atlas client.
-  let window = newWindow(title, size, vsync = vsync, msaa = msaa)
+  ## Creates the viewer and GL context, keeping screenshot captures hidden.
+  let window = newWindow(
+    title,
+    size,
+    visible = not defined(takeScreenshot),
+    vsync = vsync,
+    msaa = msaa
+  )
   window.makeContextCurrent()
   loadExtensions()
   let sk = newSilky(window, atlasPath)

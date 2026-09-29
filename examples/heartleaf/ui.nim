@@ -8,7 +8,7 @@ import
   chroma, pixie, silky, vmath, windy,
   polyworld/[actioncam, chrome, gameuis, inputs, pathing, player, quadterrain,
     rtscameras],
-  content, sim, game, controls, scorecard
+  content, sim, game, controls, scorecard, layouts
 
 const
   PanelRoster = vec2(292, 392)
@@ -388,6 +388,8 @@ proc drawUi*(
     let cell = area.size.x / float32(GridSide)
     for y in countup(0'i32, GridSide - 1, MapSampleStride):
       for x in countup(0'i32, GridSide - 1, MapSampleStride):
+        if not insideTown(x - GridSide div 2, y - GridSide div 2):
+          continue
         let
           index = tileIndex(x, y)
           shade =
@@ -435,16 +437,16 @@ proc drawUi*(
         VillagerColors[slot]
       )
     let aspect = window.size.x.float32 / max(window.size.y.float32, 1)
-    sk.drawCameraFrame(
-      minimapViewport(
-        cameraTarget,
-        cameraDistance,
-        aspect,
-        area.origin,
-        area.size,
-        HalfGrid
-      )
-    )
+    let
+      bounds = townCameraBounds(cameraTarget, cameraDistance, aspect)
+      minimum = clamp((bounds.minimum + vec2(HalfGrid)) / (HalfGrid * 2),
+        vec2(0), vec2(1))
+      maximum = clamp((bounds.maximum + vec2(HalfGrid)) / (HalfGrid * 2),
+        vec2(0), vec2(1))
+    sk.drawCameraFrame(MinimapViewRect(
+      origin: area.origin + minimum * area.size,
+      size: (maximum - minimum) * area.size
+    ))
 
   else:
     let finalNight = world.over or world.day == world.dayCount

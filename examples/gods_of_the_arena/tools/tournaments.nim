@@ -2,15 +2,15 @@ import
   std/[algorithm, json, math, os, posix, random, sequtils,
     sets, strutils, tables, times, uri],
   jsony,
-  ../scores
+  ../[content, scores]
 
 const
   Root* = currentSourcePath().parentDir.parentDir.parentDir.parentDir
   OutputRoot* = Root / "tmp/gota/tournaments"
   DefaultLeague* = "league_3c60897b-25cf-4b37-9d1a-8554c1198f28"
   Ladders* = ["wins", "score", "glory"]
-  Titles* = ["Win / loss", "Score", "Glory"]
-  Schema* = 1
+  Titles* = ["Win / loss", "XP / minute", ScoreName]
+  Schema* = 2
   Formats* = ["mixed", "mono"]
   SourceDirectory* = currentSourcePath().parentDir
   PlayerMetrics* = ["gold", "banked_gold", "level", "kills", "deaths",
@@ -92,8 +92,7 @@ proc saveJson*(path: string, value: JsonNode, controls = Controls()) =
 proc defaults*(): JsonNode =
   ## Returns the frozen settings used when creating a new tournament.
   %*{"games": 0, "top": 10, "format": "both", "seed": 2026,
-    "check_every": 10, "league": DefaultLeague, "division": nil,
-    "xp_per_minute": ScoreXpPerMinute}
+    "check_every": 10, "league": DefaultLeague, "division": nil}
 
 proc scheduleGames*(count, rosterSize: int, mode: string, seed: int): JsonNode =
   ## Samples balanced appearances, opponents, sides, and hero slots.
@@ -198,34 +197,30 @@ proc validateResult*(raw, game, run: JsonNode) =
         require(value.kind in {JInt, JFloat} and
           value.getFloat.classify notin {fcNan, fcInf, fcNegInf},
           "Invalid score values")
+  let maximumTicks = run["game_config"]["max_ticks"].getInt +
+    game["seats"].len * DraftPickTicks
   require(raw{"ticks"} != nil and raw["ticks"].kind == JInt and
-    raw["ticks"].getInt in 0 .. run["game_config"]["max_ticks"].getInt,
+    raw["ticks"].getInt in 0 .. maximumTicks,
     "Invalid result ticks")
   require(raw{"seed"} == game["seed"], "Result seed differs from schedule")
   let outcome = raw{"outcome"}.getStr
   require(outcome in ["RedTeam", "BlueTeam", "time_limit", "draw"],
     "Unknown game outcome")
 
-proc gameValues*(game, raw, run: JsonNode): Table[int, Values] =
-  ## Averages hero results using the run's frozen time penalty.
+proc gameValues*(game, raw: JsonNode): Table[int, Values] =
+  ## Averages victories, XP per minute, and Emmett's Glory per policy.
   var counts: Table[int, int]
-  let rate = run["settings"]{"xp_per_minute"}
-  require(
-    rate == nil or (rate.kind == JInt and rate.getInt >= 0),
-    "Invalid saved xp_per_minute: expected a nonnegative integer"
-  )
-  # Runs created before the rate was saved used 100 XP per minute.
-  let xpPerMinute = if rate == nil: 100 else: rate.getInt
   for slot, entry in game["seats"].elems:
     let
       policy = entry.getInt
-      value = score(raw["total_xp"][slot].getInt,
-        raw["ticks"].getInt, xpPerMinute).float64
+      xp = raw["total_xp"][slot].getInt
+      ticks = raw["ticks"].getInt
+      value = xpPerMinute(xp, ticks).float64
       won = raw.seatWin(slot).float64
     var values = result.getOrDefault(policy)
     values[0] += won
     values[1] += value
-    values[2] += value * won
+    values[2] += score(xp, ticks, won == 1).float64
     result[policy] = values
     counts[policy] = counts.getOrDefault(policy) + 1
   for policy, values in result.mpairs:
@@ -422,7 +417,7 @@ proc summarize*(run: JsonNode, records: seq[JsonNode],
         continue
       let raw = records[i]["result"]
       validateResult(raw, game, run)
-      for policy, values in gameValues(game, raw, run):
+      for policy, values in gameValues(game, raw):
         inc counts[policy]
         for ladder in 0 ..< 3:
           totals[policy][ladder] += values[ladder]

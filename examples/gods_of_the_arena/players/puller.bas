@@ -189,7 +189,7 @@ sub readObject(index)
       if distance <= 64 then
         tanks = tanks + 1
       end if
-      if distance <= 324 and waves < 96 then
+      if distance <= 576 and waves < 96 then
         waveIds(waves) = id
         waveIndices(waves) = index
         waveX(waves) = x
@@ -261,6 +261,7 @@ end sub
 
 sub observe()
   waves = 0
+  pullWaiting = 0
   pullOnUs = 0
   pullVictim = 0
   pullMobDistance = 1000000
@@ -401,10 +402,15 @@ sub pullCamps()
   pullCenterY = originY + side * campY(pullCamp)
   chosenWave = -1
   waveDistance = 1000000
+  approaching = 0
   for wave = 0 to waves - 1
     if pullStage > 0 then
       if waveTargets(wave) = pullMobId or waveIds(wave) = pullVictim then
-        ' The wave has taken over. Resume ordinary combat and farming.
+        ' The wave has taken over. Stand behind it while the camp switches
+        ' to the nearer creeps, then resume ordinary combat and farming.
+        pullHandoffUntil = worldTick + tickRate * 3
+        pullHandoffX = pullGoalX
+        pullHandoffY = pullGoalY
         stopPull()
         exit sub
       end if
@@ -412,19 +418,51 @@ sub pullCamps()
     dx = waveX(wave) - pullCenterX
     dy = waveY(wave) - pullCenterY
     distance = dx * dx + dy * dy
-    if distance >= 16 and distance <= 81 and waveTargets(wave) = 0 then
+    ' Neutrals leash at twelve tiles, so a wave up to eleven tiles out works.
+    if distance >= 16 and distance <= 121 and waveTargets(wave) = 0 then
       if distance < waveDistance then
         waveDistance = distance
         chosenWave = wave
       end if
+    elseif distance > 121 and distance <= 400 and waveTargets(wave) = 0 then
+      approaching = 1
     end if
   next wave
   if chosenWave < 0 then
     if pullStage > 0 then
       stopPull()
+    elseif approaching then
+      ' A wave is on its way: hold outside aggro instead of clearing the
+      ' camp alone, then pull once the wave walks into range.
+      if pullWaitUntil = 0 then
+        pullWaitUntil = worldTick + tickRate * 12
+      end if
+      if worldTick < pullWaitUntil then
+        pullWaiting = 1
+        pullGoalX = myX
+        pullGoalY = myY
+        dx = myX - pullMobX
+        dy = myY - pullMobY
+        if dx * dx + dy * dy < 16 then
+          if dx >= 0 then
+            pullGoalX = myX + 2
+          else
+            pullGoalX = myX - 2
+          end if
+          if dy >= 0 then
+            pullGoalY = myY + 2
+          else
+            pullGoalY = myY - 2
+          end if
+        end if
+      else
+        pullWaitUntil = 0
+        pullReady = worldTick + tickRate * 20
+      end if
     end if
     exit sub
   end if
+  pullWaitUntil = 0
   pullWaveId = waveIds(chosenWave)
   pullWaveIndex = waveIndices(chosenWave)
   if pullStage = 0 then
@@ -449,15 +487,15 @@ sub pullCamps()
     dy = pullGoalY - pullCenterY
     if dx * dx >= dy * dy then
       if dx >= 0 then
-        pullGoalX = pullGoalX + 2
+        pullGoalX = pullGoalX + 3
       else
-        pullGoalX = pullGoalX - 2
+        pullGoalX = pullGoalX - 3
       end if
     else
       if dy >= 0 then
-        pullGoalY = pullGoalY + 2
+        pullGoalY = pullGoalY + 3
       else
-        pullGoalY = pullGoalY - 2
+        pullGoalY = pullGoalY - 3
       end if
     end if
   end if
@@ -509,7 +547,7 @@ sub inventory()
           consume = threatDistance > 100 and worldTick - hurtTick > tickRate
         elseif id = 3 and selfMana * 3 < selfMaxMana then
           consume = bestId <> 0
-        elseif id = 4 and selfTarget = bestId and bestId <> 0 and pullStage = 0 then
+        elseif id = 4 and selfTarget = bestId and bestId <> 0 and pullStage = 0 and pullWaiting = 0 then
           consume = bestDistance <= attackRange * attackRange
         end if
         if consume then
@@ -707,7 +745,7 @@ sub spells()
           end if
         elseif restore > 0 and selfMaxMana - selfMana >= restore then
           castId = selfId
-        elseif damage > 0 and bestId <> 0 and pullStage = 0 then
+        elseif damage > 0 and bestId <> 0 and pullStage = 0 and pullWaiting = 0 then
           if bestDistance <= castRange(spellSlot) * castRange(spellSlot) then
             if bestDistance >= castMinimum(spellSlot) * castMinimum(spellSlot) then
               ' Save the last recharging charge for valuable targets.
@@ -950,8 +988,12 @@ if enemyPower > friendlyPower + 6 and threatDistance < 64 then
   end if
 end if
 
-if pullStage > 0 then
+if pullStage > 0 or pullWaiting then
   moveTo(pullGoalX, pullGoalY, 0)
+  end
+end if
+if worldTick < pullHandoffUntil then
+  moveTo(pullHandoffX, pullHandoffY, 0)
   end
 end if
 

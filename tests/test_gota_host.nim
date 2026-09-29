@@ -557,3 +557,39 @@ block:
   doAssert spell.position.z ==
     (mapCoordinate(hero.position.z) - mapTiles().int32 div 2) * WorldScale +
     WorldScale div 4
+
+echo "Testing BASIC Emmett's Glory matches final results"
+block:
+  let
+    directory = createTempDir("gota-glory-", "")
+    path = directory / "glory.bas"
+    game = newGame(
+      generateMap(54), 240, 10, false, ReplayData(), drafting = false
+    )
+    world = game.world
+  defer:
+    removeDir(directory)
+  writeFile(path, "glory = selfInfo(10)\n")
+  game.loadBots([BotGroup(path: path, count: 10)])
+  world.tick = 15120
+  world.draftTicks = 120
+  for hero in world.heroes:
+    hero.totalXp = 3150
+  for (ended, draw, winner) in [
+    (false, false, RedTeam),
+    (true, false, RedTeam),
+    (true, false, BlueTeam),
+    (true, true, RedTeam)
+  ]:
+    world.gameOver = ended
+    world.draw = draw
+    world.winner = winner
+    game.runBotDecisions()
+    for slot, vm in game.heroVms:
+      doAssert not vm.failed, vm.lastError
+      let expected =
+        if ended and not draw and world.heroes[slot].team == winner:
+          300
+        else:
+          0
+      doAssert vm.runtime.getGlobal("glory") == expected

@@ -64,7 +64,9 @@ block:
   var
     names: HashSet[string]
     source: string
-  for line in readFile(Policy).splitLines():
+  let examples = readFile(Policy) & readFile(Root /
+    "examples/gods_of_the_arena/neural/policies/david.bas")
+  for line in examples.splitLines():
     if not line.strip().startsWith("'"):
       source.add line & "\n"
   for line in host.splitLines():
@@ -83,7 +85,7 @@ block:
     if name in ["sendChat", "pullMailbox$", "mailboxId", "mailboxCount",
       "mailboxSelf", "mailboxPlayers"]:
         continue
-    doAssert name & "(" in source, "Base policy omits host call " & name
+    doAssert name & "(" in source, "Example policies omit host call " & name
 
 echo "Testing base spends ability points in R, W, E, Q order at legal levels"
 for class in HeroClass:

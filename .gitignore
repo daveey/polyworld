@@ -47,3 +47,6 @@ coworld/evidence/
 !Dockerfile
 !.dockerignore
 coworld/**/__pycache__/
+
+# Python conversion helpers.
+__pycache__/

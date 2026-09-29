@@ -13,6 +13,8 @@
 ##
 ## An optional rim light is available through `rimColor`; its alpha is the
 ## strength.
+## Contexts can also select smooth diffuse light, unlit albedo, or world
+## normals, and opt into per-pixel Lambert evaluation or neutral gray materials.
 ##
 ## Unlit materials and node names in `unlitNodes` preserve their albedo,
 ## without palette coloration, shadows, or rim lighting.
@@ -48,6 +50,9 @@ var
   toonRimColor: Uniform[Vec4]
   toonUnlit: Uniform[bool]           # always in the highlight band
   toonTint: Uniform[Vec4]
+  toonLightingMode: Uniform[int32]
+  toonPerPixelLighting: Uniform[bool]
+  toonNeutralMaterial: Uniform[bool]
   # Sun shadow map sampling, fed from polyworld/shadows each frame. Two
   # maps at neighbouring quantized sun steps, cross-faded by toonShadowStep
   # so shadows dissolve toward the next sun position instead of shimmering.
@@ -163,12 +168,23 @@ proc toonFrag(
   lightIntensity: float32,
   fragColor: var Vec4
 ) =
-  let albedo: Vec4 = texture(toonBaseColorTexture, uv) * toonBaseColorFactor * color
+  var albedo: Vec4 = texture(toonBaseColorTexture, uv) * toonBaseColorFactor * color
   if albedo.a < toonAlphaCutoff:
     discardFragment()
-  if toonUnlit:
+  var n: Vec3 = normalize(normal)
+  if not gl_FrontFacing:
+    n = -n
+  if toonLightingMode == 3:
+    fragColor = vec4(n * 0.5'f + vec3(0.5'f), albedo.a) * toonTint
+    return
+  if toonNeutralMaterial:
+    albedo = vec4(0.8'f, 0.8'f, 0.8'f, albedo.a)
+  if toonUnlit or toonLightingMode == 2:
     fragColor = albedo * toonTint
     return
+  var lambert = lightIntensity
+  if toonPerPixelLighting or toonLightingMode == 1:
+    lambert = max(dot(n, normalize(-toonLightDirection)), 0.0'f)
   # Step 2: the intensity — scaled by the sun shadow test, flattened by the
   # shading strength when the sky is dark — is a texture coordinate into
   # the ramp.
@@ -176,19 +192,20 @@ proc toonFrag(
     sunFactor = sunShadowFactor(worldPos)
     intensity =
       (1.0'f - toonShadingStrength +
-        lightIntensity * sunFactor * toonShadingStrength) * toonLightLevel
-  let band = texture(toonRamp, vec2(intensity, 0.5'f)).r
+        lambert * sunFactor * toonShadingStrength) * toonLightLevel
+  var band = texture(toonRamp, vec2(intensity, 0.5'f)).r
+  if toonLightingMode == 1:
+    band = clamp(intensity, 0.0'f, 1.0'f)
   # Step 3: two hand-picked colours, then the albedo on top.
   var lit: Vec3 = mix(toonShadowColor.rgb, toonHighlightColor.rgb, band)
-  var n: Vec3 = normalize(normal)
-  if not gl_FrontFacing:
-    n = -n
   let
     eye: Vec3 = normalize(toonCameraPosition - worldPos)
     facing = 1.0'f - abs(dot(eye, n))
     rim = facing * facing * facing * facing
   lit = mix(lit, toonRimColor.rgb, rim * toonRimColor.a)
-  let emissive: Vec3 = texture(toonEmissiveTexture, uv).rgb * toonEmissiveFactor
+  var emissive: Vec3 = texture(toonEmissiveTexture, uv).rgb * toonEmissiveFactor
+  if toonNeutralMaterial:
+    emissive = vec3(0.0'f)
   fragColor = vec4(lit * albedo.rgb + emissive, albedo.a) * toonTint
 
 ## Sun depth pass: the same skinned vertex path projected by the sun's
@@ -349,6 +366,9 @@ proc rampImage*(shadowEnd = 0.47'f32, highlightStart = 0.53'f32): Image =
 ## Context
 
 type
+  ToonLighting* = enum
+    BandedLighting, SmoothLighting, UnlitLighting, NormalLighting
+
   ToonUniforms = object
     model, normalMatrix, view, proj: GLint
     useSkinning, jointMatrices: GLint
@@ -357,6 +377,7 @@ type
     emissiveTexture, emissiveFactor: GLint
     alphaCutoff, ramp: GLint
     highlightColor, shadowColor, rimColor, unlit, tint: GLint
+    lightingMode, perPixelLighting, neutralMaterial: GLint
     shadowMvp0, shadowMvp1, shadowMap0, shadowMap1, shadowStep: GLint
     shadowsOn, shadowStrength: GLint
     shadowBias, shadowTexel, shadowSoftness, shadingStrength, lightLevel: GLint
@@ -386,6 +407,9 @@ type
     highlightColor*: Color
     shadowColor*: Color
     rimColor*: Color             ## alpha is the rim strength
+    lighting*: ToonLighting      ## Selects bands, smooth light, or inspection.
+    perPixelLighting*: bool      ## Evaluates Lambert after normal interpolation.
+    neutralMaterial*: bool       ## Uses gray albedo while retaining cutouts.
     unlitNodes*: HashSet[string] ## mesh nodes drawn always full-bright
     skyColor*, horizonColor*, groundColor*: Color  ## background gradient
     horizonHeight*: float32      ## where the horizon sits, 0 bottom .. 1 top
@@ -466,6 +490,9 @@ proc newToonContext*(): ToonContext =
   loc(rimColor, "toonRimColor")
   loc(unlit, "toonUnlit")
   loc(tint, "toonTint")
+  loc(lightingMode, "toonLightingMode")
+  loc(perPixelLighting, "toonPerPixelLighting")
+  loc(neutralMaterial, "toonNeutralMaterial")
   loc(shadowMvp0, "toonShadowMvp0")
   loc(shadowMvp1, "toonShadowMvp1")
   loc(shadowMap0, "toonShadowMap0")
@@ -644,6 +671,9 @@ proc draw*(ctx: ToonContext, root: Node) =
     u.rimColor, ctx.rimColor.r, ctx.rimColor.g, ctx.rimColor.b,
     ctx.rimColor.a)
   glUniform4f(u.tint, ctx.tint.r, ctx.tint.g, ctx.tint.b, ctx.tint.a)
+  glUniform1i(u.lightingMode, ctx.lighting.ord.GLint)
+  glUniform1i(u.perPixelLighting, ctx.perPixelLighting.ord.GLint)
+  glUniform1i(u.neutralMaterial, ctx.neutralMaterial.ord.GLint)
 
   # Sun shadow map state (polyworld/shadows): characters darken where the
   # sun cannot see them and flatten with the shared shading strength.

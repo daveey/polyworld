@@ -52,6 +52,15 @@ type
       ## decoder.mask_empty_targets (package seats): mask applied before decode.
     mask*: ActionMask
       ## The mask of the current decision frame (package seats with maskTargets).
+    snapshot*: HeroSnapshot
+    snapTick*: int32
+      ## Frame-start host data of the seat's decision (D6): captured before the
+      ## glue runs, used for the cells BASIC feeds as `selfHp`, `selfGold`, ...
+    glueTick*: int32
+      ## Tick whose glue (learn/shop/buyback) already ran ahead of the
+      ## observation; that tick's turn only issues the decoded command.
+    preflighting*: bool
+      ## The glue is running ahead of the observation: gota_act is a no-op.
 
 var shadowRunning {.threadvar.}: bool
   ## True while a shadow expert script runs: its host calls change nothing.
@@ -65,7 +74,7 @@ proc neuralSeat*(game: Game, index: int): NeuralSeat =
 
 proc newNeuralSeat*(mode: NeuralMode, period: int32, maxTicks: int32): NeuralSeat =
   result = NeuralSeat(mode: mode, period: period, maxTicks: maxTicks,
-    frameTick: -1, issuedTick: -1, temperature: 1)
+    frameTick: -1, issuedTick: -1, snapTick: -1, glueTick: -1, temperature: 1)
   result.goal[0] = 1
   result.obs = newSeq[float32](ObservationSize)
 
@@ -207,6 +216,9 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   ## Clears per-match state (a new match or a native reset).
   seat.frameTick = -1
   seat.issuedTick = -1
+  seat.snapTick = -1
+  seat.glueTick = -1
+  seat.preflighting = false
   seat.started = false
   seat.sawDeath = false
   seat.headsReady = false
@@ -240,7 +252,8 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
     # 28,800).
     seat.maxTicks = game.config.maxTicks
   buildObservation(world, index, seat.goal, seat.maxTicks, world.stats,
-    seat.obs, seat.frame)
+    seat.obs, seat.frame,
+    (if seat.snapTick == world.tick: seat.snapshot else: HeroSnapshot()))
   seat.acting = seat.frame.alive and not world.gameOver
   if not seat.started:
     seat.started = true
@@ -384,7 +397,8 @@ proc issueDecoded*(game: Game, heroId: int32, command: NeuralCommand): bool =
 proc actNow*(game: Game, index: int): int32 =
   ## gota_act: issues the seat's decoded command once, on its decision tick.
   let seat = game.neuralSeat(index)
-  if seat == nil or seat.mode notin {NeuralLearner, NeuralPackage}:
+  if seat == nil or seat.mode notin {NeuralLearner, NeuralPackage} or
+      seat.preflighting:
     return 0
   let world = game.world
   if seat.frameTick != world.tick or seat.issuedTick == world.tick or
@@ -444,16 +458,38 @@ proc runOverride*(game: Game, index: int, seat: NeuralSeat) =
   inc seat.decisions
   discard game.issueDecoded(world.heroes[index].id, decoded)
 
+proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool)
+
+proc glueFirst(seat: NeuralSeat): bool =
+  ## Seats whose BASIC glue (learn/shop/buyback) runs ahead of the observation,
+  ## as david.bas orders it (D6). Defer and shadow seats keep the older order.
+  seat.mode in {NeuralLearner, NeuralPackage} and not seat.deferEnabled and
+    seat.shadow == nil
+
 proc neuralPrelude*(game: Game) =
   ## Start of the heroes' turn: every neural seat observes the same frame.
+  ## A glue-first seat first runs its glue (gota_act suppressed) with the
+  ## frame-start snapshot taken, then observes: the observation then shows
+  ## the abilities/items the glue just learned or bought, while gold and
+  ## attack damage keep their frame-start values, exactly as in #83.
   let world = game.world
-  for index in 0 ..< game.heroVms.len:
+  for offset in 0 ..< game.heroVms.len:
+    let index = (world.heroTurnStart + offset) mod game.heroVms.len
     let seat = game.neuralSeat(index)
     if seat != nil and world.isDecisionTick(seat.period):
       let vm = game.heroVms[index]
-      if vm.failed:
+      if vm.failed or seat.frameTick == world.tick:
         continue
       try:
+        if seat.glueFirst:
+          seat.snapshot = captureSnapshot(world, world.heroes[index])
+          seat.snapTick = world.tick
+          seat.preflighting = true
+          try:
+            game.runHeroVm(index, vm, true)
+          finally:
+            seat.preflighting = false
+          seat.glueTick = world.tick
         game.beginDecision(index, seat)
       except BasicError as error:
         vm.failed = true

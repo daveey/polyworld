@@ -7,7 +7,7 @@
 
 import
   std/[os, strformat, strutils, times],
-  polyworld/[cli, controllers, metrics, profiles, tapes],
+  polyworld/[cli, controllers, metrics, profiles, tapes, timings],
   content,
   maps as mapgen,
   sim,
@@ -37,6 +37,8 @@ Light vs Dark, a small real-time strategy match between two BASIC overlords.
   --speed N        Graphical start speed: 1, 2, 4, or 16.
   --windowSize WxH Graphical window, such as 800x400.
   --vsync:off      Unlock the frame rate (default on).
+  --headless-tick-rate N  Wall-clock ticks per second, 0 is unlimited.
+  --llm-mode:async|barrier Wait for all requests between headless ticks.
   --help           Show this message.
 
 Compile with -d:headless for a command-line match.
@@ -49,9 +51,7 @@ proc parseGameOptions(): GameOptions =
     seconds: DefaultMinutes * 60,
     maximumTicks: DefaultDurationTicks,
     seed: DefaultSeed,
-    speed: 1,
-    windowWidth: 1920,
-    windowHeight: 1080
+    speed: 1
   )
   let arguments = commandLineParams()
   var index = 0
@@ -215,13 +215,22 @@ proc describeResult*(): string =
   else: &"draw ({light} to {dark})"
 
 proc runHeadless*() =
-  ## Runs a whole match with no renderer, as fast as the machine allows.
+  ## Runs fixed simulation ticks with optional pacing and request barriers.
   startGameProfile()
   defer:
     finishGameProfile()
   let started = epochTime()
+  var
+    pacer = initTickPacer(options.headlessTickRate)
+    pollers: seq[RequestPoll]
+  if options.waitForLlm and not run.replayMode:
+    for vm in run.brains:
+      if vm != nil:
+        pollers.add vm.pollRequests
   while run.world.tick < run.maximumTicks and not run.world.over:
     advanceGame()
+    waitForRequests(pollers)
+    pacer.pace()
     if profileShouldDump(run.world.tick):
       finishGameProfile()
   let

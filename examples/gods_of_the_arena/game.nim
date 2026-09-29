@@ -6,7 +6,7 @@
 
 import
   std/[math, os, strformat, strutils, times],
-  polyworld/[cli, controllers, metrics, profiles, tapes],
+  polyworld/[cli, controllers, metrics, profiles, tapes, timings],
   content,
   maps,
   sim,
@@ -38,6 +38,8 @@ proc usage() =
   echo "  --map-seed NUMBER       Regenerate the arena from another seed (the"
   echo "                          league always plays the preset's own seed)."
   echo "  --config PATH           JSON match settings, including mapPreset."
+  echo "  --headless-tick-rate N   Wall-clock ticks per second, 0 is unlimited."
+  echo "  --llm-mode:async|barrier Wait for all requests between headless ticks."
   echo "  --spawn-interval NUMBER Seconds between waves."
   echo "  --play=false            Start the graphical transport paused."
   echo "  --speed NUMBER          Graphical start speed: 1, 2, 4, or 16."
@@ -60,9 +62,9 @@ proc parseGameOptions(): GameOptions =
     maximumTicks: matchConfig.maxTicks,
     spawnIntervalTicks: matchConfig.spawnIntervalTicks,
     playerSlot: matchConfig.playerSlot,
-    speed: 1,
-    windowWidth: 1920,
-    windowHeight: 1080
+    headlessTickRate: matchConfig.headlessTickRate,
+    waitForLlm: matchConfig.waitForLlm,
+    speed: 1
   )
   index = 0
   while index < arguments.len:
@@ -298,18 +300,27 @@ when defined(headless):
         &"{vmStatus.decisions} decisions"
 
   proc runHeadless*() =
-    ## Runs a live game or replay immediately with fixed simulation ticks.
+    ## Runs fixed simulation ticks with optional pacing and request barriers.
     let started = epochTime()
     if not run.replayMode:
       startReplayRecording(uint32(options.maximumTicks))
     startGameProfile()
     defer:
       finishGameProfile()
-    var steps = 0
+    var
+      steps = 0
+      pacer = initTickPacer(options.headlessTickRate)
+      pollers: seq[RequestPoll]
+    if options.waitForLlm and not run.replayMode:
+      for vm in run.heroVms:
+        if vm != nil:
+          pollers.add vm.pollRequests
     while (if run.replayMode: steps < run.replayData.hashes.len
         else: not run.finished()) and
         run.recordingError.len == 0:
       advanceGame()
+      waitForRequests(pollers)
+      pacer.pace()
       inc steps
       if profileShouldDump(steps):
         finishGameProfile()

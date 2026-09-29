@@ -88,6 +88,9 @@ type
     ## Extra cost added when stepping onto a tile. Nil means zero. Used
     ## to prefer empty ground without treating other units as walls.
 
+  PathClearance* = proc (first, last: PathTile): bool {.nimcall.}
+    ## Checks a center-to-center segment against obstacles between tiles.
+
   PathQuery* = object
     ## Parameters for one A* search. Zeroed fields select the default
     ## four-neighbour terrain walk used by `findTilePath`.
@@ -97,6 +100,9 @@ type
     tieOrder*: PathTieOrder
     walkable*: PathWalkable
     enterCost*: PathEnterCost
+    clearance*: PathClearance
+    cutCorners*: bool
+      ## Allows diagonal links when a clearance callback checks the full sweep.
     maxExpansions*: int
     orthogonalCost*, diagonalCost*: int32
     partial*: bool
@@ -790,6 +796,11 @@ proc searchEdges(query: PathQuery): PathKeys =
       if customWalk and
           not query.walkable(link.layer, link.x, link.z):
         continue
+      if query.clearance != nil and not query.clearance(
+        PathTile(layer: li.int32, x: x.int32, z: z.int32),
+        PathTile(layer: link.layer.int32, x: link.x.int32, z: link.z.int32)
+      ):
+        continue
       let
         nextKey = nodeIndex(link.layer, link.x, link.z)
         stepCost =
@@ -894,8 +905,13 @@ proc searchEight(query: PathQuery): PathKeys =
         nextZ = z + dz
       if not inLayer(li, nextX, nextZ) or not allowed(nextX, nextZ):
         continue
-      if dx != 0 and dz != 0 and
+      if not query.cutCorners and dx != 0 and dz != 0 and
           (not allowed(x + dx, z) or not allowed(x, z + dz)):
+        continue
+      if query.clearance != nil and not query.clearance(
+        PathTile(layer: li.int32, x: x.int32, z: z.int32),
+        PathTile(layer: li.int32, x: nextX.int32, z: nextZ.int32)
+      ):
         continue
       let
         nextKey = nodeIndex(li, nextX, nextZ)
@@ -1102,7 +1118,8 @@ proc sameLayerSpan(tiles: seq[PathTile], first, last: int): bool =
   true
 
 proc smoothPathTiles*(
-    tiles: seq[PathTile], walkable: PathWalkable = nil
+    tiles: seq[PathTile], walkable: PathWalkable = nil,
+    clearance: PathClearance = nil
 ): seq[PathTile] {.measure.} =
   ## String-pulls an A* tile path. Keeps a waypoint when the straight
   ## line from the previous kept tile to the one after it is blocked.
@@ -1117,7 +1134,8 @@ proc smoothPathTiles*(
     for candidate in countdown(tiles.len - 1, anchor + 2):
       if not sameLayerSpan(tiles, anchor, candidate):
         continue
-      if lineClear(tiles[anchor], tiles[candidate], walkable):
+      if lineClear(tiles[anchor], tiles[candidate], walkable) and
+        (clearance == nil or clearance(tiles[anchor], tiles[candidate])):
         reach = candidate
         break
     result.add tiles[reach]
