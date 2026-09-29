@@ -292,7 +292,7 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
   doAssert o.len == ObservationSize and goal.len == GoalSize
   frame = DecisionFrame(tick: world.tick, heroIndex: heroIndex)
   let
-    hero = world.heroes[heroIndex]
+    hero {.cursor.} = world.heroes[heroIndex]
     team = hero.team
     snapshot = if snap.captured: snap else: captureSnapshot(world, hero)
     side = int32(team.side)
@@ -394,11 +394,9 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
   var value: WorldObject
   let count = min(world.worldObjectCount(hero.id), visibleIds.len)
   for i in 0 ..< count:
-    if world.worldObjectAt(hero.id, i, value):
-      visibleIds[i] = value.id
-  for i in 0 ..< count:
     if not world.worldObjectAt(hero.id, i, value):
       continue
+    visibleIds[i] = value.id
     let
       kind = value.kind
       faction = value.faction
@@ -465,9 +463,9 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
       slotKey[slot] = key
   var allyIds: array[10, int32]
   var allyCount = 0
-  for other in world.heroes:
-    if other.team == team and allyCount < allyIds.len:
-      allyIds[allyCount] = other.id
+  for i in 0 ..< world.heroes.len:
+    if world.heroes[i].team == team and allyCount < allyIds.len:
+      allyIds[allyCount] = world.heroes[i].id
       inc allyCount
   for s in 0 ..< ObjectSlots:
     let index = slotObj[s]
@@ -589,19 +587,18 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
   p = ObsSummaryOffset
   f[p+0] = f[ObsObjectOffset + 17 * ObjectFeatures + 4]
   f[p+1] = f[ObsObjectOffset + 17 * ObjectFeatures + 13]
-  for k in 0 ..< 4:
+  var known, total: array[4, int32]
+  for slot in 0 ..< world.buildings.len:
     let
-      enemy = k >= 2
-      barracks = (k mod 2) == 1
-    var known, total = 0'i32
-    for building in world.buildings:
-      if (building.team != team) == enemy and
-          (building.kind == BarracksBuilding) == barracks:
-        inc total
-        if (if enemy: building.knownAlive[team] else: building.hp > 0):
-          inc known
-    if total > 0:
-      f[p+2+k] = fdiv(known, total)
+      building {.cursor.} = world.buildings[slot]
+      enemy = building.team != team
+      k = int(enemy) * 2 + int(building.kind == BarracksBuilding)
+    inc total[k]
+    if (if enemy: building.knownAlive[team] else: building.hp > 0):
+      inc known[k]
+  for k in 0 ..< 4:
+    if total[k] > 0:
+      f[p+2+k] = fdiv(known[k], total[k])
   f[p+6] = fixed(-1)
   if slotId[18] != 0:
     f[p+6] = f[ObsObjectOffset + 18 * ObjectFeatures + 4]
