@@ -171,6 +171,10 @@ type
     selfPos*: WorldPoint
     ids*: array[ObjectSlots, int32]
     positions*: array[ObjectSlots, WorldPoint]
+    attackable*, castable*: array[ObjectSlots, bool]
+      ## david.bas nnChoose's per-slot rules from the observation cells: attackTarget / castTarget allowed.
+    selfOrHelpAbility*: bool
+      ## some ability is self-cast or not a Strike (castTarget allowed without a target).
   Heads* = array[ActionHeads, int32]
 
 template side(team: Team): int32 = (if team == RedTeam: 1'i32 else: -1'i32)
@@ -305,6 +309,10 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
   frame.team = team
   frame.alive = hero.heroAlive
   frame.selfPos = hero.position
+  for slot in HeroAbilitySlot:
+    let spec = heroAbility(hero.class, slot).abilitySpec(hero.abilityLevels[slot])
+    if spec.casting == SelfCast or spec.kind != Strike:
+      frame.selfOrHelpAbility = true
   var f {.noinit.}: array[ObservationSize, Fixed]
   for i in 0 ..< ObservationSize:
     f[i] = FixedZero
@@ -534,6 +542,12 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
       f[b+30+int(value.class)] = FixedOne
     frame.ids[s] = value.id
     frame.positions[s] = value.position
+    if s != SlotSelf and f[b+6] != FixedOne and f[b+28] == FixedZero:
+      var attackable = f[b+13] != FixedZero
+      if f[b+7] != FixedZero or f[b+10] != FixedZero or f[b+11] != FixedZero:
+        attackable = f[b+5] > FixedZero
+      frame.attackable[s] = attackable
+      frame.castable[s] = f[b+13] != FixedZero
   # Spell warnings: (impact tick, distance key) insertion order.
   var
     warnIndex: array[SpellSlots, int]
@@ -723,7 +737,7 @@ proc actionMask*(world: World, heroIndex: int, frame: DecisionFrame): ActionMask
       continue
     result[MaskTarget + 5 * ObjectSlots + s] = 1
     result[MaskTarget + 6 * ObjectSlots + s] = 1
-    if s != SlotSelf and world.isEnemyTarget(hero, id):
+    if frame.attackable[s]:
       result[MaskTarget + s] = 1
     var target: WorldObject
     let usable = world.spellTarget(id, target) and target.alive and
@@ -743,9 +757,11 @@ proc actionMask*(world: World, heroIndex: int, frame: DecisionFrame): ActionMask
   for a in 0 ..< 4:
     result[MaskAbility + a] = uint8(result.anyRow(1 + a))
   result[MaskVerb + 3] = uint8(result.anyRow(0))
-  result[MaskVerb + 4] = uint8(result[MaskAbility] != 0 or
-    result[MaskAbility + 1] != 0 or result[MaskAbility + 2] != 0 or
-    result[MaskAbility + 3] != 0)
+  var anyCastable = frame.selfOrHelpAbility
+  for s in 0 ..< ObjectSlots:
+    if frame.castable[s]:
+      anyCastable = true
+  result[MaskVerb + 4] = uint8(anyCastable)  # david.bas nnChoose
   result[MaskVerb + 5] = uint8(result.anyRow(5))
   result[MaskVerb + 7] = uint8(result.anyRow(6))
 
