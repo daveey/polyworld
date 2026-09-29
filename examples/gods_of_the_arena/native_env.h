@@ -156,6 +156,13 @@ int gota_observe_seats(void *handle, uint32_t seats, float *obs, float *resets,
  * (score = lifetime XP - 200 per battle minute, floored at 0, incl. the god
  * kill bonus); terminals[seat] = 1 on the step that ends the episode (god
  * destroyed or max_ticks). Both buffers are float[GOTA_SEATS] and may be NULL.
+ * Glory reward mode (opt-in; config key "reward": "glory" or environment
+ * GOTA_REWARD=glory, default "xp"): the "league score" above (stats[0], the
+ * rewards) is instead Emmett's Glory exactly as scores.score(xp, world.tick, won)
+ * computes it: 0 on every step until the match is over, then the winner's lifetime
+ * XP per sim-minute (whole points) on the last step, so the whole value is one
+ * terminal reward delta (glory / 1000); losers, draws and timeouts stay 0. Nothing
+ * else changes (world, observations, hashes, contract hashes are identical).
  * Returns 0 paused at the next decision, 1 episode over (call gota_reset;
  * gota_observe_seats then reports the final frame with acting = 0),
  * -2 already over, -1 bad args. */

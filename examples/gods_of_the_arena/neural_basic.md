@@ -200,6 +200,26 @@ channel `score` (stats[0]) stays the pre-Glory formula (xp - 200/min) so reward 
 The observation contract hash changed (`73e8bbf3...`); v1 checkpoints carry `ae4046e8...` and are rejected until re-stamped
 (weights are compatible; `gota/upstream83/repack_obs.py` in cogamer-gota-rl re-stamps a package).
 
+## Glory reward mode (opt-in)
+
+`GOTA_REWARD=glory` (or `"reward": "glory"` in the gota_create config; the key wins over the variable) makes the ABI score, `stats[0]`, and therefore
+`rewards[seat] = delta stats[0] / 1000`, Emmett's Glory: `scores.score(totalXp, world.tick, won)`, i.e. the winner's lifetime XP per sim-minute
+(`xp * 1440 div world.tick`, whole points; `world.tick` includes the 109 draft ticks), 0 for losers, draws and timeouts. Glory only exists once the
+match is over, so `stats[0]` is 0 until then and the whole value arrives as one terminal reward of `glory / 1000` (about 1-2 for a winning hero at
+1,000-2,000 XP/min), 0 for the other team. The default (`xp`) is unchanged bit for bit: xp - 200 per battle minute, floored at 0. The observation is the same
+in both modes (cell 1306 is Glory/5000 either way; it is 0 during play). `tools/test_reward_glory.py` proves both properties.
+
+Goal vector and the trainer. The 16 goal weights `w` (order: w_score, w_win, w_xp, w_gold, w_hero_kill, w_assist, w_death, w_last_hit, w_neutral_kill,
+w_tower_damage, w_structure_kill, w_hero_damage, w_damage_taken, w_push_depth, w_god_damage, w_reserved) are unchanged and are not read by the library:
+the trainer (gota.h) forms the reward. Its w_score term is NOT `d stats[0]`: it is the dense `d XP - 200/1440 * d battle_ticks` computed from stats[2] and the tick,
+precisely because a floored score has zero deltas for most of a match. So `GOTA_REWARD=glory` alone changes only the logged episode score (`stats[0]` summed into
+the log's `score`) and the library's own `rewards[]`, which the trainer ignores; to train on Glory the trainer has to read it:
+ - terminal Glory as the w_score term: `d = stats_now[0] - stats_prev[0]` (per-step deltas are 0 except the last), keep `w_score = 1` for the pure goal;
+ - normalizer: tools/goal_norms.py measures `norm_score = 1 / mean|score|` from stats[0]; measure it on the glory library (winners only, so about half the
+   seats are 0: mean|glory| per seat is roughly half the winner's value), and expect a sparse, large-variance terminal reward; a dense XP shaping term
+   (w_xp with its norm) is the usual companion so the early game still carries signal.
+ - w_win stays a separate +/-1 outcome term; with Glory the win is already inside w_score for winners, so w_win and w_score overlap on winning seats.
+
 ## Observation contract v1 (1407 float32)
 
 The observation is ego-centric in the **team frame**. Blue seats see the map rotated 180°: x_t = −x and

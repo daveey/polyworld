@@ -28,6 +28,8 @@ type
   Env = ref object
     config: GotaConfig
     maxTicks, period: int32
+    rewardGlory: bool
+      ## Opt-in (config "reward": "glory" or GOTA_REWARD=glory): stats[0] carries Emmett's Glory.
     learners: uint32
     record, capture: bool
     defaultScript, policyScript: string
@@ -69,14 +71,27 @@ proc copyText(text: string, buffer: ptr char, capacity: int32) =
     dest[i] = text[i]
   dest[n] = '\0'
 
-proc seatScore(game: Game, index: int): int64 =
-  ## The trainer's reward/score channel (ABI v1): lifetime XP minus 200 per
-  ## minute, floored at 0 (the pre-Glory score, unchanged so the reward terms
-  ## keep their meaning). The observation cell 1306 is Glory, see neural_contract.
+proc seatScore(env: Env, index: int): int64 =
+  ## The trainer's reward/score channel (ABI stats[0]); rewards[s] = delta / 1000.
+  ## Default: lifetime XP minus 200 per minute, floored at 0 (the pre-Glory score,
+  ## unchanged so the reward terms keep their meaning).
+  ## rewardGlory: Emmett's Glory exactly as upstream scores it, scores.score(xp,
+  ## world.tick, won): the winner's lifetime XP per sim-minute once the game is over
+  ## (world.gameOver), 0 before, and 0 for losses, draws and timeouts. Terminal-only:
+  ## the whole value arrives as one delta on the last step.
+  ## Observation cell 1306 is Glory in both modes, see neural_contract.
   let
-    ticks = int64(max(0'i32, game.world.battleTick()))
-    scaled = int64(game.world.heroes[index].totalXp) * int64(TickRate * 60) -
-      200'i64 * ticks
+    game = env.game
+    world = game.world
+    hero = world.heroes[index]
+  if env.rewardGlory:
+    if not world.gameOver:
+      return 0
+    return int64(score(hero.totalXp, int(world.tick),
+      not world.draw and hero.team == world.winner))
+  let
+    ticks = int64(max(0'i32, world.battleTick()))
+    scaled = int64(hero.totalXp) * int64(TickRate * 60) - 200'i64 * ticks
   max(0'i64, scaled) div int64(TickRate * 60)
 
 proc compileSeat(env: Env, game: Game, index: int, source: string,
@@ -293,7 +308,7 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
       for key in node.keys:
         if key notin ["config_path", "seed", "max_ticks", "decision_period",
             "learner_seats", "script_path", "policy_path", "data_root",
-            "record", "capture"]:
+            "record", "capture", "reward"]:
           raise newException(ValueError, "unknown config key " & key)
       let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
       let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
@@ -308,6 +323,11 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
         env.period = int32(node["decision_period"].getInt)
       if env.period notin 1'i32 .. 24'i32:
         raise newException(ValueError, "decision_period must be 1..24")
+      let reward = if node.hasKey("reward"): node["reward"].getStr
+        else: getEnv("GOTA_REWARD", "xp")
+      if reward notin ["xp", "glory"]:
+        raise newException(ValueError, "reward must be xp or glory")
+      env.rewardGlory = reward == "glory"
       env.learners = 1
       if node.hasKey("learner_seats"):
         env.learners = 0
@@ -422,7 +442,7 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
   let game = env.game
   try:
     for i in 0 ..< 10:
-      env.prevScore[i] = game.seatScore(i)
+      env.prevScore[i] = env.seatScore(i)
       let seat = game.neuralSeat(i)
       if seat != nil and seat.mode == NeuralLearner:
         var heads: Heads
@@ -439,7 +459,7 @@ proc gota_step(handle: pointer, actions: ptr UncheckedArray[int32],
     lastError = e.msg
     return -3
   for i in 0 ..< 10:
-    let now = game.seatScore(i)
+    let now = env.seatScore(i)
     if rewards != nil:
       rewards[i] = float32(now - env.prevScore[i]) / 1000
     if terminals != nil:
@@ -474,7 +494,7 @@ proc gota_seat_stats(handle: pointer, seat: cint, output: ptr UncheckedArray[int
     values = world.stats.values[seat]
   for i in 0 ..< StatCount:
     output[i] = 0
-  output[0] = game.seatScore(seat)
+  output[0] = env.seatScore(seat)
   if world.gameOver and not world.draw:
     output[1] = if world.winner == hero.team: 1 else: -1
   output[2] = int64(hero.totalXp)
