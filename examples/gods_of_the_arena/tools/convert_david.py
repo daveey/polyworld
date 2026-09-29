@@ -6,8 +6,11 @@ from pathlib import Path
 import struct
 import zipfile
 
+# Observation v1 (the fork's own float builder) is still accepted as an input:
+# a v1 network converts unchanged and runs on david.bas's observation.
+LEGACY_OBSERVATION_CONTRACT = "ae4046e83cc02e861f9c8cc32550c6cc4d6f9c161c9225a9b34a314d310ea991"
 CONTRACTS = {
-    "observation_contract": "ae4046e83cc02e861f9c8cc32550c6cc4d6f9c161c9225a9b34a314d310ea991",
+    "observation_contract": "73e8bbf31b161dc4fd5dea36f6d0247ba40a6558b5f2e672856cf338b583fe79",
     "action_contract": "ecc7d53c11a9db0912467c66ecb3e65b60b3e71ef14dad1442ba3b4f6ac14697",
 }
 GOALS = ["w_score", "w_win", "w_xp", "w_gold", "w_hero_kill", "w_assist",
@@ -48,7 +51,10 @@ def convert(path):
         if hashlib.sha256(data).hexdigest() != manifest["files"][name]:
             raise ValueError(f"Legacy digest mismatch: {name}")
     for name, start in [("observation_contract", 32), ("action_contract", 96)]:
-        if (manifest[name] != CONTRACTS[name] or
+        accepted = {CONTRACTS[name]}
+        if name == "observation_contract":
+            accepted.add(LEGACY_OBSERVATION_CONTRACT)
+        if (manifest[name] not in accepted or
                 manifest[name] != model[start:start + 64].decode()):
             raise ValueError(f"Legacy {name} mismatch")
     decoder = manifest.get("decoder", {})

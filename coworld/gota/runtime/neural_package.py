@@ -22,7 +22,7 @@ MAGIC = b"GOTANET1"
 OP_BUDGET = 4_000_000
 MAX_PARAMS = 2_000_000
 # Contract v1 hashes (examples/gods_of_the_arena/neural_contract.nim; gota_*_contract_hash).
-OBS_HASH = "ae4046e83cc02e861f9c8cc32550c6cc4d6f9c161c9225a9b34a314d310ea991"
+OBS_HASH = "73e8bbf31b161dc4fd5dea36f6d0247ba40a6558b5f2e672856cf338b583fe79"
 ACTION_HASH = "ecc7d53c11a9db0912467c66ecb3e65b60b3e71ef14dad1442ba3b4f6ac14697"
 TOP_KEYS = {"schema", "observation_contract", "action_contract", "decision_period", "files", "model", "goal", "decoder"}
 REQUIRED = ("schema", "observation_contract", "action_contract", "decision_period", "files", "model")

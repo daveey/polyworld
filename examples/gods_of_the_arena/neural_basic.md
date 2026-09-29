@@ -13,7 +13,7 @@ Code map (all in `examples/gods_of_the_arena/`):
 
 | file | role |
 |---|---|
-| `neural_contract.nim` | observation v1 builder, action v1 decoder, demonstration encoder, contract texts + SHA-256 |
+| `neural_contract.nim` | observation v2 builder (david.bas, Q16.16), action v1 decoder, demonstration encoder, contract texts + SHA-256 |
 | `neural_actor.nim` | GOTANET1 loader and FP32 MinGRU inference |
 | `neural_package.nim` | strict ZIP/manifest parser |
 | `neural_host_hooks.nim` (included by `bots.nim`) | neural seats: frames, inference, `gota_act`, label capture, override, shadow |
@@ -33,7 +33,7 @@ is plain BASIC, and plain BASIC follows exactly the old path, including its 256 
 ```json
 {
   "schema": "gota-neural-basic/1",
-  "observation_contract": "ae4046e83cc02e861f9c8cc32550c6cc4d6f9c161c9225a9b34a314d310ea991",
+  "observation_contract": "73e8bbf31b161dc4fd5dea36f6d0247ba40a6558b5f2e672856cf338b583fe79",
   "action_contract": "ecc7d53c11a9db0912467c66ecb3e65b60b3e71ef14dad1442ba3b4f6ac14697",
   "decision_period": 4,
   "files": {"policy.bas": "<sha256 hex>", "model.bin": "<sha256 hex>"},
@@ -181,6 +181,23 @@ instead of 128 to make room for the neural host functions. The per-tick budget i
 the network runs on its own separate 4,000,000-op budget. The shipped `policy.bas` peaks at 1,065
 instructions per tick (10 learner seats, a full match). Replay metrics report each seat's instructions
 against that seat's own limit.
+
+## Observation contract v2 (2026-09-29): david.bas is canonical
+
+Same 1407-float layout, slot roles and head layout as v1 below; the values are now exactly those of upstream #83's
+`neural/policies/david.bas` (`nnObserve`), so a network trained on the native env sees what `nn_david` feeds it.
+`buildObservation` reproduces every cell in Q16.16 with BASIC's operator semantics (`*` and `/` round to nearest, halves up;
+sqrt floors) and converts with `raw / 65536`; on the same states the native observation and the BASIC one are bit-identical.
+Differences from v1: (1) index 1306 is Emmett's Glory / 5000 (0 until the team has won); (2) creep, neutral and tower slots
+are ordered by the Q16.16 key (dx/16)^2 + (dy/16)^2 in world (not team) orientation, ties to the smaller id; (3) object field
+18 (targets an ally hero) includes the seat itself, and targets count only when the target is in the visible list;
+(4) object facing is normalized in fixed point after tile scaling; (5) the observation is built after the seat's
+learn/shop/buyback glue of the same tick (`glueFirst` seats run the glue with gota_act suppressed, then observe, then act),
+with gold, attack damage, hp/mana and the control timers as frame-start values and abilities, items, ability points and
+the last action error live, as BASIC's host data and getters behave. The goal block stays as the trainer set it. The reward
+channel `score` (stats[0]) stays the pre-Glory formula (xp - 200/min) so reward terms keep their meaning.
+The observation contract hash changed (`73e8bbf3...`); v1 checkpoints carry `ae4046e8...` and are rejected until re-stamped
+(weights are compatible; `gota/upstream83/repack_obs.py` in cogamer-gota-rl re-stamps a package).
 
 ## Observation contract v1 (1407 float32)
 

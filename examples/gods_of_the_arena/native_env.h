@@ -35,13 +35,19 @@
  * decision tick, then advances decision_period ticks in total (default 4,
  * config "decision_period"; the manifest key of the same name must match) and
  * pauses at the next decision tick, after that tick's cooldowns and vision
- * are updated and its observation frame is frozen, before any seat's BASIC
- * runs (the same point where a hosted neural seat observes). The decoded
- * command is issued once, on the decision tick, when the seat's policy.bas
- * calls gota_act; the engine keeps executing it (paths, attack targets)
- * until the next decision ("held command"); noop issues nothing.
+ * are updated and its observation frame is frozen (the same point where a
+ * hosted neural seat observes). Observation v2 follows david.bas: at that
+ * point every learner/package seat first runs its policy.bas glue (draft
+ * excluded: ability leveling, shopping, buyback) with gota_act suppressed,
+ * then observes, so the observation already shows the abilities and items the
+ * glue just bought, while gold, attack damage, hp/mana and the control timers
+ * keep their frame-start values. The decoded command is issued once, on the
+ * decision tick, after the caller's actions arrive (the seat's turn calls the
+ * equivalent of gota_act); the engine keeps executing it (paths, attack
+ * targets) until the next decision ("held command"); noop issues nothing.
  *
- * Observation contract v1 (GOTA_OBS_SIZE floats per seat, ego-centric, team
+ * Observation contract v2 = upstream #83 david.bas in Q16.16 (neural_basic.md;
+ * the layout is v1's) (GOTA_OBS_SIZE floats per seat, ego-centric, team
  * frame: blue seats see the 180-degree rotated map so both teams share one
  * frame): self 48 | abilities 4x16 | items 6x25 | objects 25x40 | spell
  * warnings 4x8 | summary 16 | terrain 9x9 | goal 16. Exact layout and
