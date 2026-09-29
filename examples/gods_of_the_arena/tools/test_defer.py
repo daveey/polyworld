@@ -41,7 +41,8 @@ MIXED = dict(hidden=128, seed=7, scale=0.05, verb0_bias=0.02)
 def argmax_heads(logits):
     out, o = [], 0
     for s in HEAD_SIZES:
-        out.append(int(np.argmax(logits[o:o + s]))); o += s
+        seg = np.asarray(logits[o:o + s], np.float64) * 65536.0  # Q16.16 logits, half away from zero (nn_david's outputFixed)
+        out.append(int(np.argmax(np.sign(seg) * np.floor(np.abs(seg) + 0.5)))); o += s
     return out
 
 

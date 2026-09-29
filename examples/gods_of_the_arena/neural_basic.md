@@ -194,7 +194,8 @@ are ordered by the Q16.16 key (dx/16)^2 + (dy/16)^2 in world (not team) orientat
 (4) object facing is normalized in fixed point after tile scaling; (5) the observation is built after the seat's
 learn/shop/buyback glue of the same tick (`glueFirst` seats run the glue with gota_act suppressed, then observe, then act),
 with gold, attack damage, hp/mana and the control timers as frame-start values and abilities, items, ability points and
-the last action error live, as BASIC's host data and getters behave. The goal block stays as the trainer set it. The reward
+the last action error live, as BASIC's host data and getters behave; (6) argmax decoding compares the logits rounded to Q16.16
+(nn_david's `outputFixed`, first maximum wins), so two logits inside one Q16.16 step tie as they do in BASIC. The goal block stays as the trainer set it. The reward
 channel `score` (stats[0]) stays the pre-Glory formula (xp - 200/min) so reward terms keep their meaning.
 The observation contract hash changed (`73e8bbf3...`); v1 checkpoints carry `ae4046e8...` and are rejected until re-stamped
 (weights are compatible; `gota/upstream83/repack_obs.py` in cogamer-gota-rl re-stamps a package).

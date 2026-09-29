@@ -143,9 +143,13 @@ proc pickHead(logits: openArray[float32], base, n: int, allowed: openArray[bool]
   template ok(i: int): bool = (not found) or allowed[i]
   if not sampling:
     var best = -1
+    var bestKey = 0'i64
     for i in 0 ..< n:
-      if ok(i) and (best < 0 or logits[base + i] > logits[base + best]):
-        best = i
+      if ok(i):
+        let key = logits[base + i].logitKey
+        if best < 0 or key > bestKey:
+          best = i
+          bestKey = key
     return int32(best)
   var top = float32(-Inf)
   for i in 0 ..< n:

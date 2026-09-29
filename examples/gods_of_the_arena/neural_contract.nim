@@ -894,13 +894,19 @@ proc encodeCommand*(frame: DecisionFrame, world: World, command: NeuralCommand):
   of UseItemAtCommand:
     result = encodeAnchored(frame, 7, 0, clamp(command.item, 0, 5), command.point)
 
+proc logitKey*(value: float32): int64 {.inline.} =
+  ## The Q16.16 value #83's nn_david hands BASIC for a logit (`outputFixed`:
+  ## round half away from zero). Argmax compares these, so two logits within
+  ## one Q16.16 step tie (the first wins) exactly as in BASIC.
+  int64(round(float64(value) * 65536.0))
+
 proc argmaxHeads*(logits: openArray[float32]): Heads =
-  ## Deterministic argmax per head (first maximum wins).
+  ## Deterministic argmax per head (first maximum wins) over Q16.16 logits.
   var offset = 0
   for h in 0 ..< ActionHeads:
     var best = 0
     for i in 1 ..< HeadSizes[h]:
-      if logits[offset + i] > logits[offset + best]:
+      if logits[offset + i].logitKey > logits[offset + best].logitKey:
         best = i
     result[h] = int32(best)
     offset += HeadSizes[h]
