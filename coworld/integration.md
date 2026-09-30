@@ -39,9 +39,10 @@ manifests and byte reports live in `tmp/webassets/<game>-ktx2/`. See
 
 The runner supplies local `file://` URIs through `COGAME_CONFIG_URI`,
 `COGAME_PLAYER_SEATS_URI`, `COGAME_RESULTS_URI`, `COGAME_SAVE_REPLAY_URI`, and
-`COGAME_PLAYER_FAILURE_URI`. Configurations require the game's fixed-length tokens
-and players arrays. Staged policy filenames may have no extension. Raw BASIC source
-is read from the disk with bounded reads and compiled with the existing game limits.
+`COGAME_PLAYER_FAILURE_URI`. Configurations require matching tokens and players
+arrays. GotA has ten seats, CTA has four, and LvD supports variable rosters with
+six-player FFA in Competition. Staged policy filenames may have no extension.
+Raw BASIC source is read with bounded reads and compiled with the game limits.
 
 Every seat log is created before compilation. PRINT and BASIC diagnostics stay in
 that seat's log, bounded to 10 MiB including the truncation marker. A runtime error

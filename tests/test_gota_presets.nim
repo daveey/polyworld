@@ -10,6 +10,7 @@ let
     "examples/gods_of_the_arena/presets/saved.json")
   custom = parseConfig("""{
     "seed": 1988,
+    "draft_mode": "team",
     "max_ticks": 100,
     "map_preset": {
       "seed": 55,
@@ -21,6 +22,13 @@ let
   }""")
 doAssert saved.mapPreset == defaultConfig()
 doAssert saved.seed == 54
+doAssert saved.draftMode == UniqueDraft
+doAssert custom.draftMode == TeamDraft
+for mode in DraftMode:
+  doAssert parseDraftMode($mode) == mode
+  let config = parseConfig("{\"draftMode\": \"" & $mode & "\"}")
+  doAssert config.draftMode == mode
+  doAssert parseConfig(config.toJson()) == config
 doAssert saved.mapPreset.mapSize == 116
 doAssert custom.seed == 1988
 doAssert custom.maxTicks == 100
@@ -32,6 +40,7 @@ doAssert not custom.mapPreset.campsTouchRoads
 doAssert custom.mapPreset.roadWidth == defaultConfig().roadWidth
 doAssert parseConfig(custom.toJson()) == custom
 for bytes in [
+  "{\"draftMode\": \"invalid\"}",
   "{", "{\"mapPreset\": {\"mapSize\": 0}}",
   "{\"mapPreset\": {\"mapSize\": 97}}",
   "{\"mapPreset\": {\"mapSize\": 258}}",
@@ -50,7 +59,10 @@ let
   defaultMap = generateMap(saved.seed, saved.mapPreset)
   customMap = generateMap(custom.seed, custom.mapPreset)
 doAssert customMap.hash != defaultMap.hash
-let game = newGame(customMap, 240, 10, false, ReplayData(), drafting = false)
+let game = newGame(
+  customMap, 240, 10, false, ReplayData(),
+  drafting = false, draftMode = custom.draftMode
+)
 game.world.heroTurnTicks = 100_000
 game.recorder = initReplayRecorder(game.currentSetup(100), customMap.preset)
 for tick in 0 ..< 100:
@@ -60,6 +72,7 @@ let
   expected = game.stateHash()
 doAssert data.config.mapPreset == custom.mapPreset
 doAssert data.config.seed == custom.seed
+doAssert data.config.draftMode == custom.draftMode
 doAssert data.header.gameVersion == ReplayGameVersion
 doAssert generateMap(saved.seed, saved.mapPreset).hash == defaultMap.hash,
   "The cache must not reuse a different preset."

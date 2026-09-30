@@ -1,875 +1,482 @@
-## Light vs Dark map generation.
-##
-## The map is generated entirely with integers, from an explicit seed, and is
-## symmetric by construction under a 180 degree rotation about the centre of
-## the grid: every height and tile kind is decided once for the canonical half
-## and copied to its mirror, so neither player can be handed better ground.
-##
-## Each town sits on a rough corner plateau that runs to the two map edges,
-## so only the inward sides have cliffs. A diagonal ramp is the way down.
-## Grass and sand mix on top, with a few trees, and two natural expansions
-## sit in clearings just outside the east and south walls.
-##
-## This module writes the shared `pathing.layers` terrain model once at
-## startup and then returns a `MapData` value. The simulation reads only the
-## returned value, never the layers, so the renderer's decoration can never
-## change how a match plays out. Graphics may sample `surfaceHeight` and must
-## not write simulation state.
-
 import
   std/strformat,
   fixxy,
-  polyworld/[hashes, noises, pathing, profiles, rngs],
+  polyworld/[hashes, noises, pathing, rngs],
   content
 
-static:
-  doAssert GridSide.int == GridTiles,
-    "content and pathing disagree about the size of the map"
-
-## Terrain shape
-##
-## Heights are in packed 1/8-tile steps, the same unit `pathing.pack` uses.
-## Blend amounts are fixed-point ratios over `MapBlendScale`.
-
 const
-  TerrainAmplitudeSteps = 11'i32
-  WaterLevelSteps = -9'i32
-  RiverBedSteps = -16'i32
-  FordBedSteps = -3'i32
-
-  RiverHalfWidth2 = 23
-    ## River half width in doubled tile units, so tile centres stay integral.
-  CornerSide = GridSide + 1
-    ## Corners run 0 .. GridSide inclusive.
-
-  BaseCenterTile = 22'i32
-    ## Light's town hall centre. Dark's is its mirror.
-  BasePlateauRaise = 16'i32
-    ## How much higher the town sits than the natural ground, in
-    ## 1/8-tile steps. One tile of drop at this height is a wall.
-  PadWall = 36'i32
-    ## How far the two inward cliffs sit from the map corner.
-  PadRound = 48'i32
-    ## Euclidean cap that rounds the plateau's inward corner.
-  PadRoughness = 4'i32
-    ## How much the cliff line wanders, in tiles.
-  RampLength = 7'i32
-  RampHalfWidth = 2'i32
-    ## Diagonal corridor toward the map centre; the only way off the pad.
-  ClearingRadius = 5'i32
-  LightEastClearing = (48, 22)
-  LightSouthClearing = (22, 48)
-    ## Natural expansions just outside the two inward walls.
-  PadNoiseStream = 0x9E3779B97F4A7C15'u64
-  SandNoiseStream = 0xC2B2AE3D27D4EB4F'u64
-  BumpNoiseStream = 0xA5A5A5A5A5A5A5A5'u64
-  ForestNoiseStream = 0xD1B54A32D192ED03'u64
-  ForestDetailStream = 0x8CB92BA72F3D8DD7'u64
-  ForestRollStream = 0x2545F4914F6CDD1D'u64
-  ForestDensityPercent = 90'i64
-    ## Chance that a candidate at the forest map's peak passes the gate.
-  PlateauTrees = 20
-  ForestPatchRadius = 4'i32
-    ## Solid patches join neighbouring trees into dense woods.
-  BattleRadius = 22'i32
-  BattleLaneHalfWidth = 6'i32
-  FordTreeMargin = 3
-
-  FordCorners = [(96, 32), (64, 64), (32, 96)]
-    ## Corner coordinates, so the middle ford sits exactly on the axis of
-    ## symmetry and the outer two are each other's mirror.
-  FordRadius = [13, 17, 13]
-  MinimumFordWidth = 3
-
+  MaximumMapSide* = 4096'i32
+  StepOffsets* = [
+    (0'i32, -1'i32), (1'i32, -1'i32), (1'i32, 0'i32), (1'i32, 1'i32),
+    (0'i32, 1'i32), (-1'i32, 1'i32), (-1'i32, 0'i32), (-1'i32, -1'i32)
+  ]
   HallFootprint = BuildingTable[TownHallBuilding].footprint
   MineFootprint = BuildingTable[GoldMineBuilding].footprint
-  LightHallOrigin = (20'i32, 21'i32)
-  LightMainMine = (25'i32, 18'i32)
-  LightEastMine = (47'i32, 21'i32)
-  LightSouthMine = (21'i32, 47'i32)
-    ## Two natural expansions, one on each inward side of the keep.
-
-  GroveInnerRing = 16'i32
-  GroveOuterRing = 30'i32
-  GroveTiles = 150
-  ScatterTiles = 420
-  MinimumGroveTiles = 100
-  MinimumSpawnTiles = 8
 
 type
+  LvdError* = object of CatchableError
+  MapLayout* = enum
+    SpokeLayout, RandomLayout
+  MapSettings* = object
+    layout*: MapLayout = SpokeLayout
+    size*: int32 = DefaultMapSize
+      ## Baseline side length for two players, grown to preserve spacing.
+    expansions*: int32 = 2
+    minDistance*: int32 = DefaultSpawnDistance
+  NodeKind* = enum
+    SpawnNode, ExpansionNode
+  MapNode* = object
+    kind*: NodeKind
+    player*: int32
+    centre*: Tile2
+    parent*: int32
+      ## Spawn node index for expansions, or -1 for spawns.
   MineSpot* = object
     id*: int32
     origin*: Tile2
-      ## North-west corner of the mine footprint.
     gold*: int32
-
   MapData* = object
-    seed*: int32
-    passable*: seq[uint8]
-      ## Terrain walkability only: slope, map edge, and water. Trees and
-      ## structures are simulation state and live in the world's blocker grid.
-    kinds*: seq[uint8]
-      ## Tile kind per cell, kept for the minimap and for debugging.
-    heights*: seq[int16]
-      ## Mean packed terrain height per tile for integer line of sight.
-    treeWood*: seq[int16]
-      ## Harvestable wood remaining on each tile, zero where there is no tree.
+    seed*, side*: int32
+    settings*: MapSettings
+    nodes*: seq[MapNode]
+    terrain*: seq[QuadLayer]
+      ## Terrain geometry used by pathing and the renderer.
+    passable*, kinds*: seq[uint8]
+    heights*, treeWood*: seq[int16]
     forestRocks*: seq[int32]
-      ## Permanent boulders replacing every tenth mirrored tree pair.
     mines*: seq[MineSpot]
-    hallOrigin*: array[PlayerCount, Tile2]
+    hallOrigin*: seq[Tile2]
     hash*: uint64
 
-proc triangleWave(value, period: int): int32 =
-  ## Returns a deterministic signed triangle wave in fixed integer units.
-  ## Odd about zero, which is what keeps the wiggled river symmetric.
+proc validate*(settings: MapSettings, players: int) =
+  ## Rejects invalid settings before sizing or allocating terrain.
+  if players < 1:
+    raise newException(LvdError, "A match needs at least one player.")
+  if settings.size < 32 or settings.size > MaximumMapSide:
+    raise newException(LvdError, "Map size must be between 32 and 4096.")
+  if settings.expansions < 0 or
+    int64(players) * (int64(settings.expansions) + 1) >
+      LastMineId - FirstMineId + 1:
+      raise newException(LvdError, "Invalid expansion count for this roster.")
+  if settings.minDistance < 1 or settings.minDistance > MaximumMapSide:
+    raise newException(LvdError, "Minimum spawn distance must be 1 .. 4096.")
+
+proc inGrid*(map: MapData, x, y: int32): bool =
+  ## Checks coordinates against this map's actual dimensions.
+  x >= 0 and y >= 0 and x < map.side and y < map.side
+
+proc inGrid*(map: MapData, tile: Tile2): bool =
+  ## Checks a tile against this map's actual dimensions.
+  map.inGrid(int32(tile.x), int32(tile.y))
+
+proc tileIndex*(map: MapData, x, y: int32): int32 =
+  ## Returns a row-major index using this map's stride.
+  y * map.side + x
+
+proc tileIndex*(map: MapData, tile: Tile2): int32 =
+  ## Returns a row-major index for a tile on this map.
+  map.tileIndex(int32(tile.x), int32(tile.y))
+
+proc distanceSquared(first, second: Tile2): int64 =
+  ## Measures separation without floating point or square roots.
   let
-    phase = ((value mod period) + period) mod period
-    quarter = period div 4
-  if phase < quarter:
-    int32(phase * MapBlendScale div quarter)
-  elif phase < quarter * 2:
-    int32((quarter * 2 - phase) * MapBlendScale div quarter)
-  elif phase < quarter * 3:
-    -int32((phase - quarter * 2) * MapBlendScale div quarter)
-  else:
-    -int32((period - phase) * MapBlendScale div quarter)
+    dx = int64(first.x) - int64(second.x)
+    dy = int64(first.y) - int64(second.y)
+  dx * dx + dy * dy
 
-## Symmetry
+proc ringPoint(centre: Tile2, radius: int32, angle: Fixed): Tile2 =
+  ## Places one point on a deterministic fixed-point ring.
+  let offset = direction(angle) * fixed(radius)
+  tile2(int32(centre.x) + toInt(round(offset.x)),
+    int32(centre.y) + toInt(round(offset.y)))
 
-proc mirrorCorner(cx, cz: int): (int, int) =
-  ## Rotates a corner 180 degrees about the centre of the grid.
-  (GridSide.int - cx, GridSide.int - cz)
-
-proc canonicalCorner(cx, cz: int): (int, int) =
-  ## Folds a corner onto the canonical half of the map. Terrain is generated
-  ## for the canonical representative only, so both halves are identical by
-  ## construction and no averaging step can leave a seam.
-  let (mx, mz) = mirrorCorner(cx, cz)
-  if cz * CornerSide + cx <= mz * CornerSide + mx: (cx, cz) else: (mx, mz)
-
-## Generation
-
-proc generateOnce(seed: int32): MapData {.measure.} =
-  ## Builds the terrain layers for one seed and returns the derived map data.
-  ## Writes the shared `pathing.layers` and refreshes walkability once.
-  ## Noise decides the terrain, so the result is not always playable: callers
-  ## go through `generateMap`, which is the one that guarantees a sound map.
-
-  proc ground(cx, cz: int): int32 =
-    ## Layered value noise, evaluated at the canonical corner.
-    let (nx, nz) = canonicalCorner(cx, cz)
-    let value =
-      valueNoise(seed, 0xA0761D6478BD642F'u64, nx, nz, 24) * 4 +
-      valueNoise(seed, 0xE7037ED1A0B428DB'u64, nx, nz, 12) * 2 +
-      valueNoise(seed, 0x8EBC6AF09C88C6E3'u64, nx, nz, 6)
-    int32(roundDivision(
-      int64(value) * TerrainAmplitudeSteps,
-      int64(MapBlendScale) * 7
-    ))
-
-  proc riverBlend(cx2, cz2: int): int32 =
-    ## How deep inside the river band a doubled coordinate lies, from zero at
-    ## the banks to `MapBlendScale` at the bed. The wiggle is an odd function
-    ## of `cx2 - cz2`, which keeps the whole band symmetric.
-    let
-      wiggle2 = int(triangleWave(cx2 - cz2, 168)) * 8 div MapBlendScale
-      axisDistance2 = abs(cx2 + cz2 - GridSide.int * 2 - wiggle2)
-      ratio = clamp(
-        int32(axisDistance2 * MapBlendScale div RiverHalfWidth2),
-        0'i32,
-        MapBlendScale
-      )
-      cubic = int32(roundDivision(
-        int64(ratio) * int64(ratio) * int64(ratio),
-        int64(MapBlendScale) * int64(MapBlendScale)
-      ))
-    MapBlendScale - cubic
-
-  let plateauHeight =
-    ground(BaseCenterTile.int, BaseCenterTile.int) +
-    BasePlateauRaise
-
-  proc padWobble(nx, nz: int): int =
-    ## Low-frequency wander of the cliff line, in tiles.
-    let n = valueNoise(seed, PadNoiseStream, nx, nz, 10)
-    int(roundDivision(int64(n) * PadRoughness, MapBlendScale))
-
-  proc onPadCorner(cx, cz: int): bool =
-    ## Whether a corner sits on the rough corner plateau.
-    let (nx, nz) = canonicalCorner(cx, cz)
-    if nx < 0 or nz < 0:
-      return false
-    let
-      wobble = padWobble(nx, nz)
-      wall = PadWall.int + wobble
-      radius = PadRound.int + wobble
-    nx <= wall and nz <= wall and
-      nx * nx + nz * nz <= radius * radius
-
-  proc inRampCorridor(cx, cz: int): bool =
-    ## Whether a point lies on either diagonal exit toward the map centre.
-    let (nx, nz) = canonicalCorner(cx, cz)
-    nx >= 0 and nz >= 0 and
-      abs(nx - nz) <= RampHalfWidth.int and
-      max(nx, nz) >= BaseCenterTile.int
-
-  proc inClearingTile(x, y: int): bool =
-    ## Whether a tile sits in one of the four expansion clearings.
-    for (cx, cy) in [LightEastClearing, LightSouthClearing]:
-      if max(abs(x - cx), abs(y - cy)) <= ClearingRadius.int:
-        return true
-      let (mx, my) = mirrorTile(int32(cx), int32(cy))
-      if max(abs(x - mx.int), abs(y - my.int)) <= ClearingRadius.int:
-        return true
-    false
-
-  proc tileOnPad(x, z: int): bool =
-    ## Whether every corner of a tile sits on a raised pad.
-    onPadCorner(x, z) and
-      onPadCorner(x + 1, z) and
-      onPadCorner(x, z + 1) and
-      onPadCorner(x + 1, z + 1)
-
-  proc tileOnRamp(x, z: int): bool =
-    ## Whether a tile is part of the sloped exit off the pad.
-    if tileOnPad(x, z):
-      return false
-    for (cx, cz) in [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]:
-      if not inRampCorridor(cx, cz):
-        continue
-      let
-        (nx, nz) = canonicalCorner(cx, cz)
-        bx = max(nx - RampLength.int, 0)
-        bz = max(nz - RampLength.int, 0)
-      if onPadCorner(bx, bz):
-        return true
-    false
-
-  proc tileIsCliff(x, z: int): bool =
-    ## Whether a tile straddles the pad edge and is not the ramp.
-    if tileOnPad(x, z) or tileOnRamp(x, z):
-      return false
-    var
-      anyPad = false
-      anyOff = false
-    for (cx, cz) in [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]:
-      if onPadCorner(cx, cz):
-        anyPad = true
-      else:
-        anyOff = true
-    anyPad and anyOff
-
-  proc canonicalTile(x, z: int): (int, int) =
-    ## Folds a tile onto the canonical half of the map.
-    let (mx, mz) = mirrorTile(int32(x), int32(z))
-    if z * GridSide.int + x <= mz.int * GridSide.int + mx.int:
-      (x, z)
-    else:
-      (mx.int, mz.int)
-
-  proc padSand(x, z: int): bool =
-    ## Whether a plateau tile reads as sand instead of grass.
-    let (nx, nz) = canonicalTile(x, z)
-    valueNoise(seed, SandNoiseStream, nx, nz, 5) > 180
-
-  proc makeCorner(cx, cz: int): int32 =
-    ## Corner height as a pure function of the corner coordinate, so tiles
-    ## that share a corner always agree and the surface grows no walls.
-    result = ground(cx, cz)
-    result = blendHeight(result, RiverBedSteps, riverBlend(cx * 2, cz * 2))
-    for index, (fordX, fordZ) in FordCorners:
-      let
-        deltaX = int64(cx - fordX)
-        deltaZ = int64(cz - fordZ)
-        distance = integerSqrt(
-          (deltaX * deltaX + deltaZ * deltaZ) *
-          int64(MapBlendScale) * int64(MapBlendScale)
-        )
-        amount = smoothstep(
-          MapBlendScale - int32(distance div FordRadius[index])
-        )
-      result = blendHeight(result, FordBedSteps, amount)
-    let (nx, nz) = canonicalCorner(cx, cz)
-    for (ccx, ccz) in [LightEastClearing, LightSouthClearing]:
-      let cr = max(abs(nx - ccx), abs(nz - ccz))
-      if cr <= ClearingRadius.int + 2:
-        let amount = smoothstep(
-          int32(ClearingRadius.int + 2 - cr) *
-          MapBlendScale div 2
-        )
-        result = blendHeight(result, ground(ccx, ccz), amount)
-    if onPadCorner(cx, cz):
-      let
-        n = valueNoise(seed, BumpNoiseStream, nx, nz, 8)
-        bump = int32(roundDivision(int64(n) * 2, MapBlendScale))
-      result = plateauHeight + bump
-    elif inRampCorridor(cx, cz):
-      var
-        px = nx
-        pz = nz
-        steps = 0
-      while steps <= RampLength.int and not onPadCorner(px, pz):
-        if px > 0:
-          dec px
-        if pz > 0:
-          dec pz
-        inc steps
-      if steps > 0 and steps <= RampLength.int and
-          onPadCorner(px, pz):
-        let amount = int32(RampLength.int - steps) *
-          MapBlendScale div RampLength
-        result = blendHeight(
-          result,
-          plateauHeight,
-          smoothstep(amount)
-        )
-
-  var cornerHeights = newSeq[int16](CornerSide * CornerSide)
-  for cz in 0 .. GridSide.int:
-    for cx in 0 .. GridSide.int:
-      cornerHeights[cz * CornerSide + cx] = int16(makeCorner(cx, cz))
-  template corner(cx, cz: int): int32 =
-    int32(cornerHeights[(cz) * CornerSide + (cx)])
-
-  var groundLayer = QuadLayer(
-    originX: 0, originZ: 0,
-    width: GridSide, depth: GridSide,
-    slab: false,
-    tiles: newSeq[Tile](GridCells)
-  )
-  template groundTile(x, z: int): var Tile =
-    groundLayer.tiles[(z) * GridSide + (x)]
-
-  for z in 0 ..< GridSide.int:
-    for x in 0 ..< GridSide.int:
-      let
-        tops = [corner(x, z), corner(x + 1, z),
-                corner(x, z + 1), corner(x + 1, z + 1)]
-        heightSum = tops[0] + tops[1] + tops[2] + tops[3]
-        nearRiver = riverBlend(x * 2 + 1, z * 2 + 1) > 102
-        kind =
-          if nearRiver and heightSum < 10: MarshTile
-          elif heightSum > TerrainAmplitudeSteps * 2: RockTile
-          else: GrassTile
-      groundTile(x, z) = Tile(
-        flags: TileExists or TileConnectedEast or TileConnectedSouth,
-        kind: kind,
-        tops: packedHeights(tops)
-      )
-      if heightSum < WaterLevelSteps * 4:
-        groundTile(x, z).impassable = true
-
-  ## The plateau mixes grass and sand. The ramp is worn sand. The cliff
-  ## is rock and is forced closed so a lucky slope cannot open a second exit.
-  for z in 0 ..< GridSide.int:
-    for x in 0 ..< GridSide.int:
-      if tileOnPad(x, z):
-        groundTile(x, z).kind =
-          if padSand(x, z): RoadTile else: GrassTile
-      elif tileOnRamp(x, z):
-        groundTile(x, z).kind = RoadTile
-      elif tileIsCliff(x, z):
-        groundTile(x, z).kind = RockTile
-        groundTile(x, z).impassable = true
-      elif inClearingTile(x, z):
-        groundTile(x, z).kind = GrassTile
-
-  ## Water: one flat sheet over every tile carved below the water level.
-  var water = QuadLayer(
-    originX: 0, originZ: 0,
-    width: GridSide, depth: GridSide,
-    slab: true,
-    water: true,
-    tiles: newSeq[Tile](GridCells)
-  )
-  for z in 0 ..< GridSide.int:
-    for x in 0 ..< GridSide.int:
-      let tops = groundTile(x, z).tops
-      if int32(tops[0]) + int32(tops[1]) + int32(tops[2]) +
-          int32(tops[3]) < WaterLevelSteps * 4:
-        water.tiles[z * GridSide + x] = Tile(
-          flags: TileExists,
-          tops: packedHeights([WaterLevelSteps, WaterLevelSteps,
-                               WaterLevelSteps, WaterLevelSteps]),
-          bottoms: packedHeights([WaterLevelSteps - 3, WaterLevelSteps - 3,
-                                  WaterLevelSteps - 3, WaterLevelSteps - 3])
-        )
-
-  layers = @[groundLayer, water]
-  computeWalkable()
-
-  ## Derived grids. Trees are deliberately absent from `passable`: a felled
-  ## tree must open its tile without anything recomputing terrain walkability.
-  var map = MapData(
-    seed: seed,
-    passable: newSeq[uint8](GridCells),
-    kinds: newSeq[uint8](GridCells),
-    heights: newSeq[int16](GridCells),
-    treeWood: newSeq[int16](GridCells)
-  )
-  for z in 0 ..< GridSide.int:
-    for x in 0 ..< GridSide.int:
-      let index = z * GridSide.int + x
-      map.passable[index] = uint8(isWalkable(0, x, z))
-      map.kinds[index] = uint8(groundLayer.tiles[index].kind)
-      let tops = groundLayer.tiles[index].tops
-      map.heights[index] = int16(
-        (int32(tops[0]) + int32(tops[1]) +
-          int32(tops[2]) + int32(tops[3])) div 4
-      )
-
-  ## Structures. Both halls and all six mines are placed as mirror pairs.
-  ## Each footprint axis mirrors independently, preserving width and depth.
-  proc mirrorOrigin(x, y: int32, footprint: Footprint): (int32, int32) =
-    (GridSide - footprint.width - x, GridSide - footprint.depth - y)
-
+proc placeNodes(seed: int32, players: int, settings: MapSettings): MapData =
+  ## Places spawn clusters with bounded random retries and automatic growth.
+  settings.validate(players)
   let
-    (lightHallX, lightHallY) = LightHallOrigin
-    (darkHallX, darkHallY) = mirrorOrigin(lightHallX, lightHallY, HallFootprint)
-  map.hallOrigin[LightPlayer] = tile2(lightHallX, lightHallY)
-  map.hallOrigin[DarkPlayer] = tile2(darkHallX, darkHallY)
-
-  var mineId = FirstMineId
-  for (spot, gold) in [
-    (LightMainMine, MainMineGold),
-    (LightEastMine, ExpansionMineGold),
-    (LightSouthMine, ExpansionMineGold)
-  ]:
+    expansionRadius = max(18'i32, settings.expansions * 3)
+    margin = 12'i32
+    spacing = max(settings.minDistance, margin * 2 + 2)
+    scaledArea = int64(settings.size) * settings.size * max(players, 2) div 2
+  var side = int32(integerSqrt(scaledArea))
+  if int64(side) * side < scaledArea:
+    inc side
+  side = max(side, margin * 2 + 1)
+  if side > MaximumMapSide:
+    raise newException(LvdError, "Roster requires more than 4096 tiles.")
+  if settings.layout == SpokeLayout and players > 1:
     let
-      (mineX, mineY) = spot
-      (mirrorX, mirrorY) = mirrorOrigin(mineX, mineY, MineFootprint)
-    map.mines.add MineSpot(
-      id: mineId, origin: tile2(mineX, mineY), gold: gold)
-    map.mines.add MineSpot(
-      id: mineId + 1, origin: tile2(mirrorX, mirrorY), gold: gold)
-    mineId += 2
-
-  ## Forests. Every planted tile writes its mirror too, so the two players get
-  ## identical wood no matter which half the sampler happened to land on.
-  proc covers(origin: Tile2, footprint: Footprint, margin, x, y: int32): bool =
-    ## Tests a structure footprint with an extra border of tiles.
-    x >= int32(origin.x) - margin and
-      x < int32(origin.x) + footprint.width + margin and
-      y >= int32(origin.y) - margin and
-      y < int32(origin.y) + footprint.depth + margin
-
-  proc inBattleClearing(x, y: int32): bool =
-    ## Reserves the centre, diagonal approach, and all three river crossings.
+      angle = Fixed(int32(int64(int32(FixedPi)) div players))
+      sine = int64(int32(sin(angle)))
+      radius = (int64(spacing + 2) * 65536 + sine * 2 - 1) div
+        (sine * 2)
+    side = max(side, int32(radius * 2 + margin * 2 + 2))
+  side += side mod 2
+  var rng = initRng(seed, 0x9E3779B97F4A7C15'u64)
+  for attempt in 0 ..< 16:
+    if side > MaximumMapSide:
+      raise newException(LvdError,
+        "Roster and spacing require a map larger than 4096 tiles.")
+    var spawns: seq[Tile2]
     let
-      dx = x * 2 + 1 - GridSide
-      dy = y * 2 + 1 - GridSide
-    if dx * dx + dy * dy <= BattleRadius * BattleRadius * 4:
-      return true
-    if abs(x - y) <= BattleLaneHalfWidth and
-      min(x, y) >= BaseCenterTile and
-      max(x, y) < GridSide - BaseCenterTile:
-        return true
-    for i, (fordX, fordY) in FordCorners:
-      let
-        fx = x * 2 + 1 - int32(fordX * 2)
-        fy = y * 2 + 1 - int32(fordY * 2)
-        radius = int32(FordRadius[i] + FordTreeMargin)
-      if fx * fx + fy * fy <= radius * radius * 4:
-        return true
-    false
-
-  proc openForTree(x, y: int32): bool =
-    ## Keeps every planting pass clear of battles, ramps, and resources.
-    if not inGrid(x, y):
-      return false
-    let index = int(tileIndex(x, y))
-    if map.passable[index] == 0 or map.treeWood[index] > 0:
-      return false
-    if map.kinds[index] != uint8(GrassTile):
-      return false
-    if tileOnRamp(x.int, y.int) or inClearingTile(x.int, y.int):
-      return false
-    if inBattleClearing(x, y):
-      return false
-    for player in 0 ..< PlayerCount:
-      if covers(map.hallOrigin[player], HallFootprint, 3, x, y):
-        return false
-    for mine in map.mines:
-      if covers(mine.origin, MineFootprint, 3, x, y):
-        return false
-    true
-
-  proc plantOn(x, y: int32, wantPad: bool): bool =
-    ## Plants one tree and its mirror, or neither.
-    let (mirrorX, mirrorY) = mirrorTile(x, y)
-    if tileOnPad(x.int, y.int) != wantPad or
-        tileOnPad(mirrorX.int, mirrorY.int) != wantPad:
-      return false
-    if not openForTree(x, y) or not openForTree(mirrorX, mirrorY):
-      return false
-    for (tileX, tileY) in [(x, y), (mirrorX, mirrorY)]:
-      let index = int(tileIndex(tileX, tileY))
-      map.treeWood[index] = WoodPerTree
-      map.kinds[index] = uint8(TreeTile)
-      layers[0].tiles[index].kind = TreeTile
-    true
-
-  # Forest noise chooses patch centres, then each patch fills solidly.
-  # Mirrored patches preserve equal wood and matching paths for both sides.
-  var
-    forestRng = initRng(seed, ForestRollStream)
-    mapRng = initRng(seed)
-
-  proc plantPatch(x, y: int32, wantPad: bool, limit: int): int =
-    ## Fills a compact patch outwards, counting mirrored pairs toward its cap.
-    let radius = 2 + mapRng.below(ForestPatchRadius - 1)
-    for ring in 0'i32 .. radius:
-      for dy in -ring .. ring:
-        for dx in -ring .. ring:
-          if max(abs(dx), abs(dy)) != ring or
-            dx * dx + dy * dy > radius * radius:
-              continue
-          if result >= limit:
-            return
-          if plantOn(x + dx, y + dy, wantPad):
-            inc result
-
-  proc inForest(x, y: int32): bool =
-    ## Samples the forest density with a deterministic planting roll.
-    let
-      forest = int64(
-        valueNoise(seed, ForestNoiseStream, x.int, y.int, 20) * 2 +
-        valueNoise(seed, ForestDetailStream, x.int, y.int, 10))
-      roll = int64(forestRng.below(int32(MapBlendScale)))
-    # forest ranges over ±3 * MapBlendScale and roll over MapBlendScale.
-    # The chance is the squared normalized noise times the density: the
-    # passes plant a fixed count, so the gate has to be steep for the woods
-    # to gather at their hearts instead of spreading over every positive
-    # patch. A tile at the peak passes ForestDensityPercent of the time.
-    forest > 0 and
-      roll * 300 * 3 * int64(MapBlendScale) <
-        forest * forest * ForestDensityPercent
-
-  ## The grove is each player's guaranteed starting wood, so it fills in two
-  ## passes: forest-gated first, so it clumps like the rest of the woods,
-  ## then ungated to reach the count on seeds whose forest map leaves the
-  ## grove ring thin.
-  let lightCentre = tile2(BaseCenterTile, BaseCenterTile)
-  var planted = 0
-  for gated in [true, false]:
-    for attempt in 0 ..< GroveTiles * 60:
-      if planted >= GroveTiles:
+      centre = tile2(side div 2, side div 2)
+      radius = side div 2 - margin
+      rotation = rng.below(int32(FixedTau))
+      spokeJitter = int32(FixedTau) div int32(players) div 6
+    for player in 0 ..< players:
+      for trial in 0 ..< 512:
+        let candidate =
+          case settings.layout
+          of SpokeLayout:
+            if players == 1:
+              centre
+            else:
+              let angle = rotation +
+                int32(int64(int32(FixedTau)) * player div players) +
+                rng.between(-spokeJitter, spokeJitter)
+              ringPoint(
+                centre,
+                rng.between(radius * 4 div 5, radius),
+                Fixed(angle)
+              )
+          of RandomLayout:
+            tile2(
+              rng.between(margin, side - margin - 1),
+              rng.between(margin, side - margin - 1)
+            )
+        var separated = true
+        for other in spawns:
+          if distanceSquared(candidate, other) < int64(spacing) * spacing:
+            separated = false
+            break
+        if separated:
+          spawns.add candidate
+          break
+      if spawns.len != player + 1:
         break
-      let
-        x = mapRng.below(GridSide)
-        y = mapRng.below(GridSide)
-        ring = chebyshev(tile2(x, y), lightCentre)
-      if ring < GroveInnerRing or ring > GroveOuterRing:
-        continue
-      if gated and not inForest(x, y):
-        continue
-      planted += plantPatch(x, y, false, GroveTiles - planted)
+    if spawns.len == players:
+      result = MapData(seed: seed, side: side, settings: settings)
+      proc expansionFits(candidate: Tile2, nodes: seq[MapNode]): bool =
+        ## Keeps mines inside the map and clear of every starting structure.
+        let
+          x = int32(candidate.x)
+          y = int32(candidate.y)
+          origin = tile2(x - 1, y - 1)
+        if x < 6 or y < 6 or x >= side - 6 or y >= side - 6:
+          return false
+        proc overlaps(other: Tile2, footprint: Footprint): bool =
+          ## Leaves two walkable tiles between neighboring footprints.
+          int32(origin.x) < int32(other.x) + footprint.width + 2 and
+            int32(origin.x) + MineFootprint.width + 2 > int32(other.x) and
+            int32(origin.y) < int32(other.y) + footprint.depth + 2 and
+            int32(origin.y) + MineFootprint.depth + 2 > int32(other.y)
+        for spawn in spawns:
+          if distanceSquared(candidate, spawn) < 14 * 14:
+            return false
+          if overlaps(
+            tile2(
+              int32(spawn.x) - HallFootprint.width div 2,
+              int32(spawn.y) - HallFootprint.depth div 2
+            ),
+            HallFootprint
+          ) or overlaps(
+            tile2(int32(spawn.x) + 7, int32(spawn.y) - 1),
+            MineFootprint
+          ):
+            return false
+        for node in nodes:
+          if node.kind == ExpansionNode and overlaps(
+            tile2(int32(node.centre.x) - 1, int32(node.centre.y) - 1),
+            MineFootprint
+          ):
+            return false
+        true
+      var placed = true
+      for player, centre in spawns:
+        let parent = int32(result.nodes.len)
+        result.nodes.add MapNode(
+          kind: SpawnNode, player: int32(player), centre: centre, parent: -1
+        )
+        result.hallOrigin.add tile2(
+          int32(centre.x) - HallFootprint.width div 2,
+          int32(centre.y) - HallFootprint.depth div 2
+        )
+        for i in 0 ..< settings.expansions:
+          placed = false
+          for trial in 0 ..< 512:
+            let candidate = ringPoint(
+              centre,
+              rng.between(14, expansionRadius),
+              Fixed(rng.below(int32(FixedTau)))
+            )
+            if expansionFits(candidate, result.nodes):
+              result.nodes.add MapNode(
+                kind: ExpansionNode,
+                player: int32(player),
+                centre: candidate,
+                parent: parent
+              )
+              placed = true
+              break
+          if not placed:
+            break
+        if not placed:
+          break
+      if placed:
+        return
+    side += max(16'i32, side div 4)
+    side += side mod 2
+  raise newException(LvdError, "Could not place separated spawn zones.")
 
+proc mapProblem*(map: MapData): string =
+  ## Checks footprints, opening space, resources, and connected approaches.
+  if map.side < 1 or map.side > MaximumMapSide or map.hallOrigin.len == 0:
+    return "Invalid map dimensions or roster."
+  let cells = int(map.side * map.side)
+  if map.passable.len != cells or map.kinds.len != cells or
+    map.heights.len != cells or map.treeWood.len != cells:
+      return "Map grids do not match its dimensions."
+  if map.nodes.len != map.hallOrigin.len * (map.settings.expansions + 1) or
+    map.mines.len != map.nodes.len:
+      return "Map must have one main mine and N expansions per player."
+  var occupied = newSeq[bool](cells)
+  proc reserve(origin: Tile2, size: Footprint): bool =
+    ## Checks and reserves an open, nonoverlapping structure footprint.
+    for y in int32(origin.y) ..< int32(origin.y) + size.depth:
+      for x in int32(origin.x) ..< int32(origin.x) + size.width:
+        if not map.inGrid(x, y):
+          return false
+        let index = map.tileIndex(x, y)
+        if occupied[index] or map.passable[index] == 0 or
+          map.treeWood[index] > 0:
+            return false
+        occupied[index] = true
+    true
+  for hall in map.hallOrigin:
+    if not reserve(hall, HallFootprint):
+      return "Town hall overlaps blocked terrain or another structure."
+  for i, mine in map.mines:
+    if mine.id != FirstMineId + int32(i) or mine.gold <= 0 or
+      not reserve(mine.origin, MineFootprint):
+        return "Invalid or obstructed gold mine."
+  proc open(x, y: int32): bool =
+    ## Includes terrain, forests, and starting structures in connectivity.
+    if not map.inGrid(x, y):
+      return false
+    let index = map.tileIndex(x, y)
+    map.passable[index] == 1 and map.treeWood[index] == 0 and
+      not occupied[index]
+  proc approach(origin: Tile2, size: Footprint): Tile2 =
+    ## Finds a free tile touching a structure.
+    for y in int32(origin.y) - 1 .. int32(origin.y) + size.depth:
+      for x in int32(origin.x) - 1 .. int32(origin.x) + size.width:
+        if open(x, y):
+          return tile2(x, y)
+    tile2(-1, -1)
+  let start = approach(map.hallOrigin[0], HallFootprint)
+  if not map.inGrid(start):
+    return "Starting town is blocked."
   var
-    scattered = 0
-  for attempt in 0 ..< ScatterTiles * 60:
-    if scattered >= ScatterTiles:
-      break
+    reached = newSeq[bool](cells)
+    frontier = @[start]
+  reached[map.tileIndex(start)] = true
+  while frontier.len > 0:
+    let tile = frontier.pop()
+    for (dx, dy) in [(1'i32, 0'i32), (-1'i32, 0'i32),
+      (0'i32, 1'i32), (0'i32, -1'i32)]:
+        let
+          x = int32(tile.x) + dx
+          y = int32(tile.y) + dy
+        if open(x, y) and not reached[map.tileIndex(x, y)]:
+          reached[map.tileIndex(x, y)] = true
+          frontier.add tile2(x, y)
+  for player, hall in map.hallOrigin:
+    let tile = approach(hall, HallFootprint)
+    if not map.inGrid(tile) or not reached[map.tileIndex(tile)]:
+      return &"Player {player} cannot reach the other towns."
+    var
+      free = 0
+      wood = 0
+    for y in int32(hall.y) - 22 .. int32(hall.y) + 22:
+      for x in int32(hall.x) - 22 .. int32(hall.x) + 22:
+        if not map.inGrid(x, y):
+          continue
+        if map.treeWood[map.tileIndex(x, y)] > 0:
+          inc wood
+        if x >= int32(hall.x) - 2 and
+          x < int32(hall.x) + HallFootprint.width + 2 and
+          y >= int32(hall.y) - 2 and
+          y < int32(hall.y) + HallFootprint.depth + 2 and open(x, y):
+            inc free
+    if free < StartingPeons or wood < 40:
+      return &"Player {player} lacks opening space or nearby wood."
+  for mine in map.mines:
+    let tile = approach(mine.origin, MineFootprint)
+    if not map.inGrid(tile) or not reached[map.tileIndex(tile)]:
+      return "Expansion mine is unreachable."
+  var spawns: seq[Tile2]
+  for node in map.nodes:
+    if node.kind == SpawnNode:
+      for other in spawns:
+        if distanceSquared(node.centre, other) <
+          int64(map.settings.minDistance) * map.settings.minDistance:
+            return "Spawn zones violate the minimum distance."
+      spawns.add node.centre
+
+proc validateMap*(map: MapData) =
+  ## Reports an invalid map even when assertions are disabled.
+  let problem = map.mapProblem()
+  if problem.len > 0:
+    raise newException(LvdError, &"Seed {map.seed}: {problem}")
+
+proc generateMap*(
+  seed: int32, players = DefaultPlayerCount, settings = MapSettings()
+): MapData =
+  ## Builds terrain around a connected graph of spawn and expansion nodes.
+  var map = placeNodes(seed, players, settings)
+  let
+    side = map.side
+    cells = int(side * side)
+  var
+    clear = newSeq[bool](cells)
+    roadRng = initRng(seed, 0xC6BC279692B5CC83'u64)
+  proc clearing(centre: Tile2, radius: int32) =
+    ## Reserves a square clearing for a zone or corridor.
+    for y in max(1'i32, int32(centre.y) - radius) ..
+      min(side - 2, int32(centre.y) + radius):
+        for x in max(1'i32, int32(centre.x) - radius) ..
+          min(side - 2, int32(centre.x) + radius):
+            clear[map.tileIndex(x, y)] = true
+  proc connect(first, second: Tile2) =
+    ## Carves a gently winding road that meets both nodes without a kink.
+    if first == second:
+      return
     let
-      x = mapRng.below(GridSide)
-      y = mapRng.below(GridSide)
-    if not inForest(x, y):
+      dx = int32(second.x) - int32(first.x)
+      dy = int32(second.y) - int32(first.y)
+      steps = chebyshev(first, second)
+      length = int32(integerSqrt(distanceSquared(first, second)))
+      amplitude = clamp(length div 8, 3'i32, 8'i32)
+      wavelength = roadRng.between(32, 56)
+      stream = roadRng.next()
+      taper = max(1'i32, min(16'i32, steps div 2))
+      divisor = int64(length) * MapBlendScale * MapBlendScale
+    for i in 0 .. steps:
+      let
+        envelope = smoothstep(min(i, steps - i) * MapBlendScale div taper)
+        bend = int64(valueNoise(seed, stream, int(i), 0, int(wavelength))) *
+          amplitude * envelope
+        x = int32(first.x) + int32(roundDivision(int64(dx) * i, steps)) -
+          int32(roundDivision(int64(dy) * bend, divisor))
+        y = int32(first.y) + int32(roundDivision(int64(dy) * i, steps)) +
+          int32(roundDivision(int64(dx) * bend, divisor))
+      clearing(tile2(x, y), 3)
+  let centre = tile2(side div 2, side div 2)
+  clearing(centre, 14)
+  for node in map.nodes:
+    clearing(node.centre, if node.kind == SpawnNode: 11 else: 5)
+    connect(node.centre,
+      if node.parent < 0: centre else: map.nodes[node.parent].centre)
+    let origin =
+      if node.kind == SpawnNode:
+        tile2(int32(node.centre.x) + 7, int32(node.centre.y) - 1)
+      else:
+        tile2(int32(node.centre.x) - 1, int32(node.centre.y) - 1)
+    map.mines.add MineSpot(
+      id: FirstMineId + int32(map.mines.len),
+      origin: origin,
+      gold: if node.kind == SpawnNode: MainMineGold else: ExpansionMineGold
+    )
+  var groves = newSeq[bool](cells)
+  for node in map.nodes:
+    if node.kind != SpawnNode:
       continue
-    scattered += plantPatch(x, y, false, ScatterTiles - scattered)
-
-  var plateauPlanted = 0
-  for attempt in 0 ..< PlateauTrees * 40:
-    if plateauPlanted >= PlateauTrees:
-      break
-    let
-      x = mapRng.below(PadWall + 6)
-      y = mapRng.below(PadWall + 6)
-    plateauPlanted += plantPatch(x, y, true, PlateauTrees - plateauPlanted)
-
-  # Replace every tenth tree pair so both players retain matching forests.
-  var treePairs = 0
-  for index in 0 ..< GridCells div 2:
-    if map.treeWood[index] == 0:
-      continue
-    inc treePairs
-    if treePairs mod 10 != 0:
-      continue
-    for rockIndex in [index, GridCells - 1 - index]:
-      map.forestRocks.add rockIndex
-      map.treeWood[rockIndex] = 0
-      map.passable[rockIndex] = 0
-      map.kinds[rockIndex] = uint8(RockTile)
-      layers[0].tiles[rockIndex].kind = RockTile
-      layers[0].tiles[rockIndex].impassable = true
-  computeWalkable()
-
-  ## Fingerprint. Covers the packed terrain, the derived walkability, the
-  ## trees, and every structure placement, so a generator change is caught at
-  ## replay load rather than as a mysterious divergence later.
+    for y in max(1'i32, int32(node.centre.y) - 19) ..
+      min(side - 2, int32(node.centre.y) + 19):
+        for x in max(1'i32, int32(node.centre.x) - 19) ..
+          min(side - 2, int32(node.centre.x) + 19):
+            if chebyshev(tile2(x, y), node.centre) >= 14:
+              groves[map.tileIndex(x, y)] = true
+  var corners = newSeq[int16](int((side + 1) * (side + 1)))
+  for y in 0 .. side:
+    for x in 0 .. side:
+      corners[y * (side + 1) + x] = int16(
+        valueNoise(seed, 0xA0761D6478BD642F'u64, int(x), int(y), 16) *
+          4 div MapBlendScale
+      )
+  var ground = QuadLayer(
+    originX: GridTiles div 2 - int(side) div 2,
+    originZ: GridTiles div 2 - int(side) div 2,
+    width: side, depth: side, tiles: newSeq[Tile](cells)
+  )
+  map.passable = newSeq[uint8](cells)
+  map.kinds = newSeq[uint8](cells)
+  map.heights = newSeq[int16](cells)
+  map.treeWood = newSeq[int16](cells)
+  for y in 0 ..< side:
+    for x in 0 ..< side:
+      let
+        index = map.tileIndex(x, y)
+        corner = y * (side + 1) + x
+        tops = [corners[corner], corners[corner + 1],
+          corners[corner + side + 1], corners[corner + side + 2]]
+        edge = x == 0 or y == 0 or x == side - 1 or y == side - 1
+      ground.tiles[index] = Tile(
+        flags: TileExists or TileConnectedEast or TileConnectedSouth,
+        kind: GrassTile,
+        tops: tops
+      )
+      ground.tiles[index].impassable = edge
+      map.passable[index] = uint8(not edge)
+      map.heights[index] = int16(
+        (int32(tops[0]) + tops[1] + tops[2] + tops[3]) div 4
+      )
+      let wooded = groves[index] or valueNoise(
+        seed, 0xD1B54A32D192ED03'u64, int(x), int(y), 7
+      ) > 160
+      if clear[index]:
+        ground.tiles[index].kind = RoadTile
+      elif wooded and not edge:
+        map.treeWood[index] = WoodPerTree
+        ground.tiles[index].kind = TreeTile
+      map.kinds[index] = uint8(ground.tiles[index].kind)
+  var forestTiles = 0
+  for index in 0 ..< cells:
+    if map.treeWood[index] > 0:
+      inc forestTiles
+      if forestTiles mod 10 == 0:
+        map.treeWood[index] = 0
+        map.passable[index] = 0
+        map.forestRocks.add int32(index)
+        ground.tiles[index].kind = RockTile
+        ground.tiles[index].impassable = true
+    elif not clear[index] and map.passable[index] == 1:
+      ground.tiles[index].kind = RockTile
+    map.kinds[index] = uint8(ground.tiles[index].kind)
+  map.terrain = @[ground]
+  installImmutableLayers(map.terrain)
   var hash = HashySeed
   hash.addHashy(seed)
-  hash.addHashy(layers.len)
-  for layerIndex, layer in layers:
-    hash.addHashy(layer.originX)
-    hash.addHashy(layer.originZ)
-    hash.addHashy(layer.width)
-    hash.addHashy(layer.depth)
-    hash.addHashy(layer.slab)
-    hash.addHashy(layer.water)
-    for index, tile in layer.tiles:
-      hash.addHashy(uint32(tile.flags))
-      hash.addHashy(uint32(tile.kind))
-      for value in tile.tops:
-        hash.addHashy(value)
-      for value in tile.bottoms:
-        hash.addHashy(value)
-      hash.addHashy(layerWalkable[layerIndex][index])
-  for index in 0 ..< GridCells:
-    hash.addHashy(map.passable[index])
-    hash.addHashy(map.heights[index])
-    hash.addHashy(map.treeWood[index])
-  for player in 0 ..< PlayerCount:
-    hash.addHashy(map.hallOrigin[player].x)
-    hash.addHashy(map.hallOrigin[player].y)
+  hash.addHashy(side)
+  hash.addHashy(settings.layout.ord)
+  hash.addHashy(settings.size)
+  hash.addHashy(settings.expansions)
+  hash.addHashy(settings.minDistance)
+  for node in map.nodes:
+    hash.addHashy(node.kind.ord)
+    hash.addHashy(node.player)
+    hash.addHashy(node.centre.x)
+    hash.addHashy(node.centre.y)
+  for i in 0 ..< cells:
+    hash.addHashy(map.passable[i])
+    hash.addHashy(map.kinds[i])
+    hash.addHashy(map.heights[i])
+    hash.addHashy(map.treeWood[i])
   for mine in map.mines:
     hash.addHashy(mine.id)
     hash.addHashy(mine.origin.x)
     hash.addHashy(mine.origin.y)
     hash.addHashy(mine.gold)
   map.hash = uint64(hash)
+  map.validateMap()
   map
-
-## Checks
-##
-## Every one names the seed, so a bad seed is instantly reproducible.
-
-proc blockedForSetup(map: MapData, x, y: int32): bool =
-  ## Returns whether a tile is closed at the start of a match, counting
-  ## terrain, trees, halls, and mines.
-  if not inGrid(x, y):
-    return true
-  let index = tileIndex(x, y)
-  if map.passable[index] == 0 or map.treeWood[index] > 0:
-    return true
-  for player in 0 ..< PlayerCount:
-    let hall = map.hallOrigin[player]
-    if x >= int32(hall.x) and x < int32(hall.x) + HallFootprint.width and
-        y >= int32(hall.y) and y < int32(hall.y) + HallFootprint.depth:
-      return true
-  for mine in map.mines:
-    if x >= int32(mine.origin.x) and
-        x < int32(mine.origin.x) + MineFootprint.width and
-        y >= int32(mine.origin.y) and
-        y < int32(mine.origin.y) + MineFootprint.depth:
-      return true
-  false
-
-const StepOffsets* = [
-  (0'i32, -1'i32), (1'i32, -1'i32), (1'i32, 0'i32), (1'i32, 1'i32),
-  (0'i32, 1'i32), (-1'i32, 1'i32), (-1'i32, 0'i32), (-1'i32, -1'i32)
-]
-  ## Neighbour scan order, clockwise from north. Fixed everywhere so that
-  ## tie-breaking in movement, pathing, and flood fill is reproducible.
-
-proc floodFrom(map: MapData, start: Tile2): seq[uint8] =
-  ## Eight-neighbour integer flood fill over open setup tiles.
-  result = newSeq[uint8](GridCells)
-  if map.blockedForSetup(int32(start.x), int32(start.y)):
-    return
-  var frontier = @[start]
-  result[tileIndex(start)] = 1
-  while frontier.len > 0:
-    let tile = frontier.pop()
-    for (dx, dy) in StepOffsets:
-      let
-        nextX = int32(tile.x) + dx
-        nextY = int32(tile.y) + dy
-      if map.blockedForSetup(nextX, nextY):
-        continue
-      let index = tileIndex(nextX, nextY)
-      if result[index] == 1:
-        continue
-      result[index] = 1
-      frontier.add tile2(nextX, nextY)
-
-proc freeTilesAround(
-  map: MapData,
-  origin: Tile2,
-  footprint: Footprint,
-  ring: int32
-): int =
-  ## Counts open tiles in the band around a rectangular footprint.
-  let
-    endX = int32(origin.x) + footprint.width + ring
-    endY = int32(origin.y) + footprint.depth + ring
-  for y in int32(origin.y) - ring ..< endY:
-    for x in int32(origin.x) - ring ..< endX:
-      if not map.blockedForSetup(x, y):
-        inc result
-
-proc anyOpenNeighbour(
-  map: MapData,
-  origin: Tile2,
-  footprint: Footprint
-): Tile2 =
-  ## Returns one open tile touching a footprint, or an off-map tile when the
-  ## footprint is completely walled in.
-  for y in int32(origin.y) - 1 ..< int32(origin.y) + footprint.depth + 1:
-    for x in int32(origin.x) - 1 ..< int32(origin.x) + footprint.width + 1:
-      if not map.blockedForSetup(x, y):
-        return tile2(x, y)
-  tile2(-1, -1)
-
-proc fordWidth(map: MapData, cornerX, cornerZ: int): int =
-  ## Counts open tiles along the line crossing the river at one ford.
-  for offset in -10 .. 10:
-    let
-      x = int32(cornerX + offset)
-      y = int32(cornerZ - offset)
-    if not map.blockedForSetup(x, y):
-      inc result
-
-proc mapProblem*(map: MapData): string =
-  ## The first reason this map cannot be played, or an empty string when it is
-  ## symmetric, connected and playable. Checked in order and returning at the
-  ## first fault, because the later checks read tiles the earlier ones prove
-  ## are on the grid.
-  let seed = map.seed
-
-  for y in 0 ..< GridSide:
-    for x in 0 ..< GridSide:
-      let
-        (mirrorX, mirrorY) = mirrorTile(x, y)
-        index = tileIndex(x, y)
-        mirrorIndex = tileIndex(mirrorX, mirrorY)
-      if map.passable[index] != map.passable[mirrorIndex]:
-        return &"seed {seed}: walkability is asymmetric at ({x},{y})"
-      if map.kinds[index] != map.kinds[mirrorIndex]:
-        return &"seed {seed}: tile kind is asymmetric at ({x},{y})"
-      if map.heights[index] != map.heights[mirrorIndex]:
-        return &"seed {seed}: mean height is asymmetric at ({x},{y})"
-      if map.treeWood[index] != map.treeWood[mirrorIndex]:
-        return &"seed {seed}: wood is asymmetric at ({x},{y})"
-      ## A 180 degree rotation swaps corner 0 with 3 and 1 with 2.
-      let
-        tops = layers[0].tiles[index].tops
-        mirrorTops = layers[0].tiles[mirrorIndex].tops
-      for i in 0 .. 3:
-        if tops[i] != mirrorTops[3 - i]:
-          return &"seed {seed}: terrain height is asymmetric at ({x},{y})"
-
-  if map.mines.len != PlayerCount * 3:
-    return &"seed {seed}: expected three mines per player"
-
-  var seenIds: seq[int32]
-  for mine in map.mines:
-    if not mine.id.isMineId:
-      return &"seed {seed}: mine {mine.id} is out of range"
-    if mine.id in seenIds:
-      return &"seed {seed}: duplicate mine {mine.id}"
-    seenIds.add mine.id
-    if mine.gold <= 0:
-      return &"seed {seed}: mine {mine.id} holds no gold"
-
-  var occupied = newSeq[bool](GridCells)
-  proc validSite(origin: Tile2, size: Footprint): bool =
-    ## Reserves an unobstructed building base without overlapping another.
-    for y in int32(origin.y) ..< int32(origin.y) + size.depth:
-      for x in int32(origin.x) ..< int32(origin.x) + size.width:
-        if not inGrid(x, y):
-          return false
-        let index = tileIndex(x, y)
-        if occupied[index] or map.passable[index] == 0 or
-          map.treeWood[index] > 0:
-            return false
-        occupied[index] = true
-    true
-  for origin in map.hallOrigin:
-    if not validSite(origin, HallFootprint):
-      return &"seed {seed}: town hall overlaps blocked ground or a building"
-  for mine in map.mines:
-    if not validSite(mine.origin, MineFootprint):
-      return &"seed {seed}: mine {mine.id} overlaps blocked ground or a building"
-
-  for player in 0 ..< PlayerCount:
-    let
-      hall = map.hallOrigin[player]
-      spawnTiles = map.freeTilesAround(hall, HallFootprint, 2)
-    if spawnTiles < MinimumSpawnTiles:
-      return &"seed {seed}: player {player} has only {spawnTiles} tiles to " &
-        &"spawn peons around its hall"
-
-  let
-    lightStart = map.anyOpenNeighbour(map.hallOrigin[LightPlayer],
-      HallFootprint)
-    darkStart = map.anyOpenNeighbour(map.hallOrigin[DarkPlayer], HallFootprint)
-  if not (inGrid(lightStart) and inGrid(darkStart)):
-    return &"seed {seed}: a town hall is completely walled in"
-
-  let reached = map.floodFrom(lightStart)
-  if reached[tileIndex(darkStart)] != 1:
-    return &"seed {seed}: the two bases cannot reach each other"
-  for mine in map.mines:
-    let approach = map.anyOpenNeighbour(mine.origin, MineFootprint)
-    if not inGrid(approach):
-      return &"seed {seed}: mine {mine.id} is completely walled in"
-    if reached[tileIndex(approach)] != 1:
-      return &"seed {seed}: mine {mine.id} is unreachable"
-
-  for player in 0 ..< PlayerCount:
-    var grove = 0
-    let centre = map.hallOrigin[player]
-    for y in 0 ..< GridSide:
-      for x in 0 ..< GridSide:
-        if map.treeWood[tileIndex(x, y)] > 0 and
-            chebyshev(tile2(x, y), centre) <= GroveOuterRing + 4:
-          inc grove
-    if grove < MinimumGroveTiles:
-      return &"seed {seed}: player {player} has only {grove} nearby tree tiles"
-
-  for index, (fordX, fordZ) in FordCorners:
-    let width = map.fordWidth(fordX, fordZ)
-    if width < MinimumFordWidth:
-      return &"seed {seed}: ford {index} at ({fordX},{fordZ}) closed up to " &
-        &"{width}"
-
-proc validateMap*(map: MapData) =
-  ## Asserts that a generated map is symmetric, connected, and playable.
-  ## `generateMap` never returns a map that fails this, so a failure here
-  ## means something rewrote the map after it was generated.
-  let problem = map.mapProblem()
-  doAssert problem.len == 0, problem
-
-## Rejection and retry
-
-const MapAttempts = 32
-  ## How many seeds one request may burn before the generator gives up.
-  ## About one map in three hundred comes out unplayable, so two rejections in
-  ## a row is already a freak event: this bound exists to make the loop
-  ## terminate, not because the generator is expected to approach it.
-
-proc nextMapSeed(seed: int32): int32 =
-  ## The seed a rejected map hands to its replacement. A full period generator,
-  ## so a request cannot cycle back onto a seed it already rejected, and the
-  ## substitution is a pure function of the seed: the server, a replay and a
-  ## local run all land on the same map.
-  int32((uint32(seed) * 1664525'u32 + 1013904223'u32) and 0x7FFF_FFFF'u32)
-
-proc generateMap*(seed: int32): MapData =
-  ## Builds a playable map for one seed.
-  ##
-  ## Terrain is noise, and noise occasionally walls an expansion mine in or
-  ## closes every ford across the river. Such a map used to reach the game and
-  ## abort it on the assertion in `validateMap`, which on the ladder means a
-  ## dead episode and a failed round. A rejected map is regenerated from a
-  ## derived seed instead, until one is playable. `result.seed` is the seed
-  ## that actually drew the terrain, so a replay records the map it was
-  ## played on.
-  var attemptSeed = seed
-  for attempt in 1 .. MapAttempts:
-    result = generateOnce(attemptSeed)
-    if result.mapProblem().len == 0:
-      return
-    attemptSeed = nextMapSeed(attemptSeed)
-  doAssert false, &"seed {seed}: no playable map in {MapAttempts} attempts"

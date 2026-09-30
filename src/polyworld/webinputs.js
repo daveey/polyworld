@@ -58,6 +58,7 @@
 
   [
     "seed",
+    "draft-mode",
     "seconds",
     "spawn-interval",
     "view",

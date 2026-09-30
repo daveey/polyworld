@@ -1,6 +1,6 @@
 import
   bassy, benchy,
-  ../examples/gods_of_the_arena/neural/[richard, david, andre],
+  ../examples/gods_of_the_arena/neural/[common, richard, david, andre, fly],
   neuralfixtures
 
 let
@@ -40,3 +40,45 @@ timeIt "Andre recurrent 45/64/12, three layers":
   let next = inferAndre(andreStacked, stackedState, andreData)
   stackedState = next.state
   keep next.outputs
+
+block:
+  # A synthetic sub-brain the size of the FlyWire v783 cut without vision:
+  # 40,619 neurons, 26 incoming edges each, 1,627 driven, 1,276 read.
+  const
+    Neurons = 40_619
+    PerNeuron = 26
+    Driven = 1_627
+    Read = 1_276
+  var bytes = FlyMagic
+  for value in [uint32(Neurons), uint32(Neurons * PerNeuron), 45,
+      uint32(Driven), uint32(Read), 4]:
+    bytes.addWord(value)
+  bytes.addWord(cast[uint32](0.5'f))
+  for i in 0 .. Neurons:
+    bytes.addWord(uint32(i * PerNeuron))
+  for i in 0 ..< Neurons * PerNeuron:
+    bytes.addWord(uint32((i * 7919) mod Neurons))
+  for i in 0 ..< Neurons * PerNeuron:
+    bytes.addWord(cast[uint32](if i mod 5 < 3: 0.05'f else: -0.05'f))
+  for i in 0 ..< Neurons:
+    bytes.addWord(cast[uint32](0.01'f))
+  for i in 0 ..< Driven:
+    bytes.addWord(uint32(i))
+  for i in 0 ..< Driven * 45:
+    bytes.addWord(cast[uint32](0.02'f))
+  for i in 0 ..< Read:
+    bytes.addWord(uint32(Neurons - Read + i))
+  for i in 0 ..< Read * 12:
+    bytes.addWord(cast[uint32](0.01'f))
+  for i in 0 ..< 12:
+    bytes.addWord(0)
+  let flyModel = loadFly(bytes)
+  var
+    flyData: array[45, Fixed]
+    flyState: string
+  for value in flyData.mitems:
+    value = 0.5'fx
+  timeIt "Fly connectome 40,619 neurons, 1.06M edges, 4 steps":
+    let next = inferFly(flyModel, flyState, flyData)
+    flyState = next.state
+    keep next.outputs

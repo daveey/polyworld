@@ -15,7 +15,7 @@ import
     quadterrain, rtscameras, selectionoutlines, shapes, shadows, tapes, toon,
     viewers, visions, worldbars, worldtexts],
   appearances, assets, buildings, content, factions, groves, symbols,
-  sim,
+  sim, maps,
   game,
   replays,
   ui,
@@ -29,8 +29,7 @@ const
     ## One saved world every ten seconds, so a seek re-simulates at most
     ## that much.
   RebakeFrameGap = 30
-    ## Terrain is re-emitted whole, so felling trees is batched rather than
-    ## letting a busy lumber camp stutter the frame rate.
+    ## Batches nearby harvest and construction changes into one scene update.
   SelectionDragPixels = 6.0'f32
     ## Pointer travel that turns a click into a box select.
 
@@ -72,15 +71,21 @@ var
   )
   placedEditCount = 0
   placedBuildingKey = ""
-  terrainDirty = false
+  sceneDirty = false
+  edgesDirty = false
   framesSinceRebake = 0
   frameAlpha = 0.0'f32
   previousUnitPositions: Table[int32, Vec3]
   previousUnitFacings: Table[int32, float32]
+  unitPoses: seq[CharacterPose]
   terrainVisionTick = int32.low
   terrainVisionMode = int32.low
 
 ## Presentation helpers
+
+proc mapHalf(): float32 =
+  ## Returns the map's world-space radius for drawing and camera bounds.
+  run.world.map.side.float32 / 2
 
 proc addHudIcons(builder: AtlasBuilder, factions: openArray[Faction]) =
   ## Packs grayscale unit symbols, building portraits, and the theme logo.
@@ -92,7 +97,7 @@ proc addHudIcons(builder: AtlasBuilder, factions: openArray[Faction]) =
         GraphicsError,
         "The UI atlas is too small for unit symbols."
       )
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(min(run.world.players.len, FactionFiles.len)):
     for kind in BuildingKind:
       if kind == GoldMineBuilding and player != LightPlayer:
         continue
@@ -107,14 +112,14 @@ proc addHudIcons(builder: AtlasBuilder, factions: openArray[Faction]) =
 
 proc tileCentreXZ(tile: Tile2): Vec2 =
   ## Converts a tile coordinate to the world-space centre of that tile.
-  vec2(float32(tile.x) - HalfGrid + 0.5'f32,
-       float32(tile.y) - HalfGrid + 0.5'f32)
+  vec2(float32(tile.x) - mapHalf() + 0.5'f32,
+       float32(tile.y) - mapHalf() + 0.5'f32)
 
 proc unitWorldPoint(unit: Unit): Vec3 =
   ## Converts a tile-space body into a render position.
   let
-    x = toFloat32(unit.body.pos.x) - HalfGrid
-    z = toFloat32(unit.body.pos.y) - HalfGrid
+    x = toFloat32(unit.body.pos.x) - mapHalf()
+    z = toFloat32(unit.body.pos.y) - mapHalf()
   vec3(x, surfaceHeight(x, z), z)
 
 proc unitYaw(unit: Unit): float32 =
@@ -158,9 +163,9 @@ proc buildingCentre(structure: Building): Vec3 =
   ## Returns the world centre of a structure's footprint.
   let
     x = structure.origin.x.float32 +
-      structure.footprint.width.float32 * 0.5'f - HalfGrid
+      structure.footprint.width.float32 * 0.5'f - mapHalf()
     z = structure.origin.y.float32 +
-      structure.footprint.depth.float32 * 0.5'f - HalfGrid
+      structure.footprint.depth.float32 * 0.5'f - mapHalf()
   vec3(x, surfaceHeight(x, z), z)
 
 proc isSelected*(id: int32): bool =
@@ -187,9 +192,9 @@ proc runGraphics*() =
   ## Runs the native or Emscripten spectator.
   startGameProfile()
   let order = factionOrder(run.mapSeed.int64)
-  var playerFactions: array[PlayerCount, Faction]
-  for player in 0 ..< PlayerCount:
-    playerFactions[player] = order[Faction(player)]
+  var playerFactions = newSeq[Faction](run.world.players.len)
+  for player in 0 ..< run.world.players.len:
+    playerFactions[player] = order[Faction(player mod FactionFiles.len)]
   profileBlock "atlas":
     let builder = newHudAtlas(4096)
     addHudIcons(builder, playerFactions)
@@ -238,18 +243,25 @@ proc runGraphics*() =
 
   ## Both players share the approved CharGen equipment and CC0 animations.
   var
-    unitModels: array[PlayerCount, array[UnitKind, CharacterModel]]
-    unitClips: array[PlayerCount, array[UnitKind, array[AnimationSlot, int]]]
-    teamColors: array[PlayerCount, ColorRGBX]
+    unitModels = newSeq[array[UnitKind, CharacterModel]](run.world.players.len)
+    unitClips = newSeq[array[UnitKind, array[AnimationSlot, int]]](
+      run.world.players.len
+    )
+    teamColors = newSeq[ColorRGBX](run.world.players.len)
+    unitModelCache: UnitModelCache
   profileBlock "models":
     let
       manifest = readManifest(ChargenLibrary)
       roster = readCharacterRoster(playerFactions)
-    for player in 0 ..< PlayerCount:
+    for player in 0 ..< run.world.players.len:
       # The orange elemental's UI still identifies its owning faction.
       teamColors[player] = FactionColors[roster.factions[player]]
+      if player >= FactionFiles.len:
+        unitModels[player] = unitModels[player mod FactionFiles.len]
+        unitClips[player] = unitClips[player mod FactionFiles.len]
+        continue
       for kind in UnitKind:
-        let model = loadUnitModel(
+        let model = unitModelCache.loadUnitModel(
           manifest, roster.players[player][kind.ord], kind
         )
         unitModels[player][kind] = model
@@ -280,21 +292,21 @@ proc runGraphics*() =
     run.world.treeWood, run.mapSeed, run.world.map.forestRocks
   )
   profileBlock "props":
-    grove = generateGrove(run.mapSeed, {LightTree, LightRock})
-    buildingArt = loadBuildingArt(grove, factions = playerFactions)
+    profileBlock "grove models":
+      grove = generateGrove(run.mapSeed, {LightTree, LightRock})
+    profileBlock "building models":
+      buildingArt = loadBuildingArt(grove, factions = playerFactions)
 
   proc buildingKey(): string =
-    ## A cheap fingerprint of everything that changes the prop layout, so the
-    ## terrain is only re-emitted when the scene actually differs.
+    ## Detects changes to displayed construction stages and building lifetimes.
     result = $run.world.terrainEdits.len
     for structure in run.world.buildings:
       result.add &"|{structure.id}:{structure.state.ord}"
       if structure.state == BuildingUnderConstruction:
         result.add &":{structure.constructionStage().ord}"
 
-  proc placeSceneProps() =
-    ## Rebuilds the whole prop list. `placeProp` has no removal, so the
-    ## viewer owns the desired set and re-places all of it on any change.
+  proc placeSceneProps() {.measure.} =
+    ## Submits desired placements while the renderer retains unchanged groups.
     clearProps()
     grove.plantGrove(scenery, run.world.treeWood)
     for structure in run.world.buildings:
@@ -303,36 +315,51 @@ proc runGraphics*() =
       ):
         # Baked props use the opposite yaw to the standalone outline pass.
         part.pack.placeProp(
-          part.name, part.position, -part.rotation, part.scale
+          part.name,
+          part.position,
+          -part.rotation,
+          part.scale,
+          group = structure.id
         )
 
-  proc applyTerrainEdits() =
-    ## Mirrors current wood state, including trees restored by replay seeks.
+  proc applyTerrainEdits(): bool {.measure.} =
+    ## Reports actual ground changes, including trees restored by replay seeks.
     for placement in scenery:
       if placement.kind == LightTree:
-        layers[0].tiles[placement.tile].kind =
+        let kind =
           if placement.visible(run.world.treeWood):
             TreeTile
           else:
             GrassTile
+        if layers[0].tiles[placement.tile].kind != kind:
+          layers[0].tiles[placement.tile].kind = kind
+          result = true
 
-  proc rebakeScene() =
-    ## Refreshes terrain, props, and the displayed movement blockers.
-    applyTerrainEdits()
+  proc rebakeScene(initial = false) =
+    ## Refreshes changed props and rebuilds ground only for terrain edits.
+    let groundChanged = applyTerrainEdits()
     placeSceneProps()
-    ## Walkability was computed once at map generation and structures live in
-    ## the simulation's own grids, so the renderer must never recompute it.
-    bakeTerrain(
-      rebuildWalkability = false,
-      blockers = [run.world.blocker]
-    )
+    if initial or groundChanged:
+      # Rendering never recomputes authoritative movement walkability.
+      bakeTerrain(
+        rebuildWalkability = false,
+        blockers = [run.world.blocker]
+      )
+      edgesDirty = false
+    else:
+      bakeProps()
+      edgesDirty = true
     placedEditCount = run.world.terrainEdits.len
     placedBuildingKey = buildingKey()
-    terrainDirty = false
+    sceneDirty = false
     framesSinceRebake = 0
 
   profileBlock "bake":
-    rebakeScene()
+    rebakeScene(initial = true)
+
+  proc liveWalkable(layer, x, z: int): bool {.nimcall.} =
+    ## Supplies current blockers when the optional movement grid is visible.
+    layer == 0 and run.world.tileOpen(int32(x), int32(z))
   cameraTarget = vec3(0, 0, 0)
   var
     viewingDt = 0.0'f
@@ -346,7 +373,7 @@ proc runGraphics*() =
       followRate = 1.0,
       zoomRate = 0.7,
       holdSeconds = 2.8,
-      mapSpan = HalfGrid * 2,
+      mapSpan = mapHalf() * 2,
       closeScale = 0.5
     )
 
@@ -384,7 +411,7 @@ proc runGraphics*() =
     run.historyPlayback = true
     previousUnitPositions.clear()
     previousUnitFacings.clear()
-    terrainDirty = true
+    sceneDirty = true
     particles.clearParticles()
     while run.world.tick < wanted:
       advanceGame()
@@ -599,7 +626,7 @@ proc runGraphics*() =
   proc structureAtTile(x, y: int32): int32 =
     ## Standing structure whose footprint contains this tile.
     result = NoEntity
-    if not inGrid(x, y):
+    if not run.world.map.inGrid(x, y):
       return
     for structure in run.world.buildings:
       if structure.state == BuildingDying or
@@ -669,7 +696,7 @@ proc runGraphics*() =
         id: unit.id, owner: unit.owner, position: renderPoint(unit),
         height: 0.9, radius: 1.5, visible: shownUnit(unit) and unit.state != UnitInMine,
         alive: unit.hp > 0 and unit.state != UnitDying,
-        hp: unit.hp, maxHp: UnitTable[unit.owner][unit.kind].hp,
+        hp: unit.hp, maxHp: unitOf(unit.owner, unit.kind).hp,
         complete: true, participant: unit.targetId,
         fighting: unit.state == UnitAttacking, activity: unit.cooldown,
         progress: int32(unit.state), gold: unit.carryGold + unit.carryWood,
@@ -731,15 +758,15 @@ proc runGraphics*() =
         speed = cameraDistance * 0.0015
       cameraTarget.x -= delta.x * speed
       cameraTarget.z -= delta.y * speed
-      cameraTarget.x = clamp(cameraTarget.x, -HalfGrid, HalfGrid)
-      cameraTarget.z = clamp(cameraTarget.z, -HalfGrid, HalfGrid)
+      cameraTarget.x = clamp(cameraTarget.x, -mapHalf(), mapHalf())
+      cameraTarget.z = clamp(cameraTarget.z, -mapHalf(), mapHalf())
     if not minimapPanning and
         applyRtsPan(
           cameraTarget,
           rtsPanDir(window),
           dt,
           cameraDistance,
-          HalfGrid
+          mapHalf()
         ):
       followSelection = false
       actionCam.takeManual()
@@ -830,7 +857,7 @@ proc runGraphics*() =
         viewProjection,
         cameraTarget.y
       )
-      tile = groundTile(ground, HalfGrid, GridSide)
+      tile = groundTile(ground, mapHalf(), run.world.map.side)
     (tile[0] - size.width div 2, tile[1] - size.depth div 2)
 
   proc queuePendingBuild(x, y: int32) =
@@ -851,7 +878,7 @@ proc runGraphics*() =
 
   proc issueSelectedMove(player, x, y: int32): bool =
     ## Moves every selected owned unit, or rallies a selected building.
-    if not inGrid(x, y) or not run.world.terrainOpen(x, y):
+    if not run.world.map.inGrid(x, y) or not run.world.terrainOpen(x, y):
       return false
     for id in selectedIds:
       if id.isUnitId and run.world.unitOwner(id) == player:
@@ -896,8 +923,8 @@ proc runGraphics*() =
         viewProjection,
         cameraTarget.y
       )
-      tile = groundTile(ground, HalfGrid, GridSide)
-      tree = tileIndex(tile[0], tile[1])
+      tile = groundTile(ground, mapHalf(), run.world.map.side)
+      tree = run.world.map.tileIndex(tile[0], tile[1])
       under = structureAtTile(tile[0], tile[1])
       target =
         if under != NoEntity:
@@ -1035,8 +1062,8 @@ proc runGraphics*() =
       size = BuildingTable[kind].footprint
       origin = buildGhostOrigin(viewProjection)
       valid = run.world.canPlace(kind, origin[0], origin[1])
-      x = float32(origin[0]) + float32(size.width) * 0.5'f32 - HalfGrid
-      z = float32(origin[1]) + float32(size.depth) * 0.5'f32 - HalfGrid
+      x = float32(origin[0]) + float32(size.width) * 0.5'f32 - mapHalf()
+      z = float32(origin[1]) + float32(size.depth) * 0.5'f32 - mapHalf()
       centre = vec3(x, surfaceHeight(x, z), z)
       name = BuildingProps[kind]
       tint =
@@ -1053,26 +1080,31 @@ proc runGraphics*() =
       tint
     )
 
-  proc updateTerrainVision() =
+  proc updateTerrainVision() {.measure.} =
     ## Uploads the selected team's softened visible and explored terrain.
-    if terrainVisionTick == run.world.tick and terrainVisionMode == viewMode:
-      return
+    if terrainVisionMode == viewMode and
+      (viewMode == 0 or terrainVisionTick == run.world.tick):
+        return
     terrainVisionTick = run.world.tick
     terrainVisionMode = viewMode
-    var values = newSeq[uint8](GridSide * GridSide)
+    var values = newSeq[uint8](run.world.map.side * run.world.map.side)
     if viewMode == 0:
       for value in values.mitems:
         value = 255
+      uploadTerrainVisibility(values, int(run.world.map.side))
     else:
       let player = viewMode - 1
-      for y in 0 ..< GridSide:
-        for x in 0 ..< GridSide:
-          let index = tileIndex(x, y)
+      for y in 0 ..< run.world.map.side:
+        for x in 0 ..< run.world.map.side:
+          let index = run.world.map.tileIndex(x, y)
           values[index] =
             if run.world.visible(player, x, y): 255
             elif run.world.explored(player, x, y): 48
             else: 0
-    uploadTerrainVisibility(blurVisibility(values, GridSide, GridSide))
+      uploadTerrainVisibility(
+        blurVisibility(values, run.world.map.side, run.world.map.side),
+        int(run.world.map.side)
+      )
 
   proc drawWorldBars(
       viewProjection: Mat4,
@@ -1087,7 +1119,7 @@ proc runGraphics*() =
       if not shownUnit(unit) or unit.state == UnitDying or unit.hp <= 0:
         continue
       let
-        maximum = max(UnitTable[unit.owner][unit.kind].hp, 1'i32).float32
+        maximum = max(unitOf(unit.owner, unit.kind).hp, 1'i32).float32
         health = unit.hp.float32
         delayed = damageTrails.delayedValue(
           unit.id,
@@ -1147,12 +1179,12 @@ proc runGraphics*() =
           structure.cooldown > 0 or
           (nextTick + structure.id) mod TowerStagger != 0:
         continue
-      let enemy = 1 - structure.owner
       var
         target = NoEntity
         best = int32.high
       for unit in run.world.units:
-        if unit.owner != enemy or unit.state == UnitDying or
+        if not run.world.atWar(structure.owner, unit.owner) or
+            unit.state == UnitDying or
             unit.state == UnitInMine:
           continue
         var distance = int32.high
@@ -1181,7 +1213,7 @@ proc runGraphics*() =
     for unit in run.world.units:
       if not shownUnit(unit) or unit.state != UnitAttacking:
         continue
-      let stats = UnitTable[unit.owner][unit.kind]
+      let stats = unitOf(unit.owner, unit.kind)
       if unit.cooldown != stats.cooldownTicks or
           oldUnitCooldowns.getOrDefault(unit.id, -1) == unit.cooldown:
         continue
@@ -1273,9 +1305,9 @@ proc runGraphics*() =
   when defined(takeScreenshot):
     applyScreenshotCamera(cameraDistance)
     if existsEnv("CAM_X"):
-      cameraTarget.x = getEnv("CAM_X").parseFloat.float32 - HalfGrid
+      cameraTarget.x = getEnv("CAM_X").parseFloat.float32 - mapHalf()
     if existsEnv("CAM_Z"):
-      cameraTarget.z = getEnv("CAM_Z").parseFloat.float32 - HalfGrid
+      cameraTarget.z = getEnv("CAM_Z").parseFloat.float32 - mapHalf()
     if existsEnv("VIEW_MODE"):
       viewMode = int32(getEnv("VIEW_MODE").parseInt)
     if existsEnv("SHOW_TILES"):
@@ -1285,7 +1317,7 @@ proc runGraphics*() =
       while run.world.tick < wanted and
           run.world.tick < run.maximumTicks and not run.world.over:
         advanceGame()
-      terrainDirty = true
+      sceneDirty = true
     if primaryId == NoEntity:
       for structure in run.world.buildings:
         if structure.owner == LightPlayer and
@@ -1357,11 +1389,14 @@ proc runGraphics*() =
       inc framesSinceRebake
       if run.world.terrainEdits.len != placedEditCount or
           buildingKey() != placedBuildingKey:
-        terrainDirty = true
-      if terrainDirty and
+        sceneDirty = true
+      if sceneDirty and
         (showTiles or framesSinceRebake >= RebakeFrameGap):
           profileBlock "rebake":
             rebakeScene()
+      if showTiles and edgesDirty:
+        updateTerrainEdges(liveWalkable)
+        edgesDirty = false
       feedLvdActions()
       actionCam.direct(
         cameraTarget, cameraDistance, viewingDt,
@@ -1386,9 +1421,8 @@ proc runGraphics*() =
           clockHour(float32(run.world.tick) + frameAlpha, TickRate))
         setEnvironmentPalette(scene.toon)
 
-        # One loop for both passes: units render into the sun's depth map
-        # first, then for the camera.
-        proc drawWorldUnits() =
+        profileBlock "prepare unit poses":
+          var count = 0
           for unit in run.world.units:
             if not shownUnit(unit):
               continue
@@ -1396,13 +1430,27 @@ proc runGraphics*() =
               model = unitModels[unit.owner][unit.kind]
               clip = unitClips[unit.owner][unit.kind][unit.animation]
             var animTime = renderTime(unit.animationTicks)
-            ## One-shot clips must be clamped: the sampler wraps with `mod`,
-            ## so a death would otherwise loop forever.
+            # Hold one-shot clips at their final pose instead of looping.
             if unit.animation == DeathAnimation or
                 unit.animation == VictoryAnimation:
               animTime = min(animTime, clipDuration(model, clip))
-            drawCharacter(scene, model, renderPoint(unit), renderFacing(unit),
-              clip, animTime)
+            if count == unitPoses.len:
+              unitPoses.add CharacterPose()
+            scene.prepareCharacter(
+              unitPoses[count],
+              model,
+              renderPoint(unit),
+              renderFacing(unit),
+              clip,
+              animTime
+            )
+            inc count
+          unitPoses.setLen(count)
+
+        proc drawWorldUnits() {.measure.} =
+          ## Reuses each unit's pose for both shadow maps and the main view.
+          for pose in unitPoses.mitems:
+            scene.drawCharacter(pose)
 
         sunDepthPasses(window.size):
           drawTerrainSunDepth()
@@ -1519,7 +1567,7 @@ proc runGraphics*() =
       discard handleChromeKey(button)
     of KeyV:
       if not playerMode():
-        viewMode = (viewMode + 1) mod 3
+        viewMode = (viewMode + 1) mod int32(run.world.players.len + 1)
     of KeyX:
       if playerMode():
         let player = options.playerSlot - 1

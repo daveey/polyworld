@@ -1,8 +1,8 @@
 ## Light vs Dark match setup, command line, and the headless runner.
 ##
 ## Owns the one live world and decides where each tick's commands come from:
-## two BASIC overlords in a live match, or the recorded action stream when
-## replaying. Everything else about a tick is identical between the two,
+## BASIC overlords in a live match, or recorded commands when replaying.
+## Everything else about a tick is identical between the two,
 ## which is what makes a replay reproduce its match exactly.
 
 import
@@ -16,23 +16,71 @@ import
   replays
 
 when defined(coworld):
-  import polyworld/coworld
+  import jsony, polyworld/coworld
+
+  type HostedMapOptions = object
+    mapLayout: string = "spoke"
+    mapSize: int32 = DefaultMapSize
+    expansions: int32 = 2
+    minDistance: int32 = DefaultSpawnDistance
+    warGraceSeconds: int32 = 10
+    diplomacyOfferSeconds: int32 = 60
+
+  proc renameHook(value: var HostedMapOptions, fieldName: var string) =
+    ## Accepts the hosted contract's snake case map parameters.
+    fieldName = fieldName.replace("_", "").toLowerAscii()
+    case fieldName
+    of "maplayout": fieldName = "mapLayout"
+    of "mapsize": fieldName = "mapSize"
+    of "mindistance": fieldName = "minDistance"
+    of "wargraceseconds": fieldName = "warGraceSeconds"
+    of "diplomacyofferseconds": fieldName = "diplomacyOfferSeconds"
+    else: discard
+
+  proc hostedMapSettings(diplomacy: var DiplomacySettings): MapSettings =
+    ## Reads hosted map settings without changing the shared game config.
+    var options: HostedMapOptions
+    try:
+      let bytes = readLocal(getEnv("COGAME_CONFIG_URI"))
+      options = bytes.fromJson(HostedMapOptions)
+    except JsonError, ValueError:
+      raise newException(LvdError,
+        "Invalid LvD map configuration: " & getCurrentExceptionMsg())
+    case options.mapLayout.toLowerAscii()
+    of "spoke", "spokes": result.layout = SpokeLayout
+    of "random": result.layout = RandomLayout
+    else:
+      raise newException(LvdError, "map_layout must be spoke or random.")
+    result.size = options.mapSize
+    result.expansions = options.expansions
+    result.minDistance = options.minDistance
+    diplomacy = DiplomacySettings(
+      warGraceSeconds: options.warGraceSeconds,
+      offerSeconds: options.diplomacyOfferSeconds
+    )
+    diplomacy.validate()
 
 proc usage() =
   ## Prints the command-line and compile-time configuration surface.
   echo """
-Light vs Dark, a small real-time strategy match between two BASIC overlords.
+Light vs Dark, a small real-time strategy match between any number of BASIC overlords.
 
-  --bot PATH[:N]   Fill N of the two player slots with one BASIC program.
-  --player         Control Light; supply one bot.
-  --player:N       Control side N (1 Light, 2 Dark); supply one bot.
+  --bot PATH[:N]   Add N players using one BASIC program (default N=1).
+  --player         Add a human player in slot 1.
+  --player:N       Insert a human in slot N (one-based).
   --replay PATH    Play a recorded match instead of running bots.
   --record PATH    Record this match to a replay file.
   --seconds N      Duration in seconds (default 1200).
   --minutes N      Duration in minutes (default 20).
   --ticks N        Duration in ticks (default 28800).
   --seed N         Map seed (default 2026).
-  --view MODE      Spectator fog: all, light, or dark (default all).
+  --map-layout MODE  spoke or random (default spoke).
+  --map-size N     Baseline map side for two players (default 90 tiles).
+  --expansions N   Nearby expansions per player (default 2).
+  --min-distance N Minimum spawn separation in tiles (default 45).
+  --war-grace-seconds N  War warning; alliance withdrawal takes 2N (default 10).
+  --diplomacy-offer-seconds N  Peace/alliance offer lifetime (default 60).
+  --view MODE      Spectator fog: all or player number (light/dark aliases).
   --play=false     Start the graphical transport paused.
   --speed N        Graphical start speed: 1, 2, 4, or 16.
   --windowSize WxH Graphical window, such as 800x400.
@@ -45,7 +93,9 @@ Compile with -d:headless for a command-line match.
 Compile with -d:emscripten for the web backend.
 Compile with -d:takeScreenshot for a deterministic capture."""
 
-proc parseGameOptions(): GameOptions =
+proc parseGameOptions(
+  settings: var MapSettings, diplomacy: var DiplomacySettings
+): GameOptions =
   ## Reads the command line into a validated match description.
   result = GameOptions(
     seconds: DefaultMinutes * 60,
@@ -61,29 +111,64 @@ proc parseGameOptions(): GameOptions =
       discard
     else:
       case argument
+      of "--war-grace-seconds":
+        diplomacy.warGraceSeconds = parsePositiveInt32(
+          arguments.argumentValue(index, argument), argument
+        )
+      of "--diplomacy-offer-seconds":
+        diplomacy.offerSeconds = parsePositiveInt32(
+          arguments.argumentValue(index, argument), argument
+        )
+      of "--map-layout":
+        case arguments.argumentValue(index, argument).toLowerAscii
+        of "spoke", "spokes": settings.layout = SpokeLayout
+        of "random": settings.layout = RandomLayout
+        else: fail("--map-layout must be spoke or random")
+      of "--map-size":
+        settings.size = parsePositiveInt32(
+          arguments.argumentValue(index, argument), argument
+        )
+      of "--expansions":
+        settings.expansions = parseInt32(
+          arguments.argumentValue(index, argument), argument
+        )
+      of "--min-distance":
+        settings.minDistance = parsePositiveInt32(
+          arguments.argumentValue(index, argument), argument
+        )
       of "--view":
-        case arguments.argumentValue(index, "--view").toLowerAscii
+        let view = arguments.argumentValue(index, "--view").toLowerAscii
+        case view
         of "all": result.viewMode = 0
         of "light": result.viewMode = 1
         of "dark": result.viewMode = 2
         else:
-          fail("--view must be all, light, or dark")
+          result.viewMode = parsePositiveInt32(view, "--view")
       of "--help", "-h":
         usage()
         quit(0)
       else:
         fail("unknown argument: " & argument)
     inc index
-  result.validateGameOptions(
-    PlayerCount,
-    "a live match requires exactly two bots"
-  )
+  let count = result.botGroups.botCount + int(result.playerSlot > 0)
+  result.validateGameOptions(count, "supply at least one --bot or --player")
+  if result.replayPath.len == 0:
+    settings.validate(count)
+    diplomacy.validate()
+    if result.viewMode > count:
+      fail("--view names a player outside the roster")
+
+var diplomacySettings* = DiplomacySettings()
+
+var mapSettings* =
+  when defined(coworld): hostedMapSettings(diplomacySettings)
+  else: MapSettings()
 
 var options* =
   when defined(coworld):
-    coworldOptions(2)
+    coworldOptions(0)
   else:
-    parseGameOptions()
+    parseGameOptions(mapSettings, diplomacySettings)
 
 var run*: Game
 
@@ -100,59 +185,67 @@ block:
     maximumTicks = replayData.config.maxTicks
     var gameMap: MapData
     profileBlock "map":
-      gameMap = generateMap(mapSeed)
+      gameMap = generateMap(
+        mapSeed,
+        replayData.header.setup.players.len,
+        replayData.header.setup.mapSettings
+      )
     gameMap.validateMap()
-    if replayData.header.setup.mapHash != gameMap.hash:
+    let setup = replayData.header.setup
+    if int32(setup.gridTiles) != gameMap.side:
+      raise newException(
+        ReplayError, "Replay map size does not match its setup."
+      )
+    for i, player in setup.players:
+      if tile2(player.startX, player.startY) != gameMap.hallOrigin[i]:
+        raise newException(ReplayError, "Replay spawn does not match its map.")
+    if setup.mapHash != gameMap.hash:
       raise newException(ReplayError,
         "this replay was recorded on a different map generator")
     if replayData.header.setup.contentHash != contentHash():
       raise newException(ReplayError,
         "this replay was recorded against different game tuning")
-    run = newGame(gameMap, maximumTicks)
+    if options.viewMode > gameMap.hallOrigin.len:
+      fail("--view names a player outside the replay roster")
+    run = newGame(gameMap, maximumTicks, setup.diplomacySettings)
     run.maximumTicks = int32(replayData.hashes.len)
     run.replayMode = true
     run.replayData = replayData
     run.replayPlayer = initReplayPlayer(replayData)
     run.historyPlayback = true
   else:
+    let playerCount = options.botGroups.botCount + int(options.playerSlot > 0)
     var gameMap: MapData
     profileBlock "map":
-      gameMap = generateMap(mapSeed)
+      gameMap = generateMap(mapSeed, playerCount, mapSettings)
     gameMap.validateMap()
-    run = newGame(gameMap, maximumTicks)
+    run = newGame(gameMap, maximumTicks, diplomacySettings)
     let
-      kinds = controllerKinds(PlayerCount, options.playerSlot)
+      kinds = controllerKinds(playerCount, options.playerSlot)
       expanded = options.botGroups.expandBotSources(kinds)
-    var sources: array[PlayerCount, string]
-    for i in 0 ..< PlayerCount:
-      sources[i] = expanded[i]
-    loadBots(run, sources)
+    loadBots(run, expanded)
+    var players: seq[ReplayPlayerSetup]
+    for i, origin in gameMap.hallOrigin:
+      players.add ReplayPlayerSetup(
+        id: int32(i), startX: int32(origin.x), startY: int32(origin.y)
+      )
     run.recorder = initReplayRecorder(Setup(
       mapSeed: mapSeed,
       tickRate: uint16(TickRate),
-      gridTiles: uint16(GridSide),
+      gridTiles: uint16(gameMap.side),
       decisionTicks: uint16(DecisionTicks),
       maximumTicks: uint32(maximumTicks),
       mapHash: gameMap.hash,
       contentHash: contentHash(),
-      players: [
-        ReplayPlayerSetup(
-          id: 0,
-          startX: uint8(gameMap.hallOrigin[LightPlayer].x),
-          startY: uint8(gameMap.hallOrigin[LightPlayer].y)
-        ),
-        ReplayPlayerSetup(
-          id: 1,
-          startX: uint8(gameMap.hallOrigin[DarkPlayer].x),
-          startY: uint8(gameMap.hallOrigin[DarkPlayer].y)
-        )
-      ]
+      players: players,
+      mapSettings: mapSettings,
+      diplomacySettings: diplomacySettings
     ))
     run.recorder.data.config =
       when defined(coworld):
         coworld.config
       else:
-        localGameConfig(options, PlayerCount)
+        localGameConfig(options, playerCount)
     run.replayPlayer = ReplayPlayer(data: run.recorder.data)
 
 proc decide(w: World) =
@@ -206,13 +299,11 @@ proc describeResult*(): string =
   ## One line naming the outcome and the score behind it.
   if not run.world.over:
     return "match unfinished"
-  let
-    light = run.world.score(LightPlayer)
-    dark = run.world.score(DarkPlayer)
-  case run.world.winner
-  of LightPlayer: &"Light wins ({light} to {dark})"
-  of DarkPlayer: &"Dark wins ({dark} to {light})"
-  else: &"draw ({light} to {dark})"
+  if run.world.winner < 0:
+    return "draw"
+  let winner = int(run.world.winner)
+  run.config.players[winner].displayName(winner) & " wins (score " &
+    $run.world.score(int32(winner)) & ")"
 
 proc runHeadless*() =
   ## Runs fixed simulation ticks with optional pacing and request barriers.
@@ -240,8 +331,8 @@ proc runHeadless*() =
   echo &"seed {run.mapSeed}  ticks {run.world.tick}/{run.maximumTicks}  " &
     &"{simulated:.1f}s simulated in {elapsed:.2f}s " &
     &"({simulated / elapsed:.0f}x real time)"
-  for player in 0'i32 ..< PlayerCount:
-    let side = if player == LightPlayer: "Light" else: "Dark "
+  for player in 0'i32 ..< int32(run.world.players.len):
+    let side = run.config.players[player].displayName(int(player))
     echo &"  {side}  gold {run.world.players[player].gold:>6}  " &
       &"wood {run.world.players[player].wood:>6}  " &
       &"food {run.world.players[player].foodUsed:>3}/" &
@@ -250,8 +341,10 @@ proc runHeadless*() =
       &"buildings {run.world.buildingCount(player):>2}  " &
       &"gathered {run.world.players[player].goldGathered + run.world.players[player].woodGathered:>7}"
   if not run.replayMode:
-    for player in 0'i32 ..< PlayerCount:
+    for player in 0'i32 ..< int32(run.world.players.len):
       let brain = run.brains[player]
+      if brain == nil:
+        continue
       if brain.failed:
         when not defined(coworld):
           echo &"         script FAILED: {brain.lastError}"

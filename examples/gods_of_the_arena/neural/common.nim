@@ -104,10 +104,11 @@ proc commit*(
 
 proc addNeuralFunctions*(
     host: var Host,
-    richard, david, andre: ContextHostProc
+    richard, david, andre, fly: ContextHostProc
 ) =
   ## Registers reviewed architectures through ordinary host-call bytecode.
   host.addBufferFunctions()
   discard host.addFunction("nn_richard", 3, richard, 1)
   discard host.addFunction("nn_david", 3, david, 1)
   discard host.addFunction("andre_nn", 3, andre, 1)
+  discard host.addFunction("fly_nn", 3, fly, 1)

@@ -40,6 +40,7 @@ const
 var
   activeGame: ptr GameState
   activePlayer: int32
+  activeEnemy: int32  ## The next living player: the bot's one enemy.
   actionPlayed: bool
   playedHandIndex: int
   playedChoice: Choice
@@ -171,16 +172,14 @@ proc buildBotHost(playerId: int32): Host =
 
   # Board queries — enemy minions
   let enemyBoardPowerProc: HostProc = proc(args: openArray[int32]): int32 =
-    let enemy = (activePlayer + 1) mod PlayerCount
-    let board = activeGame[].players[enemy].board
+    let board = activeGame[].players[activeEnemy].board
     let i = args[0].int
     if i < 0 or i >= board.len: return 0
     board[i].power.int32
   discard result.addFunction("enemyBoardPower", 1, enemyBoardPowerProc, 3)
 
   let enemyBoardHpProc: HostProc = proc(args: openArray[int32]): int32 =
-    let enemy = (activePlayer + 1) mod PlayerCount
-    let board = activeGame[].players[enemy].board
+    let board = activeGame[].players[activeEnemy].board
     let i = args[0].int
     if i < 0 or i >= board.len: return 0
     board[i].currentToughness.int32
@@ -250,9 +249,11 @@ proc loadBot*(source: string, player: int32): BotVm =
   bindDataIds(program)
   BotVm(runtime: initRuntime(program, buildBotHost(player), limits))
 
-proc loadBots*(sources: array[PlayerCount, string]): array[PlayerCount, BotVm] =
+proc loadBots*(sources: openArray[string]): seq[BotVm] =
+  ## One bot per seat; an empty source leaves that seat without one.
+  result.setLen(sources.len)
   var bound = false
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< sources.len.int32:
     if sources[player].len == 0:
       continue
     let limits = botLimits()
@@ -272,9 +273,11 @@ proc runDecision*(vm: BotVm, game: var GameState): BotDecision =
   if vm.failed:
     return BotFailed
   let player = game.currentPlayer.int32
-  let enemy = ((player + 1) mod PlayerCount).int32
+  # With more than two players, the script's "enemy" is the next living one.
+  let enemy = game.nextPlayer(player).int32
   activeGame = addr game
   activePlayer = player
+  activeEnemy = enemy
   actionPlayed = false
   playedHandIndex = -1
   playedChoice = Canceled

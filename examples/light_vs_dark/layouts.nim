@@ -14,7 +14,7 @@ const
 type
   MinimapPanels* = object
     map*, sun*, clock*: GameUiPanel
-    views*: array[3, GameUiPanel]
+    views*: array[2, GameUiPanel]
 
   SelectionPanels* = object
     portrait*, hp*, name*, details*: GameUiPanel
@@ -32,14 +32,15 @@ proc resourcePanels*(panel: GameUiPanel): array[3, GameUiPanel] =
     cell = row.take(vec2(130, 28), 9)
 
 proc minimapPanels*(panel: GameUiPanel): MinimapPanels =
-  ## Stacks the map above a clock and three view buttons.
+  ## Stacks the map above the clock and previous/next view controls.
   var rows = panel.stack(TopToBottom, vec2(13, 12))
   result.map = rows.take(vec2(256), 6)
   var footer = rows.takeRow(32).stack(LeftToRight)
   result.sun = footer.take(vec2(32), 15)
-  result.clock = footer.take(vec2(80, 32), 12)
-  for button in result.views.mitems:
-    button = footer.take(vec2(32), 11)
+  result.clock = footer.take(vec2(80, 32))
+  var buttons = footer.takeRest().stack(RightToLeft)
+  for i in countdown(result.views.high, 0):
+    result.views[i] = buttons.take(vec2(32), 11)
 
 proc selectionPanels*(panel: GameUiPanel): SelectionPanels =
   ## Separates the main selection column from the three-by-three unit grid.

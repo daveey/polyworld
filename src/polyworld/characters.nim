@@ -1,9 +1,8 @@
 ## Skinned character rendering as a library: load a glb once and draw any
 ## number of independently animated instances of it per frame with the gltf
-## PBR renderer or the toon renderer. Each draw re-poses the
-## shared node tree (activeClips + animTime, then updateAnimation(0)) and
-## re-uploads the joint matrices, so instances don't need their own model
-## copies.
+## PBR renderer or the toon renderer. Immediate draws re-pose the shared tree.
+## Prepared character poses retain transforms and joint matrices so shadow
+## and color passes can share animation work without separate model copies.
 ##
 ## Modular characters (../polyworld_data/characters/modular_chars) are one glb carrying
 ## every swappable part; `loadModularCharacterModel` picks a part list or a
@@ -33,6 +32,13 @@ type
     toon*: ToonContext
     shading*: CharacterShading
     sunDepthPass*: bool  ## drawCharacter renders into the sun map instead
+
+  CharacterPose* = object
+    model: CharacterModel
+    position: Vec3
+    facing, animTime, sizeFactor: float32
+    clip: int
+    toon*: ToonPose
 
   CharacterGear* = tuple[root, socket: Node]
 
@@ -362,6 +368,51 @@ proc drawCharacter*(
   ## calling player.update to advance its clock; paused players still re-pose.
   model.setCharacterPose(player)
   scene.drawPosedCharacter(model, position, facing, gear, tint, sizeFactor)
+
+proc prepareCharacter*(
+  scene: CharacterScene,
+  pose: var CharacterPose,
+  model: CharacterModel,
+  position: Vec3,
+  facing: float32,
+  clip: int,
+  animTime: float32,
+  sizeFactor = 1.0'f
+) =
+  ## Samples a unit once; its retained snapshot survives other model poses.
+  pose.model = model
+  pose.position = position
+  pose.facing = facing
+  pose.clip = clip
+  pose.animTime = animTime
+  pose.sizeFactor = sizeFactor
+  if scene.shading == ToonCharacters:
+    model.setCharacterPose(clip, animTime)
+    pose.toon.prepareToonPose(
+      model.file.root,
+      model.characterTransform(position, facing, sizeFactor)
+    )
+
+proc drawCharacter*(
+  scene: CharacterScene,
+  pose: var CharacterPose,
+  tint = color(1, 1, 1, 1)
+) =
+  ## Reuses prepared toon geometry while preserving the PBR debug renderer.
+  let model = pose.model
+  if scene.shading == PbrCharacters:
+    scene.drawCharacter(
+      model, pose.position, pose.facing, pose.clip, pose.animTime,
+      tint, pose.sizeFactor
+    )
+  elif scene.sunDepthPass:
+    scene.toon.drawSunDepth(model.file.root, pose.toon.addr)
+  else:
+    scene.toon.unlitNodes.clear()
+    for name in model.unlitParts:
+      scene.toon.unlitNodes.incl name
+    scene.toon.tint = tint
+    scene.toon.draw(model.file.root, pose.toon.addr)
 
 proc finishCharacters*(scene: CharacterScene) =
   ## Finishes the character renderer's current frame.

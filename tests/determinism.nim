@@ -81,19 +81,19 @@ proc recordLvd(): string =
   game.recorder = lvdReplays.initReplayRecorder(lvdReplays.Setup(
     mapSeed: Seed,
     tickRate: uint16(lvdContent.TickRate),
-    gridTiles: uint16(lvdContent.GridSide),
+    gridTiles: uint16(map.side),
     decisionTicks: uint16(lvdContent.DecisionTicks),
     maximumTicks: SmokeTicks,
     mapHash: map.hash,
     contentHash: lvdContent.contentHash(),
-    players: [
+    players: @[
       lvdReplays.ReplayPlayerSetup(
-        id: 0, startX: uint8(map.hallOrigin[0].x),
-        startY: uint8(map.hallOrigin[0].y)
+        id: 0, startX: int32(map.hallOrigin[0].x),
+        startY: int32(map.hallOrigin[0].y)
       ),
       lvdReplays.ReplayPlayerSetup(
-        id: 1, startX: uint8(map.hallOrigin[1].x),
-        startY: uint8(map.hallOrigin[1].y)
+        id: 1, startX: int32(map.hallOrigin[1].x),
+        startY: int32(map.hallOrigin[1].y)
       )
     ]
   ))

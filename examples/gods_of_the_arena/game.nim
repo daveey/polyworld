@@ -37,6 +37,7 @@ proc usage() =
   echo "                          and combat randomness; the arena stays fixed."
   echo "  --map-seed NUMBER       Regenerate the arena from another seed (the"
   echo "                          league always plays the preset's own seed)."
+  echo "  --draft-mode MODE       unique (default), team, or open."
   echo "  --config PATH           JSON match settings, including mapPreset."
   echo "  --headless-tick-rate N   Wall-clock ticks per second, 0 is unlimited."
   echo "  --llm-mode:async|barrier Wait for all requests between headless ticks."
@@ -75,6 +76,10 @@ proc parseGameOptions(): GameOptions =
       case argument
       of "--config":
         discard arguments.argumentValue(index, "--config")
+      of "--draft-mode":
+        matchConfig.draftMode = parseDraftMode(
+          arguments.argumentValue(index, "--draft-mode")
+        )
       of "--map-seed":
         matchConfig.mapPreset.seed = parseInt32(
           arguments.argumentValue(index, "--map-seed"),
@@ -145,7 +150,8 @@ block:
       options.spawnIntervalTicks,
     if replayMode: 0 else: HeroClassCount,
     replayMode,
-    replayData
+    replayData,
+    draftMode = matchConfig.draftMode
   )
   if replayMode:
     run.replayPlayer = initReplayPlayer(replayData)
@@ -157,13 +163,13 @@ block:
     )
     run.recorder.data.config =
       when defined(coworld):
-        coworld.config.withMapPreset(gameMap.preset)
+        coworld.config.withMapPreset(gameMap.preset, matchConfig.draftMode)
       else:
         block:
           var config = localGameConfig(options, HeroClassCount)
           if matchConfig.players.len > 0:
             config.players = matchConfig.players
-          config.withMapPreset(gameMap.preset)
+          config.withMapPreset(gameMap.preset, matchConfig.draftMode)
     run.recorder.data.config.validateConfig(HeroClassCount)
     run.replayPlayer = ReplayPlayer(data: run.recorder.data)
 

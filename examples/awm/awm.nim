@@ -11,50 +11,34 @@ when not defined(headless):
   import
     chroma, opengl, pixie, shady, silky, vmath, windy,
     cardfaces, cardrenderer, vfxrenderer, awmsessions, awmweb, awmbots, awmpost,
+    awmtable, awmplay,
     awmpostpanel,
-    awmcourtyard, awmheroes, paths,
+    awmcourtyard, awmheroes, awmmultiplayermode, paths,
+    awmplacement,
+    awmtuning,
     polyworld/[assets, characters, chargen, chrome, common, viewers]
 
   const
     WindowTitle = "AWM — Archers Warriors Mages"
     BoardWidth = 18.0'f32
     BoardDepth = 11.0'f32
-    CardWidth = 1.45'f32
-    CardDepth = 2.05'f32
-    CardHeight = 0.06'f32
-    BoardSurfaceY = 0.015'f32 ## Top of the courtyard stone and brass seams.
-    PadSurfaceY = 0.155'f32   ## Top of the deck and discard pads' trim.
-    CardPlaneY = BoardSurfaceY + CardHeight * 0.5'f32
-    PileCardY = PadSurfaceY + CardHeight * 0.5'f32
-    StackStep = 0.03'f32      ## Height between cards in a pile.
-    # The art's opaque silhouette: 590 x 840 of 600 x 850, 31 px corners.
-    CardBodyWidth = CardWidth * 590.0'f32 / 600.0'f32
-    CardBodyDepth = CardDepth * 840.0'f32 / 850.0'f32
-    CardCornerRadius = CardWidth * 31.0'f32 / 600.0'f32
-    CardCornerSegments = 6
-    CardBackSteel = vec4(0.212, 0.263, 0.29, 1) ## back.svg's lightest steel.
-    CardMoveDuration = 0.46'f32
-    DrawMoveDuration = 0.72'f32
-    AttackLungeDuration = 0.22'f32
-    AttackReturnDuration = 0.30'f32
-    GameCameraHeight = 12.05'f32
-    GameCameraDistance = 13.08'f32
-    GameCameraPitch = 0.7659'f32 # About 44 degrees below the horizon.
+    DuelCamera = Placement(lateral: 0.00, height: 12.05, distance: 13.08,
+      pitch: 0.7659, yaw: 0.0000) # pitch 43.9 deg, yaw 0.0 deg
+    HeroTargetRadius = 0.95'f32 ## Matches the ring drawn around a hero.
     CameraNear = 0.1'f32
     CameraFar = 100.0'f32
-    ActiveHandCenterY = 1.25'f32
-    ActiveHandDistance = 5.86'f32
-    OpponentHandCenterY = 1.52'f32
-    OpponentHandDistance = 3.60'f32
+    DuelPlayerHand = Placement(lateral: 0.00, height: 1.25, distance: 5.86,
+      pitch: 0.0000, yaw: 0.0000) # pitch 0.0 deg, yaw 0.0 deg
+    DuelOpponentHand = Placement(lateral: 0.00, height: 1.52, distance: 3.60,
+      pitch: 0.0000, yaw: 0.0000) # pitch 0.0 deg, yaw 0.0 deg
+    DuelSpell = Placement(lateral: 0.00, height: 1.60, distance: 0.35,
+      pitch: 0.0000, # 0.0 deg down, yaw 0.0 deg
+      yaw: 0.0000)
+      ## Where a played spell floats: above the board, just past its
+      ## caster's creature line.
     HandCardRoll = -0.0684'f32 # About 4 degrees.
-    HandFanAngle = 0.24'f32
     PlayerPanelWidth = 680.0'f32
     PlayerPanelHeight = 140.0'f32
-    ShaderTarget =
-      when defined(emscripten):
-        glsl3WebGL
-      else:
-        glsl4Desktop
 
   type
     AppPhase = enum
@@ -65,409 +49,15 @@ when not defined(headless):
       origin: Vec2
       size: Vec2
 
-    CardPose = object
-      position: Vec3
-      yaw: float32
-      pitch: float32
-      roll: float32
-
-    CardAnimation = object
-      card: Card
-      heroClass: HeroClass
-      fromPose: CardPose
-      toPose: CardPose
-      elapsed: float32
-      duration: float32
-      arcHeight: float32
-      suppressBoardId: int
-      suppressHandOwner: int
-      suppressHandIndex: int
-      suppressDiscardOwner: int
-      hidden: bool
-      trackingTarget: Choice
-
-    DyingMinion = object
-      ## A slain minion held where it died until the effects aimed at it end.
-      ## It keeps its board slot, so neighbours don't shift until it leaves.
-      target: Choice
-      card: Card
-      power: int  ## Live power when it died.
-      heroClass: HeroClass
-      boardIndex: int  ## Live board index just before it was removed.
-      atLunge: bool  ## Slain while attacking: held at `lungePoint`.
-      held: bool  ## Its death's beat hasn't played yet: it stays put.
-      bouncing: bool
-        ## Not slain: a bounced card holding its slot until its beat, when it
-        ## flies to hand instead of the discard pile.
-      lungePoint: Vec3
-
-    SolidRenderer = object
-      program: GLuint
-      vertexArray: GLuint
-      vertexBuffer: GLuint
-      vertices: seq[float32]
-
-  var
-    solidViewProjection: Uniform[Mat4]
-    solidLightDirection: Uniform[Vec3]
-
   when PostLayerControls:
     const PostLayerKeys: array[PostLayer, Button] =
       [Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9, Key0]
-
-  proc solidVertex(
-      gl_Position: var Vec4,
-      fragmentNormal: var Vec3,
-      fragmentColor: var Vec4,
-      position: Vec3,
-      normal: Vec3,
-      color: Vec4
-  ) =
-    gl_Position = solidViewProjection * vec4(position, 1)
-    fragmentNormal = normal
-    fragmentColor = color
-
-  proc solidFragment(
-      outputColor: var Vec4,
-      fragmentNormal: Vec3,
-      fragmentColor: Vec4
-  ) =
-    let light =
-      0.55'f32 +
-      0.45'f32 * max(
-        dot(normalize(fragmentNormal), normalize(solidLightDirection)),
-        0.0'f32
-      )
-    outputColor = vec4(fragmentColor.xyz * light, fragmentColor.w)
-
-  proc compileStage(
-      kind: GLenum,
-      source,
-      label: string
-  ): GLuint =
-    result = glCreateShader(kind)
-    let sources = allocCStringArray([source])
-    defer:
-      deallocCStringArray(sources)
-    glShaderSource(result, 1, sources, nil)
-    glCompileShader(result)
-    var status: GLint
-    glGetShaderiv(result, GL_COMPILE_STATUS, status.addr)
-    if status == 0:
-      var length: GLint
-      glGetShaderiv(result, GL_INFO_LOG_LENGTH, length.addr)
-      var log = newString(length)
-      glGetShaderInfoLog(result, length, nil, log.cstring)
-      raise newException(
-        CatchableError,
-        label & " shader failed:\n" & log & "\n" & source
-      )
-
-  proc compileSolidProgram(): GLuint =
-    let
-      vertexShader = compileStage(
-        GL_VERTEX_SHADER,
-        toShader(solidVertex, ShaderTarget, shaderVertex),
-        "AWM solid vertex"
-      )
-      fragmentShader = compileStage(
-        GL_FRAGMENT_SHADER,
-        toShader(solidFragment, ShaderTarget, shaderFragment),
-        "AWM solid fragment"
-      )
-    result = glCreateProgram()
-    glAttachShader(result, vertexShader)
-    glAttachShader(result, fragmentShader)
-    glLinkProgram(result)
-    glDeleteShader(vertexShader)
-    glDeleteShader(fragmentShader)
-    var status: GLint
-    glGetProgramiv(result, GL_LINK_STATUS, status.addr)
-    if status == 0:
-      var length: GLint
-      glGetProgramiv(result, GL_INFO_LOG_LENGTH, length.addr)
-      var log = newString(length)
-      glGetProgramInfoLog(result, length, nil, log.cstring)
-      raise newException(
-        CatchableError,
-        "AWM solid program failed:\n" & log
-      )
-
-  proc initSolidRenderer(): SolidRenderer =
-    result.program = compileSolidProgram()
-    glGenVertexArrays(1, result.vertexArray.addr)
-    glBindVertexArray(result.vertexArray)
-    glGenBuffers(1, result.vertexBuffer.addr)
-    glBindBuffer(GL_ARRAY_BUFFER, result.vertexBuffer)
-    const stride = (10 * sizeof(float32)).GLsizei
-    for attribute in [
-      (name: "position", count: 3, offset: 0),
-      (name: "normal", count: 3, offset: 3 * sizeof(float32)),
-      (name: "color", count: 4, offset: 6 * sizeof(float32))
-    ]:
-      let location = glGetAttribLocation(
-        result.program,
-        attribute.name.cstring
-      )
-      doAssert location >= 0
-      glEnableVertexAttribArray(location.GLuint)
-      glVertexAttribPointer(
-        location.GLuint,
-        attribute.count.GLint,
-        cGL_FLOAT,
-        GL_FALSE,
-        stride,
-        cast[pointer](attribute.offset)
-      )
-    glBindVertexArray(0)
-
-  proc clear(renderer: var SolidRenderer) =
-    renderer.vertices.setLen(0)
-
-  proc addVertex(
-      renderer: var SolidRenderer,
-      position,
-      normal: Vec3,
-      color: Vec4
-  ) =
-    renderer.vertices.add position.x
-    renderer.vertices.add position.y
-    renderer.vertices.add position.z
-    renderer.vertices.add normal.x
-    renderer.vertices.add normal.y
-    renderer.vertices.add normal.z
-    renderer.vertices.add color.x
-    renderer.vertices.add color.y
-    renderer.vertices.add color.z
-    renderer.vertices.add color.w
-
-  proc addQuad(
-      renderer: var SolidRenderer,
-      a,
-      b,
-      c,
-      d,
-      normal: Vec3,
-      color: Vec4
-  ) =
-    renderer.addVertex(a, normal, color)
-    renderer.addVertex(b, normal, color)
-    renderer.addVertex(c, normal, color)
-    renderer.addVertex(a, normal, color)
-    renderer.addVertex(c, normal, color)
-    renderer.addVertex(d, normal, color)
-
-  proc rotateAroundY(value: Vec3, angle: float32): Vec3 =
-    let
-      cosine = cos(angle)
-      sine = sin(angle)
-    vec3(
-      value.x * cosine - value.z * sine,
-      value.y,
-      value.x * sine + value.z * cosine
-    )
-
-  proc rotateAroundX(value: Vec3, angle: float32): Vec3 =
-    let
-      cosine = cos(angle)
-      sine = sin(angle)
-    vec3(
-      value.x,
-      value.y * cosine - value.z * sine,
-      value.y * sine + value.z * cosine
-    )
-
-  proc rotateAroundZ(value: Vec3, angle: float32): Vec3 =
-    let
-      cosine = cos(angle)
-      sine = sin(angle)
-    vec3(
-      value.x * cosine - value.y * sine,
-      value.x * sine + value.y * cosine,
-      value.z
-    )
-
-  proc transformCardVector(
-      pose: CardPose,
-      value: Vec3
-  ): Vec3 =
-    ## Roll turns the card about its long axis, then yaw and pitch place it.
-    rotateAroundX(rotateAroundY(rotateAroundZ(value, pose.roll), pose.yaw),
-      pose.pitch)
-
-  proc inverseCardVector(
-      pose: CardPose,
-      value: Vec3
-  ): Vec3 =
-    rotateAroundZ(rotateAroundY(rotateAroundX(value, -pose.pitch), -pose.yaw),
-      -pose.roll)
-
-  proc cardNormal(pose: CardPose): Vec3 =
-    pose.transformCardVector(vec3(0, 1, 0))
-
-  proc darker(color: Vec4, factor: float32): Vec4 =
-    vec4(
-      color.x * factor,
-      color.y * factor,
-      color.z * factor,
-      color.w
-    )
-
-  proc addBox(
-      renderer: var SolidRenderer,
-      center,
-      size: Vec3,
-      topColor: Vec4,
-      yaw = 0.0'f32,
-      sideFactor = 0.62'f32,
-      pitch = 0.0'f32,
-      roll = 0.0'f32
-  ) =
-    let
-      h = size * 0.5'f32
-      localCorners = [
-        vec3(-h.x, -h.y, -h.z),
-        vec3(h.x, -h.y, -h.z),
-        vec3(h.x, -h.y, h.z),
-        vec3(-h.x, -h.y, h.z),
-        vec3(-h.x, h.y, -h.z),
-        vec3(h.x, h.y, -h.z),
-        vec3(h.x, h.y, h.z),
-        vec3(-h.x, h.y, h.z)
-      ]
-    let pose = CardPose(yaw: yaw, pitch: pitch, roll: roll)
-    var corners: array[8, Vec3]
-    for i, corner in localCorners:
-      corners[i] = center + pose.transformCardVector(corner)
-    let
-      sideColor = topColor.darker(sideFactor)
-      bottomColor = topColor.darker(sideFactor * 0.72'f32)
-      up = pose.transformCardVector(vec3(0, 1, 0))
-      down = pose.transformCardVector(vec3(0, -1, 0))
-      north = pose.transformCardVector(vec3(0, 0, -1))
-      south = pose.transformCardVector(vec3(0, 0, 1))
-      west = pose.transformCardVector(vec3(-1, 0, 0))
-      east = pose.transformCardVector(vec3(1, 0, 0))
-    renderer.addQuad(
-      corners[4], corners[7], corners[6], corners[5], up, topColor)
-    renderer.addQuad(
-      corners[0], corners[1], corners[2], corners[3], down, bottomColor)
-    renderer.addQuad(
-      corners[0], corners[4], corners[5], corners[1], north, sideColor)
-    renderer.addQuad(
-      corners[3], corners[2], corners[6], corners[7], south, sideColor)
-    renderer.addQuad(
-      corners[0], corners[3], corners[7], corners[4], west, sideColor)
-    renderer.addQuad(
-      corners[1], corners[5], corners[6], corners[2], east, sideColor)
-
-  proc addRoundedSlab(
-      renderer: var SolidRenderer,
-      center,
-      size: Vec3,
-      radius: float32,
-      topColor: Vec4,
-      yaw = 0.0'f32,
-      sideFactor = 0.62'f32,
-      pitch = 0.0'f32,
-      roll = 0.0'f32
-  ) =
-    ## A box with rounded vertical edges: a rounded-rectangle outline
-    ## extruded along the pose's up axis. Side normals follow the curve.
-    let
-      h = size * 0.5'f32
-      r = clamp(radius, 0.0'f32, min(h.x, h.z))
-      pose = CardPose(yaw: yaw, pitch: pitch, roll: roll)
-      sideColor = topColor.darker(sideFactor)
-      bottomColor = topColor.darker(sideFactor * 0.72'f32)
-      up = pose.transformCardVector(vec3(0, 1, 0))
-      top = center + up * h.y
-      bottom = center - up * h.y
-    # Corner arcs counterclockwise from +x, +z, as seen from above.
-    var outline, normals: seq[Vec3]
-    for (cx, cz, start) in [(1.0'f32, 1.0'f32, 0.0'f32),
-        (-1.0'f32, 1.0'f32, 0.5'f32), (-1.0'f32, -1.0'f32, 1.0'f32),
-        (1.0'f32, -1.0'f32, 1.5'f32)]:
-      for step in 0 .. CardCornerSegments:
-        let
-          angle = (start + 0.5'f32 * step.float32 /
-            CardCornerSegments.float32) * PI.float32
-          direction = vec3(cos(angle), 0, sin(angle))
-          corner = vec3(cx * (h.x - r), 0, cz * (h.z - r))
-        outline.add pose.transformCardVector(corner + direction * r)
-        normals.add pose.transformCardVector(direction)
-    for i in 0 ..< outline.len:
-      let
-        j = (i + 1) mod outline.len
-        a = outline[i]
-        b = outline[j]
-      renderer.addVertex(top, up, topColor)
-      renderer.addVertex(top + a, up, topColor)
-      renderer.addVertex(top + b, up, topColor)
-      renderer.addVertex(bottom, -up, bottomColor)
-      renderer.addVertex(bottom + b, -up, bottomColor)
-      renderer.addVertex(bottom + a, -up, bottomColor)
-      renderer.addVertex(bottom + a, normals[i], sideColor)
-      renderer.addVertex(top + a, normals[i], sideColor)
-      renderer.addVertex(top + b, normals[j], sideColor)
-      renderer.addVertex(bottom + a, normals[i], sideColor)
-      renderer.addVertex(top + b, normals[j], sideColor)
-      renderer.addVertex(bottom + b, normals[j], sideColor)
-
-  proc draw(
-      renderer: var SolidRenderer,
-      viewProjection: Mat4
-  ) =
-    if renderer.vertices.len == 0:
-      return
-    glBindBuffer(GL_ARRAY_BUFFER, renderer.vertexBuffer)
-    glBufferData(
-      GL_ARRAY_BUFFER,
-      renderer.vertices.len * sizeof(float32),
-      renderer.vertices[0].addr,
-      GL_DYNAMIC_DRAW
-    )
-    glEnable(GL_DEPTH_TEST)
-    glDepthMask(GL_TRUE)
-    glDisable(GL_BLEND)
-    glDisable(GL_CULL_FACE)
-    glUseProgram(renderer.program)
-    solidViewProjection = viewProjection
-    solidLightDirection = normalize(vec3(-0.5, 1.0, 0.65))
-    glUniformMatrix4fv(
-      glGetUniformLocation(renderer.program, "solidViewProjection"),
-      1,
-      GL_FALSE,
-      cast[ptr float32](solidViewProjection.addr)
-    )
-    glUniform3f(
-      glGetUniformLocation(renderer.program, "solidLightDirection"),
-      solidLightDirection.x,
-      solidLightDirection.y,
-      solidLightDirection.z
-    )
-    glBindVertexArray(renderer.vertexArray)
-    glDrawArrays(
-      GL_TRIANGLES,
-      0,
-      (renderer.vertices.len div 10).GLsizei
-    )
-    glBindVertexArray(0)
 
   proc contains(rect: UiRect, point: Vec2): bool =
     point.x >= rect.origin.x and
       point.y >= rect.origin.y and
       point.x <= rect.origin.x + rect.size.x and
       point.y <= rect.origin.y + rect.size.y
-
-  proc classColor(heroClass: HeroClass): Vec4 =
-    case heroClass
-    of Archer:
-      vec4(0.17, 0.68, 0.31, 1)
-    of Warrior:
-      vec4(0.78, 0.18, 0.14, 1)
-    of Mage:
-      vec4(0.18, 0.38, 0.86, 1)
 
   proc classUiColor(heroClass: HeroClass): ColorRGBX =
     case heroClass
@@ -478,36 +68,37 @@ when not defined(headless):
     of Mage:
       rgbx(76, 121, 236, 255)
 
-  var activeCameraPlayer: int = 0
+  var activeCameraPlayer: proc(): int = proc(): int = 0
+    ## The player the camera sits behind, read live: bots and turn changes
+    ## flip it mid-frame, and a cached value would build poses facing the
+    ## old camera (a drawn card flew in upside down).
 
   when defined(awmLayoutTuning):
-    # Build with -d:awmLayoutTuning to tune the layout live:
-    # Q/A, S/W, Y/H, U/J, I/K, E/D, R/F, T/G, and Enter prints the values.
+    # Build with -d:awmLayoutTuning to tune the layout live: Z/X pick what to
+    # move, WASD/QE move it, T/G pitch it, F/H yaw it, Enter prints it.
     var
-      cameraHeight = GameCameraHeight
-      cameraDistance = GameCameraDistance
-      cameraPitch = GameCameraPitch
-      activeHandHeight = ActiveHandCenterY
-      activeHandDistance = ActiveHandDistance
-      opponentHandHeight = OpponentHandCenterY
-      opponentHandDistance = OpponentHandDistance
-      handCardRoll = HandCardRoll
+      duelCamera = DuelCamera
+      duelPlayerHand = DuelPlayerHand
+      duelOpponentHand = DuelOpponentHand
+      duelSpell = DuelSpell
+      tuner = LayoutTuner()
+    proc duelTuningTargets(): seq[TuningTarget] =
+      @[tuningTarget("player's hand", duelPlayerHand),
+        tuningTarget("opponent's hand", duelOpponentHand),
+        tuningTarget("camera", duelCamera),
+        tuningTarget("played spell", duelSpell)]
   else:
     const
-      cameraHeight = GameCameraHeight
-      cameraDistance = GameCameraDistance
-      cameraPitch = GameCameraPitch
-      activeHandHeight = ActiveHandCenterY
-      activeHandDistance = ActiveHandDistance
-      opponentHandHeight = OpponentHandCenterY
-      opponentHandDistance = OpponentHandDistance
-      handCardRoll = HandCardRoll
+      duelCamera = DuelCamera
+      duelPlayerHand = DuelPlayerHand
+      duelOpponentHand = DuelOpponentHand
+      duelSpell = DuelSpell
 
   proc seatSide(playerIndex: int): float32 =
     if playerIndex == 0: 1.0'f32 else: -1.0'f32
 
   proc cardYaw(playerIndex: int): float32 =
-    if activeCameraPlayer == 0: 0.0'f32 else: PI.float32
+    if activeCameraPlayer() == 0: 0.0'f32 else: PI.float32
 
   proc avatarPosition(playerIndex: int): Vec3 =
     vec3(
@@ -521,65 +112,26 @@ when not defined(headless):
       count: int,
       cameraSide: float32
   ): seq[CardPose] =
-    if count <= 0:
-      return
     let
-      spacing =
-        if count == 1:
-          0.0'f32
-        else:
-          min(1.08'f32, 7.8'f32 / (count - 1).float32)
-      middle = (count - 1).float32 * 0.5'f32
       side = playerIndex.seatSide()
-      z = side * (
-        if side == cameraSide:
-          activeHandDistance
-        else:
-          opponentHandDistance
-      )
-      handY =
-        if side == cameraSide: activeHandHeight else: opponentHandHeight
-      center = vec3(0, handY, z)
+      hand = (
+        if side == cameraSide: duelPlayerHand else: duelOpponentHand
+      ).mirrored(side)
+      camera = duelCamera.mirrored(cameraSide)
       # The near and far hands need different pitches to face the same camera.
       pitch = arctan2(
-        cameraSide * cameraDistance - z,
-        cameraHeight - handY
-      )
-      fanRadius =
-        if middle > 0:
-          spacing * middle / sin(HandFanAngle)
-        else:
-          0.0'f32
-    result.setLen(count)
-    for i in 0 ..< count:
-      let
-        offset = i.float32 - middle
-        normalized =
-          if middle > 0:
-            offset / middle
-          else:
-            0.0'f32
-        angle = normalized * HandFanAngle
-        fanOffset = rotateAroundX(
-          vec3(
-            sin(angle) * fanRadius,
-            0,
-            cameraSide * (1.0'f32 - cos(angle)) * fanRadius
-          ),
-          pitch
-        )
-      result[i] = CardPose(
-        # A tiny separation keeps overlapping illustrated faces from sharing
-        # exactly the same depth, and matches the hand's back-to-front order.
-        position: center + fanOffset +
-          rotateAroundX(vec3(0, i.float32 * 0.003'f32, 0), pitch),
-        # Keep the card's width tangent to the fan circle.
-        yaw: playerIndex.cardYaw() + cameraSide * angle,
-        pitch: pitch,
-        roll: handCardRoll
-      )
+        camera.distance - hand.distance,
+        camera.height - hand.height
+      ) + hand.pitch
+    fanPoses(count, vec3(hand.lateral, hand.height, hand.distance), pitch,
+      cameraSide, playerIndex.cardYaw() + cameraSide * hand.yaw, HandCardRoll)
+
+  proc ownerYaw(playerIndex: int): float32 =
+    ## A card on a player's side reads the right way up from their seat.
+    if playerIndex == 0: 0.0'f32 else: PI.float32
 
   proc boardPoses(playerIndex, count: int): seq[CardPose] =
+    ## Each player's minions face their owner.
     if count <= 0:
       return
     let
@@ -594,8 +146,19 @@ when not defined(headless):
     for i in 0 ..< count:
       result[i] = CardPose(
         position: vec3(start + spacing * i.float32, CardPlaneY, z),
-        yaw: playerIndex.cardYaw()
+        yaw: playerIndex.ownerYaw()
       )
+
+  proc spellPose(playerIndex: int): CardPose =
+    ## A played spell floats over its caster's half, facing its owner.
+    let
+      side = playerIndex.seatSide()
+      spell = duelSpell.mirrored(side)
+    CardPose(
+      position: vec3(spell.lateral, spell.height, spell.distance),
+      yaw: playerIndex.ownerYaw() + side * duelSpell.yaw,
+      pitch: duelSpell.pitch
+    )
 
   proc deckPose(playerIndex: int): CardPose =
     CardPose(
@@ -616,522 +179,6 @@ when not defined(headless):
       ),
       yaw: playerIndex.cardYaw()
     )
-
-  proc stackTopPose(pose: CardPose, count: int): CardPose =
-    result = pose
-    result.position.y +=
-      max(0, min(count, 7) - 1).float32 * StackStep
-
-  proc addCard(
-      renderer: var SolidRenderer,
-      faces: var CardRenderer,
-      sk: Silky,
-      pose: CardPose,
-      heroClass: HeroClass,
-      hidden,
-      enabled,
-      hovered: bool,
-      targetable = false,
-      card = Card(),
-      currentPower = -1,
-      currentToughness = -1,
-      damageFlash = 0.0'f32,
-      lostKeywords: set[Keyword] = {}
-  ) =
-    ## A minion on the battlefield passes its live stats (currentToughness
-    ## >= 0); they are drawn over a stat-less face.
-    var raised = pose.position
-    if targetable:
-      raised.y += 0.08'f32
-    if hovered:
-      raised.y += 0.16'f32
-    let
-      edgeColor =
-        if targetable: vec4(0.9, 0.04, 0.07, 1)
-        elif hovered: vec4(0.92, 0.78, 0.48, 1)
-        else: CardBackSteel
-      rim = if hovered or targetable: 0.09'f32 else: 0.0'f32
-    # The body ends where the art's opaque silhouette does, corners included.
-    renderer.addRoundedSlab(
-      raised,
-      vec3(CardBodyWidth + rim, CardHeight, CardBodyDepth + rim),
-      CardCornerRadius + rim * 0.5'f32,
-      edgeColor,
-      pose.yaw,
-      0.85,
-      pose.pitch,
-      pose.roll
-    )
-    let
-      halfWidth = CardWidth * 0.5'f32
-      halfDepth = CardDepth * 0.5'f32
-      surfaceY = CardHeight * 0.5'f32 + 0.004'f32
-      local = [
-        vec3(-halfWidth, surfaceY, -halfDepth),
-        vec3(-halfWidth, surfaceY, halfDepth),
-        vec3(halfWidth, surfaceY, halfDepth),
-        vec3(halfWidth, surfaceY, -halfDepth)
-      ]
-      liveStats = not hidden and card.name.len > 0 and
-        card.kind == Minion and currentToughness >= 0
-      imageKey =
-        if hidden or card.name.len == 0: CardBackKey
-        else: sk.bakedCardImage(card)
-      brightness = if hidden or enabled: 1.0'f32 else: 0.68'f32
-    var corners: array[4, Vec3]
-    for i in 0 ..< corners.len:
-      corners[i] = raised + pose.transformCardVector(local[i])
-    faces.addSurface(sk, corners, imageKey, brightness, damageFlash)
-    if liveStats:
-      faces.addMinionOverlays(sk, corners, card,
-        if currentPower >= 0: currentPower else: card.power,
-        currentToughness, lostKeywords, brightness, damageFlash)
-
-  proc addCardGlow(renderer: var VfxRenderer, pose: CardPose,
-      hovered, targetable, targeting: bool, time: float32) =
-    if not hovered and not targetable: return
-    let
-      lift = (if hovered: 0.16'f32 else: 0.0'f32) +
-        (if targetable: 0.08'f32 else: 0.0'f32)
-      center = pose.position + vec3(0, lift, 0) +
-        pose.cardNormal() * (CardHeight * 0.5'f32 + 0.01'f32)
-      pulse = 0.88'f32 + 0.12'f32 * sin(time * 5)
-    renderer.addCardHalo(center,
-      pose.transformCardVector(vec3(1, 0, 0)),
-      pose.transformCardVector(vec3(0, 0, 1)), vec2(CardWidth, CardDepth),
-      (if targeting: TargetRed else: HoverGold),
-      pulse * (if hovered: 0.2875'f32 else: 0.28'f32))
-
-  proc addCardStack(
-      renderer: var SolidRenderer,
-      faces: var CardRenderer,
-      sk: Silky,
-      pose: CardPose,
-      count: int,
-      heroClass: HeroClass,
-      hidden = true,
-      card = Card()
-  ) =
-    for i in 0 ..< min(count, 7):
-      var cardPose = pose
-      cardPose.position.y += i.float32 * StackStep
-      renderer.addCard(
-        faces, sk, cardPose, heroClass, hidden, true, false, card = card
-      )
-
-  proc newCardAnimation(
-      card: Card,
-      heroClass: HeroClass,
-      fromPose,
-      toPose: CardPose,
-      arcHeight = 1.4'f32,
-      suppressBoardId = -1,
-      suppressHandOwner = -1,
-      suppressHandIndex = -1,
-      suppressDiscardOwner = -1,
-      hidden = false,
-      duration = CardMoveDuration,
-      trackingTarget = Canceled
-  ): CardAnimation =
-    CardAnimation(
-      card: card,
-      heroClass:
-        if card.class.isSome:
-          card.class.get()
-        else:
-          heroClass,
-      fromPose: fromPose,
-      toPose: toPose,
-      duration: duration,
-      arcHeight: arcHeight,
-      suppressBoardId: suppressBoardId,
-      suppressHandOwner: suppressHandOwner,
-      suppressHandIndex: suppressHandIndex,
-      suppressDiscardOwner: suppressDiscardOwner,
-      hidden: hidden,
-      trackingTarget: trackingTarget
-    )
-
-  proc addDrawAnimation(
-      animations: var seq[CardAnimation],
-      game: GameState,
-      playerIndex: int,
-      cameraSide: float32,
-      hidden = true,
-      handIndex = -1
-  ) =
-    ## Flies a card from the deck to `handIndex` (default: the last slot).
-    if game.players[playerIndex].hand.len == 0:
-      return
-    let
-      destinationIndex =
-        if handIndex in 0 ..< game.players[playerIndex].hand.len: handIndex
-        else: game.players[playerIndex].hand.high
-      sourcePose = stackTopPose(
-        deckPose(playerIndex),
-        game.players[playerIndex].deck.len + 1
-      )
-      destinationPose = handPoses(
-        playerIndex,
-        game.players[playerIndex].hand.len,
-        cameraSide
-      )[destinationIndex]
-    animations.add newCardAnimation(
-      game.players[playerIndex].hand[destinationIndex],
-      game.players[playerIndex].heroClass,
-      sourcePose,
-      destinationPose,
-      arcHeight = 1.0'f32,
-      suppressHandOwner = playerIndex,
-      suppressHandIndex = destinationIndex,
-      hidden = hidden,
-      duration = DrawMoveDuration
-    )
-
-  proc animateTransition(animations: var seq[CardAnimation],
-      before, after: GameState, cameraSide: float32) =
-    ## The server and local bot use the same card movement as human input.
-    if after.turnNumber != before.turnNumber:
-      # Draws animate from their DrawVfx events.
-      return
-    let owner = before.currentPlayer
-    let oldPlayer = before.players[owner]
-    let newPlayer = after.players[owner]
-    if oldPlayer.hand.len > 0:
-      # The built-in bot always chooses the first affordable card. Base decks
-      # contain one card type, so locating a played face is unambiguous.
-      var playedIndex = 0
-      for i, card in oldPlayer.hand:
-        if card.energyCost <= oldPlayer.energy:
-          playedIndex = i
-          break
-      let source = handPoses(owner, oldPlayer.hand.len, cameraSide)[playedIndex]
-      # Only the card that left the hand flies from it; minions its rules
-      # summoned enter after it and appear on their own beat.
-      for i, minion in newPlayer.board:
-        if not before.minionLocation(minion.id).found:
-          animations.add newCardAnimation(minion.card, newPlayer.heroClass,
-            source, boardPoses(owner, i + 1)[i],
-            suppressBoardId = minion.id)
-          break
-      if newPlayer.discardPile.len > oldPlayer.discardPile.len and
-          newPlayer.hand.len < oldPlayer.hand.len:
-        animations.add newCardAnimation(newPlayer.discardPile[^1],
-          newPlayer.heroClass, source,
-          stackTopPose(discardPose(owner), newPlayer.discardPile.len),
-          suppressDiscardOwner = owner)
-
-  proc animationPose(animation: CardAnimation): CardPose =
-    let
-      raw =
-        if animation.duration > 0:
-          clamp(animation.elapsed / animation.duration, 0.0'f32, 1.0'f32)
-        else:
-          1.0'f32
-      eased = raw * raw * (3.0'f32 - 2.0'f32 * raw)
-      angleDifference = arctan2(
-        sin(animation.toPose.yaw - animation.fromPose.yaw),
-        cos(animation.toPose.yaw - animation.fromPose.yaw)
-      )
-    result.position =
-      animation.fromPose.position +
-      (animation.toPose.position - animation.fromPose.position) * eased
-    result.position.y += sin(PI.float32 * raw) * animation.arcHeight
-    result.yaw = animation.fromPose.yaw + angleDifference * eased
-    result.pitch =
-      animation.fromPose.pitch +
-      (animation.toPose.pitch - animation.fromPose.pitch) * eased
-    result.roll =
-      animation.fromPose.roll +
-      (animation.toPose.roll - animation.fromPose.roll) * eased
-
-  proc advanceAnimations(
-      animations: var seq[CardAnimation],
-      deltaTime: float32
-  ) =
-    if animations.len == 0:
-      return
-    for animation in animations.mitems:
-      animation.elapsed += deltaTime
-    for i in countdown(animations.high, 0):
-      if animations[i].elapsed >= animations[i].duration:
-        animations.delete(i)
-
-  proc boardCardSuppressed(
-      animations: openArray[CardAnimation],
-      minionId: int
-  ): bool =
-    for animation in animations:
-      if animation.suppressBoardId == minionId:
-        return true
-
-  proc handCardSuppressed(
-      animations: openArray[CardAnimation],
-      playerIndex,
-      cardIndex: int
-  ): bool =
-    for animation in animations:
-      if animation.suppressHandOwner == playerIndex and
-          animation.suppressHandIndex == cardIndex:
-        return true
-
-  proc queuedDraw(queued: openArray[VisualEvent], owner, index: int): bool =
-    ## A card still on its way to the hand (drawn or bounced) whose beat
-    ## hasn't played yet stays out of the hand.
-    for event in queued:
-      if event.target.owner == owner and
-          ((event.kind == DrawVfx and event.boardIndex == index) or
-            (event.kind == BounceVfx and event.handIndex == index)):
-        return true
-
-  proc queuedSummon(queued: openArray[VisualEvent], minionId: int): bool =
-    ## A summoned minion whose beat hasn't played yet stays off the board.
-    for event in queued:
-      if event.kind == SummonVfx and event.target.kind == CreatureChoice and
-          event.target.creatureId == minionId:
-        return true
-
-  proc discardCardsSuppressed(
-      animations: openArray[CardAnimation],
-      playerIndex: int
-  ): int =
-    for animation in animations:
-      if animation.suppressDiscardOwner == playerIndex:
-        inc result
-
-  proc screenPosition(
-      window: Window,
-      position: Vec3,
-      viewProjection: Mat4
-  ): Vec2 =
-    let clip = viewProjection * vec4(position, 1)
-    if clip.w <= 0:
-      return vec2(-10000)
-    let normalized = vec2(clip.x / clip.w, clip.y / clip.w)
-    vec2(
-      (normalized.x * 0.5'f32 + 0.5'f32) * window.size.x.float32,
-      (0.5'f32 - normalized.y * 0.5'f32) * window.size.y.float32
-    )
-
-  proc mouseRay(
-      window: Window,
-      viewProjection: Mat4
-  ): tuple[origin, direction: Vec3] =
-    let
-      width = max(window.size.x.float32, 1)
-      height = max(window.size.y.float32, 1)
-      ndcX = 2.0'f32 * window.mousePos.vec2.x / width - 1.0'f32
-      ndcY = 1.0'f32 - 2.0'f32 * window.mousePos.vec2.y / height
-      inverseViewProjection = inverse(viewProjection)
-    var
-      nearPoint = inverseViewProjection * vec4(ndcX, ndcY, -1, 1)
-      farPoint = inverseViewProjection * vec4(ndcX, ndcY, 1, 1)
-    result.origin = nearPoint.xyz / nearPoint.w
-    let farPosition = farPoint.xyz / farPoint.w
-    result.direction = normalize(farPosition - result.origin)
-
-  proc mousePlanePoint(
-      window: Window,
-      viewProjection: Mat4,
-      planeY: float32
-  ): tuple[hit: bool, point: Vec3] =
-    let
-      ray = mouseRay(window, viewProjection)
-    if abs(ray.direction.y) < 1e-5'f32:
-      return
-    let distance = (planeY - ray.origin.y) / ray.direction.y
-    if distance <= 0:
-      return
-    (true, ray.origin + ray.direction * distance)
-
-  proc mouseCardOffset(
-      window: Window,
-      viewProjection: Mat4,
-      pose: CardPose
-  ): float32 =
-    ## How far the mouse's point on the card is from the card's centre, or
-    ## -1 when the mouse isn't over the card. Crowded boards overlap, so the
-    ## closest card is the one under the mouse.
-    result = -1
-    let
-      ray = mouseRay(window, viewProjection)
-      normal = pose.cardNormal()
-      denominator = dot(ray.direction, normal)
-    if abs(denominator) < 1e-5'f32:
-      return
-    let distance = dot(pose.position - ray.origin, normal) / denominator
-    if distance <= 0:
-      return
-    let local = pose.inverseCardVector(
-      ray.origin + ray.direction * distance - pose.position
-    )
-    if abs(local.x) <= CardWidth * 0.5'f32 and
-        abs(local.z) <= CardDepth * 0.5'f32:
-      result = sqrt(local.x * local.x + local.z * local.z)
-
-  proc mouseHitsCard(
-      window: Window,
-      viewProjection: Mat4,
-      pose: CardPose
-  ): bool =
-    mouseCardOffset(window, viewProjection, pose) >= 0
-
-  proc mouseOverBoard(
-      window: Window,
-      viewProjection: Mat4
-  ): bool =
-    let hit = mousePlanePoint(window, viewProjection, CardPlaneY)
-    hit.hit and
-      abs(hit.point.x) <= BoardWidth * 0.5'f32 and
-      abs(hit.point.z) <= BoardDepth * 0.5'f32
-
-  proc hoveredCard(
-      window: Window,
-      viewProjection: Mat4,
-      game: GameState,
-      cameraSide: float32,
-      handOwner = -1
-  ): int =
-    ## The hovered card in `handOwner`'s hand (default: the current player).
-    result = -1
-    let
-      playerIndex = if handOwner >= 0: handOwner else: game.currentPlayer
-      poses = handPoses(
-        playerIndex,
-        game.players[playerIndex].hand.len,
-        cameraSide
-      )
-    if poses.len == 0:
-      return
-    for i in countdown(poses.high, 0):
-      if mouseHitsCard(window, viewProjection, poses[i]):
-        return i
-
-  proc choiceIsLegal(
-      choices: openArray[Choice],
-      wanted: Choice
-  ): bool =
-    for choice in choices:
-      if choice == wanted:
-        return true
-
-  proc selectableTargetCount(choices: openArray[Choice]): int =
-    for choice in choices:
-      if not choice.isNoTarget:
-        inc result
-
-  proc hoveredHeroTarget(
-      window: Window,
-      viewProjection: Mat4,
-      choices: openArray[Choice]
-  ): Choice =
-    result = Canceled
-    var closestDistanceSquared = 72.0'f32 * 72.0'f32
-    for playerIndex in 0 ..< PlayerCount:
-      let wanted = heroChoice(playerIndex)
-      if not choices.choiceIsLegal(wanted):
-        continue
-      let
-        screen = screenPosition(
-          window,
-          avatarPosition(playerIndex) + vec3(0, 1.25, 0),
-          viewProjection
-        )
-        delta = screen - window.mousePos.vec2
-        distanceSquared = delta.x * delta.x + delta.y * delta.y
-      if distanceSquared <= closestDistanceSquared:
-        closestDistanceSquared = distanceSquared
-        result = wanted
-
-  var hiddenSummons: array[PlayerCount, int]
-    ## Summoned minions per side whose beat hasn't played yet. They're the
-    ## last cards on that board and take no room until they appear.
-
-  proc boardSlots(
-      dying: openArray[DyingMinion],
-      owner,
-      liveCount: int
-  ): seq[int] =
-    ## Presented board order: live indices 0 ..< liveCount, with each dying
-    ## minion (as -1 - its index in `dying`) back where it stood. Re-inserting
-    ## the newest first undoes the removals in reverse, so every slot lands
-    ## exactly where it was. Summons still waiting for their beat are left
-    ## out, so the cards already shown don't shift before they appear.
-    for i in 0 ..< max(0, liveCount - hiddenSummons[owner]):
-      result.add i
-    for i in countdown(dying.high, 0):
-      if dying[i].target.owner == owner:
-        result.insert(-1 - i, min(dying[i].boardIndex, result.len))
-
-  proc liveBoardPose(
-      dying: openArray[DyingMinion],
-      owner,
-      liveIndex,
-      liveCount: int
-  ): CardPose =
-    ## A card left out of the layout (a summon whose beat hasn't played)
-    ## gets the first slot; it isn't drawn until it appears. An empty
-    ## layout still has one slot to hand out.
-    let
-      slots = dying.boardSlots(owner, liveCount)
-      poses = boardPoses(owner, max(1, slots.len))
-    poses[clamp(slots.find(liveIndex), 0, poses.high)]
-
-  proc dyingPose(
-      dying: openArray[DyingMinion],
-      index,
-      liveCount: int
-  ): CardPose =
-    let
-      owner = dying[index].target.owner
-      slots = dying.boardSlots(owner, liveCount)
-      poses = boardPoses(owner, max(1, slots.len))
-    result = poses[clamp(slots.find(-1 - index), 0, poses.high)]
-    if dying[index].atLunge:
-      result.position = dying[index].lungePoint
-
-  proc hoveredCreatureTarget(
-      window: Window,
-      viewProjection: Mat4,
-      game: GameState,
-      choices: openArray[Choice],
-      dying: openArray[DyingMinion] = []
-  ): Choice =
-    result = Canceled
-    let hit = mousePlanePoint(window, viewProjection, CardPlaneY)
-    if not hit.hit:
-      return
-    for playerIndex in 0 ..< PlayerCount:
-      let player = game.players[playerIndex]
-      for minionIndex in countdown(player.board.high, 0):
-        let
-          minion = player.board[minionIndex]
-          wanted = creatureChoice(playerIndex, minion.id)
-        if not choices.choiceIsLegal(wanted):
-          continue
-        if mouseHitsCard(
-            window,
-            viewProjection,
-            dying.liveBoardPose(playerIndex, minionIndex, player.board.len)
-        ):
-          return wanted
-
-  proc hoveredWorldTarget(
-      window: Window,
-      viewProjection: Mat4,
-      game: GameState,
-      choices: openArray[Choice],
-      dying: openArray[DyingMinion] = []
-  ): Choice =
-    result = hoveredCreatureTarget(
-      window,
-      viewProjection,
-      game,
-      choices,
-      dying
-    )
-    if result.isCanceled:
-      result = hoveredHeroTarget(window, viewProjection, choices)
 
   proc polyworldRoot(): string =
     var candidates: seq[string]
@@ -1183,99 +230,45 @@ when not defined(headless):
 
   include awmhud
 
-  proc cardReadingRect(window: Window): UiRect =
-    let height = max(120'f32, min(850'f32, hudSize(window).y - 360))
-    UiRect(origin: vec2(28, 198),
-      size: vec2(height * CardFaceWidth.float32 / CardFaceHeight.float32, height))
+  proc addHudHalo(renderer: var VfxRenderer, window: Window, rect: UiRect,
+      time: float32) =
+    ## The hovered card's glow (addCardGlow) around a HUD rectangle. Draw it
+    ## before post.present, so it blooms the same.
+    const HudPixelsPerUnit = 75'f32
+      ## The glow reaches as far around a panel as around a card in hand.
+    let
+      scale = hudScale(window)
+      pulse = 0.88'f32 + 0.12'f32 * sin(time * 5)
+    renderer.addHudHalo(rect.origin * scale, rect.size * scale,
+      HudPixelsPerUnit * scale, HoverGold, pulse * 0.2875'f32)
 
   proc drawCardReadingView(
       sk: Silky,
       window: Window,
       game: GameState,
       viewProjection: Mat4,
-      animations: openArray[CardAnimation],
+      play: TablePlay,
+      layout: TableLayout,
       hoverIndex: int,
       hidden: bool,
-      dying: openArray[DyingMinion] = [],
-      discardFlights: openArray[CardAnimation] = [],
-      queued: openArray[VisualEvent] = [],
       handOwner = -1
   ): bool =
     ## The large preview of the hovered card: in hand, on the board, or on
     ## top of a discard pile.
     if hidden:
       return
-    var
-      card: Card
-      power = -1
-      toughness = -1
-      lost: set[Keyword]
-      found = false
-    let
-      owner = if handOwner >= 0: handOwner else: game.currentPlayer
-      player = game.players[owner]
-    if hoverIndex >= 0 and hoverIndex < player.hand.len and
-        not animations.handCardSuppressed(owner, hoverIndex) and
-        not queued.queuedDraw(owner, hoverIndex):
-      card = player.hand[hoverIndex]
-      found = true
-    else:
-      # One card: the closest under the mouse. Its stats come from it alone,
-      # never left over from another card the mouse also touches.
-      var nearest = high(float32)
-      for owner in 0 ..< PlayerCount:
-        for i, minion in game.players[owner].board:
-          if animations.boardCardSuppressed(minion.id) or
-              queued.queuedSummon(minion.id):
-            continue
-          let offset = mouseCardOffset(window, viewProjection,
-            dying.liveBoardPose(owner, i, game.players[owner].board.len))
-          if offset < 0 or offset >= nearest:
-            continue
-          nearest = offset
-          card = minion.card
-          found = true
-          if card.kind == Minion:
-            power = minion.power
-            toughness = minion.currentToughness
-            lost = minion.lostKeywords
-          else:
-            power = -1
-            toughness = -1
-            lost = {}
-      if not found:
-        # The visible top of a discard pile, matching how the pile is drawn:
-        # cards still flying there or still dying on the board aren't shown.
-        for owner in 0 ..< PlayerCount:
-          let pile = game.players[owner].discardPile
-          var hiddenCards = animations.discardCardsSuppressed(owner) +
-            discardFlights.discardCardsSuppressed(owner)
-          for slain in dying:
-            if slain.target.owner == owner and not slain.bouncing:
-              inc hiddenCards
-          let shown = pile.len - hiddenCards
-          if shown > 0 and mouseHitsCard(window, viewProjection,
-              stackTopPose(discardPose(owner), shown)):
-            card = pile[shown - 1]
-            found = true
+    var inspected = inspectedCard(window, viewProjection, game, play, layout,
+      hoverIndex, handOwner)
     when defined(takeScreenshot):
+      let player = game.players[
+        if handOwner >= 0: handOwner else: game.currentPlayer]
       if getEnv("AWM_DEMO_CARD_HOVER") == "1" and player.hand.len > 0:
-        card = player.hand[0]
-        found = true
-      if getEnv("AWM_CAPTURE_NO_HOVER") == "1":
-        found = false
-    if not found:
+        inspected.card = player.hand[0]
+        inspected.found = true
+    if not inspected.found:
       return
-    let
-      rect = cardReadingRect(window)
-      size = rect.size
-      origin = rect.origin
-      liveStats = toughness >= 0
-      imageKey = sk.bakedCardImage(card)
-    sk.drawCardImage(imageKey, origin, size)
-    if liveStats:
-      sk.drawMinionOverlays(card, power, toughness, lost, origin, size)
-    result = true
+    sk.drawCardReading(window, inspected.card, inspected.power,
+      inspected.toughness, inspected.lost)
 
   proc drawDeckLabels(
       sk: Silky,
@@ -1305,9 +298,37 @@ when not defined(headless):
         sk.drawLabel((if discarded: "DISCARD " else: "DECK ") & $count,
           origin + vec2(5, 0), vec2(144, 44), HudIvory, "Small", CenterAlign)
 
+  static:
+    # Lists the compile-time (-d:) flags while this build compiles.
+    proc onOff(on: bool): string = (if on: "ON" else: "OFF")
+    const Rule = "-------------------------"
+    echo Rule
+    echo "Flags"
+    echo Rule
+    echo " awmPostPanel = ", onOff(PostPanelControls)
+    echo " awmPostLayers = ", onOff(PostLayerControls)
+    echo " awmLayoutTuning = ", onOff(defined(awmLayoutTuning))
+    echo " takeScreenshot = ", onOff(defined(takeScreenshot))
+    echo Rule
+
+  proc printHelp() =
+    echo "AWM — Archers Warriors Mages\n" &
+      "Options (--key value or --key=value):\n" &
+      "  --players N      Player count (2). 2 plays the usual game; above 2\n" &
+      "                   starts a multiplayer match (turns are mocked).\n" &
+      "  --seed INTEGER   Match seed (random when omitted)\n" &
+      "  --class CLASS    Your hero class: archer, warrior or mage (archer)\n" &
+      "  --opponent CLASS Opponent hero class: archer, warrior or mage (mage)\n" &
+      "  --bot PATH       Bot program (.bas), repeatable up to " & $PlayerCount &
+        " times. One bot plays\n" &
+      "                   both seats; with --human it plays the opponent.\n" &
+      "                   Defaults to players/base.bas.\n" &
+      "  --human          Play seat 0 yourself instead of watching bots\n" &
+      "  -h, --help       Show this help and exit"
+
   proc runAwm*() =
     if "--help" in commandLineParams() or "-h" in commandLineParams():
-      echo "AWM: --seed N --class archer|warrior|mage --opponent archer|warrior|mage --bot PATH --human"
+      printHelp()
       return
     let sessionOptions = parseSessionOptions(commandLineParams())
     when defined(emscripten):
@@ -1357,7 +378,7 @@ when not defined(headless):
       cardSurfaces = initCardRenderer()
       vfx = initVfxRenderer(cardAssets.parentDir / "vfx" / "textures")
       post = initPostFx()
-    var courtyard = initCourtyardRenderer()
+    var courtyard = initCourtyardRenderer(sessionOptions.playerCount)
     let scene = newCharacterScene(window)
     # AWM lights heroes with the courtyard's own night rig, not the shared
     # toon ramp: see lightLikeCourtyard.
@@ -1365,6 +386,7 @@ when not defined(headless):
     var
       models: array[HeroSeats, array[HeroClass, CharacterModel]]
       idleClips: array[HeroSeats, array[HeroClass, int]]
+      deathClips: array[HeroSeats, array[HeroClass, int]]
     let
       heroManifest = readManifest(ChargenLibrary)
       heroPresets = readHeroPresets()
@@ -1374,49 +396,532 @@ when not defined(headless):
           heroPresets[seat][heroClass], heroClass)
         idleClips[seat][heroClass] =
           models[seat][heroClass].clipIndex(HeroIdleClips[heroClass])
+        deathClips[seat][heroClass] =
+          models[seat][heroClass].clipIndex(HeroDeathClip)
+
+    proc heroClip(model: int, heroClass: HeroClass,
+        dying, idleTime: float32): tuple[clip: int, time: float32] =
+      ## Idle while alive; once dying, the death clip, held on its last
+      ## frame.
+      if dying < 0:
+        (idleClips[model][heroClass], idleTime)
+      else:
+        let clip = deathClips[model][heroClass]
+        (clip, min(dying,
+          models[model][heroClass].clipDuration(clip) - 0.001'f32))
+
+    # The class choice, shared by the duel and multiplayer matches.
+    let
+      classChoiceEye = vec3(0, 6.2, 13.5)
+      classChoiceTarget = vec3(0, 1.0, 0)
+
+    proc addClassStage() =
+      solid.addBox(
+        vec3(0, -0.3, 0),
+        vec3(15, 0.55, 7),
+        vec4(0.20, 0.24, 0.30, 1),
+        sideFactor = 0.5
+      )
+      for heroClass in HeroClass:
+        let x = (heroClass.ord.float32 - 1.0'f32) * 4.2'f32
+        solid.addBox(
+          vec3(x, 0.05, 0),
+          vec3(3.0, 0.18, 3.0),
+          heroClass.classColor().darker(0.72),
+          sideFactor = 0.55
+        )
+
+    proc drawClassHeroes(selected: HeroClass, time: float32) =
+      for heroClass in HeroClass:
+        let
+          x = (heroClass.ord.float32 - 1.0'f32) * 4.2'f32
+          chosen = selected == heroClass
+        drawCharacter(
+          scene,
+          models[0][heroClass],
+          vec3(x, 0.15, 0),
+          0,
+          idleClips[0][heroClass],
+          time,
+          tint =
+            if chosen:
+              color(1.08, 1.08, 1.08, 1)
+            else:
+              color(1, 1, 1, 1),
+          sizeFactor = if chosen: 1.06'f32 else: 1.0'f32
+        )
+
+    proc drawClassHeader(human: bool) =
+      sk.drawRect(
+        vec2(0),
+        vec2(hudSize(window).x, 180),
+        rgbx(14, 17, 24, 238)
+      )
+      sk.drawLabel(
+        "ARCHERS | WARRIORS | MAGES",
+        vec2(0, 15),
+        vec2(hudSize(window).x, 78),
+        rgbx(243, 218, 153, 255),
+        "H1",
+        CenterAlign
+      )
+      sk.drawLabel(
+        (if human: "CHOOSE YOUR CLASS"
+         else: "BOTS ARE CHOOSING CLASSES..."),
+        vec2(0, 104),
+        vec2(hudSize(window).x, 48),
+        rgbx(221, 225, 233, 255),
+        "Default",
+        CenterAlign
+      )
+
+    proc classButtons(): Option[HeroClass] =
+      ## The human's class buttons; returns the class clicked this frame.
+      for heroClass in HeroClass:
+        let
+          x = hudSize(window).x * 0.5'f32 +
+            (heroClass.ord.float32 - 1.0'f32) * 400.0'f32
+          rect = UiRect(
+            origin: vec2(x - 140, hudSize(window).y - 180),
+            size: vec2(280, 84)
+          )
+        if drawButton(
+            sk,
+            window,
+            rect,
+            heroClass.className()
+        ):
+          result = some(heroClass)
+
+    if sessionOptions.playerCount > PlayerCount:
+      # The multiplayer mode (awmmultiplayermode) runs the match on the core;
+      # this loop presents it through the shared table (awmplay), like the
+      # duel. The camera never moves. With --human P1 plays and nothing
+      # turns; otherwise we spectate and the balconies turn around the
+      # static center to bring whoever's turn it is in front of the camera.
+      let layout = buildMultiplayerLayout(sessionOptions.playerCount)
+      var
+        previewTime = 0.0'f32
+        previewLastFrame = epochTime()
+        seatRng =
+          if sessionOptions.seedGiven or defined(takeScreenshot):
+            initRand(sessionOptions.seed)
+          else: initRand()
+        match: MultiplayerMatch
+        play = initTablePlay()
+        choosingClasses = true
+        chosenClass = sessionOptions.playerClass
+        botClassWait = 1.5'f32
+        orbit = initSeatOrbit(layout.balconies[0].yaw)
+        openingDraw = false  ## Every seat's opening hand should fly in.
+        botClock = initBotClock()
+        botSources: seq[string]
+          ## The bot scripts for the seats that aren't the human's, taken in
+          ## turn: the --bot scripts, else the reference bot.
+        uiCapturesMouse = false  ## The pointer is over a tuning window.
+      when defined(takeScreenshot):
+        var playDemoDone = false
+      template gamePressed(button: Button): bool =
+        ## A press the table should react to (not one meant for a window).
+        window.buttonPressed[button] and not uiCapturesMouse
+      proc startMatch(humanClass: Option[HeroClass]) =
+        var classes = newSeq[HeroClass](layout.playerCount)
+        for seat in 0 ..< layout.playerCount:
+          classes[seat] = seatRng.rand(HeroClass)
+        if humanClass.isSome:
+          classes[0] = humanClass.get
+        chosenClass = classes[0]
+        choosingClasses = false
+        match = newMultiplayerMatch(classes,
+          humanSeat = if humanClass.isSome: 0 else: -1,
+          seed = seatRng.rand(high(int)).int64, botSources = botSources)
+        botClock = initBotClock()
+        orbit = initSeatOrbit(layout.balconies[match.viewedSeat].yaw)
+        play.resetTable()
+        play.animations.setLen(0)
+        play.statusMessage = match.turnStatus
+        # As in the duel, every seat's hand is dealt card by card.
+        openingDraw = true
+      proc turnPassed() =
+        orbit.aimAt(layout.balconies[match.viewedSeat].yaw)
+        play.statusMessage = match.turnStatus
+      for path in sessionOptions.botPaths:
+        botSources.add readFile(path)
+      if botSources.len == 0 and fileExists(appDir / "players" / "base.bas"):
+        botSources.add readFile(appDir / "players" / "base.bas")
+      if getEnv("AWM_AUTOSTART") == "1":
+        startMatch(if sessionOptions.human: some(sessionOptions.playerClass)
+          else: none(HeroClass))
+      when defined(takeScreenshot):
+        var previewScreenshotFrame = 0
+      when defined(awmLayoutTuning):
+        # The duel's layout keys: the viewed seat's hand is the player's one
+        # and every other balcony's is an opponent's. Enter prints a row.
+        var
+          tuner = LayoutTuner()
+          previewView = layout.multiplayerView(
+            window.size.x.float32 / max(window.size.y.float32, 1))
+        tuner.announce([tuningTarget("player's hand", previewView.nearHand),
+          tuningTarget("opponent's hand", previewView.farHand),
+          tuningTarget("camera", previewView.camera)])
+      window.onFrame = proc() =
+        let previewDt = frameDelta(previewLastFrame)
+        previewTime += previewDt
+        play.animations.advanceAnimations(previewDt)
+        play.discardFlights.advanceAnimations(previewDt)
+        play.activeVfx.advance(previewDt)
+        sk.uiScale = hudScale(window)
+        sk.mousePos = window.mousePos.vec2 / max(sk.uiScale, 0.01'f32)
+        when PostPanelControls:
+          uiCapturesMouse = mouseOverPostPanel(sk.mousePos)
+        let aspect = window.size.x.float32 / max(window.size.y.float32, 1)
+        when defined(awmLayoutTuning):
+          tuner.tune(window, previewDt,
+            [tuningTarget("player's hand", previewView.nearHand),
+             tuningTarget("opponent's hand", previewView.farHand),
+             tuningTarget("camera", previewView.camera)])
+          if window.buttonPressed[KeyEnter]:
+            echo previewView.tunedRow(layout.playerCount)
+        else:
+          let previewView = layout.multiplayerView(aspect)
+        if choosingClasses:
+          if not sessionOptions.human:
+            botClassWait -= previewDt
+            if botClassWait <= 0:
+              startMatch(none(HeroClass))
+        let table = seatTable(layout, previewView, match.viewedSeat,
+          match.humanSeat)
+        if not choosingClasses:
+          # The bots play their seats, the same way they play the duel.
+          if play.updateBots(match.game, table, match.bots, botClock,
+              proc(): bool = match.humanActs, previewDt):
+            turnPassed()
+          if play.presentationIdle(match.game) and not play.attackActive and
+              match.skipDeadTurn():
+            turnPassed()
+          orbit.advance(previewDt)
+        if not choosingClasses and openingDraw:
+          play.addOpeningHands(match.game, table)
+          openingDraw = false
+        when defined(takeScreenshot):
+          # AWM_DEMO_MP_PLAY=target|bolt|sharpshooter|select|attack|fight: on
+          # the human's turn, a Bear enters the board, then the named card is
+          # played the way a click plays it (target: Bolt waits for a hero),
+          # or a ready Bear is selected to attack (attack: seat 3's hero;
+          # fight: seat 4's Footsoldier).
+          let demo = getEnv("AWM_DEMO_MP_PLAY")
+          if demo.len > 0 and not choosingClasses and not playDemoDone and
+              match.humanSeat >= 0:
+            playDemoDone = true
+            template game: untyped = match.game
+            while not match.humanTurn:
+              discard match.endTurn()
+            discard game.takeVisualEvents()
+            play.animations.setLen(0)
+            game.players[0].energy = 10
+            game.players[0].totalEnergy = 10
+            game.players[0].hand = @[baseCardNamed("Bear"),
+              baseCardNamed("Bolt"), baseCardNamed("Sharpshooter")]
+            game.players[2].board = @[MinionState(id: game.nextMinionId,
+              owner: 2, card: baseCardNamed("Sniper"), currentToughness: 1)]
+            inc game.nextMinionId
+            discard play.playHandCard(game, table, 0)
+            case demo
+            of "target":
+              discard play.playHandCard(game, table, 0)
+            of "bolt":
+              play.pendingCard = game.players[0].hand[0]
+              play.pendingCardIndex = 0
+              play.pendingChoices = game.availableChoices(0)
+              play.pendingTargeting = true
+              play.animations.setLen(0)
+              discard game.playCard(0, heroChoice(2))
+              play.stopTargeting()
+            of "sharpshooter":
+              discard play.playHandCard(game, table, 1)
+            of "death", "win":
+              # Bolts at players at 2 life: one death, or every opponent.
+              play.animations.setLen(0)
+              let victims = if demo == "death": @[2] else: @[1, 2, 3]
+              for seat in victims:
+                game.players[seat].life = 2
+                game.players[0].hand.add baseCardNamed("Bolt")
+                discard game.playCard(game.players[0].hand.high,
+                  heroChoice(seat))
+            of "select", "attack", "fight":
+              # A second Bear, ready since last turn, and a Footsoldier on
+              # the balcony to the right.
+              let ready = game.nextMinionId
+              game.players[0].board.add MinionState(id: ready, owner: 0,
+                card: baseCardNamed("Bear"), currentToughness: 2,
+                canAttack: true)
+              let footsoldier = ready + 1
+              game.players[3].board.add MinionState(id: footsoldier,
+                owner: 3, card: baseCardNamed("Footsoldier"),
+                currentToughness: 2)
+              game.nextMinionId = ready + 2
+              play.animations.setLen(0)
+              play.selectedAttacker = ready
+              if demo == "attack":
+                play.startAttack(game, table, @[ready], heroChoice(2))
+              elif demo == "fight":
+                play.startAttack(game, table, @[ready],
+                  creatureChoice(3, footsoldier))
+            else: discard
+        let
+          camera = previewView.camera
+          eye =
+            if choosingClasses: classChoiceEye
+            else: camera.eye
+          target =
+            if choosingClasses: classChoiceTarget
+            else: camera.target
+          view = lookAt(eye, target, vec3(0, 1, 0))
+          farPlane = max(CameraFar, length(eye) * 3)
+          projection = perspective(42.0'f32, aspect, CameraNear, farPlane)
+          vp = projection * view
+          # The balconies, their cards and heroes render through the stage
+          # turn; the center island and the sky stay put.
+          stageYaw = if choosingClasses: 0'f32 else: orbit.yaw
+          stage = stageRotation(stageYaw)
+          stageView = view * stage
+          stageVp = projection * stageView
+          stageEye = (stage.inverse * vec4(eye.x, eye.y, eye.z, 1)).xyz
+          environmentTime =
+            when defined(takeScreenshot):
+              parseFloat(getEnv("AWM_SCENE_TIME", $previewTime)).float32
+            else: previewTime
+        var
+          hoverIndex = -1
+          hoveredTarget = Canceled
+          hoveredBoard = Canceled
+        if not choosingClasses:
+          template game: untyped = match.game
+          if play.tossPicking:
+            hoverIndex = hoveredCard(window, stageVp, game, table,
+              handOwner = game.pendingToss.player)
+          elif match.current == match.viewedSeat:
+            hoverIndex = hoveredCard(window, stageVp, game, table,
+              handOwner = match.viewedSeat)
+          if hoverIndex < 0:
+            var boardChoices: seq[Choice]
+            for owner in 0 ..< game.playerCount:
+              for minion in game.players[owner].board:
+                if not play.animations.boardCardSuppressed(minion.id) and
+                    not play.queuedEvents.queuedSummon(minion.id):
+                  boardChoices.add creatureChoice(owner, minion.id)
+            hoveredBoard = hoveredCreatureTarget(window, stageVp, game, play,
+              table, boardChoices)
+          let pick = gamePressed(MouseLeft) and
+            not (match.humanSeat >= 0 and
+              finishRect(window).contains(sk.mousePos))
+          let cancel = window.buttonPressed[KeyEscape] or
+            gamePressed(MouseRight)
+          if play.tossPicking and match.humanActs and
+              play.presentationIdle(game) and not game.gameOver:
+            play.updateTossPicking(game, hoverIndex,
+              pick = gamePressed(MouseLeft), clear = cancel)
+          elif match.humanTurn and play.presentationIdle(game) and
+              not play.pendingTargeting and not play.attackActive and
+              not game.gameOver:
+            if hoverIndex >= 0 and pick:
+              if play.playHandCard(game, table, hoverIndex):
+                hoverIndex = -1
+            else:
+              # Pick one of your minions, then any opponent's minion or hero.
+              play.updateAttack(game, table, window, stageVp, hoveredBoard,
+                pick, cancel)
+          elif match.humanActs and play.pendingTargeting and
+              play.presentationIdle(game) and not game.gameOver:
+            hoveredTarget = play.updateTargeting(game, table, window,
+              stageVp, hoverIndex, pick, cancel)
+          when defined(takeScreenshot):
+            if getEnv("AWM_CAPTURE_NO_HOVER") == "1":
+              hoverIndex = -1
+              hoveredBoard = Canceled
+              hoveredTarget = Canceled
+            elif getEnv("AWM_DEMO_CARD_HOVER") == "1" and
+                match.current == match.viewedSeat and
+                game.players[match.viewedSeat].hand.len > 0:
+              hoverIndex = 0
+          play.presentVisualEvents(game, table, previewTime)
+        var attackHoverTarget = Canceled
+        let attackChoices =
+          if choosingClasses: newSeq[Choice]()
+          else: play.attackChoices(match.game)
+        if match.humanTurn and attackChoices.len > 0 and
+            not play.pendingTargeting and play.presentationIdle(match.game):
+          attackHoverTarget = hoveredWorldTarget(window, stageVp, match.game,
+            play, table, attackChoices)
+        let inspected =
+          if choosingClasses: (found: false, card: Card(), power: -1,
+            toughness: -1, lost: set[Keyword]({}))
+          else: inspectedCard(window, stageVp, match.game, play, table,
+            hoverIndex,
+            if play.tossPicking: match.game.pendingToss.player
+            else: match.viewedSeat)
+        if window.buttonPressed[KeyF8]:
+          post.settings.enabled = not post.settings.enabled
+        when PostLayerControls:
+          for layer in PostLayer:
+            if window.buttonPressed[PostLayerKeys[layer]]:
+              post.layer = layer
+              post.settings.enabled = true
+        post.beginScene(window.size, CameraNear, farPlane)
+        glClearColor(0.035, 0.045, 0.065, 1)
+        glStencilMask(0xff)
+        glClearStencil(0)
+        glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT or GL_STENCIL_BUFFER_BIT)
+        solid.clear()
+        cardSurfaces.clear()
+        vfx.clear()
+        if choosingClasses:
+          addClassStage()
+          solid.draw(vp)
+        else:
+          courtyard.draw(vp, eye, environmentTime, 1, stageYaw = stageYaw)
+          courtyard.drawSky(vp, eye, environmentTime)
+          addTableCards(solid, cardSurfaces, vfx, sk, play, match.game, table,
+            previewTime, match.viewedSeat, hoverIndex, hoveredBoard,
+            match.humanTurn, attackChoices, play.selectedAttacker,
+            play.lungingMinion())
+          addAttackCard(solid, cardSurfaces, vfx, sk, play, match.game, table,
+            previewTime)
+          solid.draw(stageVp)
+          cardSurfaces.draw(sk, stageVp)
+        beginCharacters(scene, window, stageView, projection, stageEye)
+        scene.lightLikeCourtyard(1)
+        if choosingClasses:
+          drawClassHeroes(chosenClass, previewTime)
+        else:
+          glEnable(GL_STENCIL_TEST)
+          glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
+          for balcony in layout.balconies:
+            let
+              seat = balcony.playerIndex
+              heroClass = match.seats[seat].heroClass
+              model = seat mod HeroSeats
+              look = play.heroLook(match.game, seat, hoveredTarget,
+                attackChoices, attackHoverTarget)
+            glStencilFunc(GL_ALWAYS, (seat + 1).GLint, 0xff)
+            if look.targetable:
+              vfx.addTargetRing(table.heroPosition(seat) + vec3(0, 0.04, 0),
+                stageEye, 0.95, if look.hovered: 1.1'f32 else: 0.28'f32)
+            let pose = heroClip(model, heroClass,
+              play.deathClock(match.game, seat, previewTime), environmentTime)
+            drawCharacter(scene, models[model][heroClass],
+              table.heroPosition(seat), PI.float32 - balcony.yaw,
+              pose.clip, pose.time,
+              tint = look.tint, sizeFactor = look.sizeFactor)
+        finishCharacters(scene)
+        glDisable(GL_STENCIL_TEST)
+        if not choosingClasses and post.beginMaterialNormals():
+          courtyard.draw(vp, eye, environmentTime, 1,
+            normalsOnly = true, normalView = view, stageYaw = stageYaw)
+          post.endMaterialNormals()
+        post.applyOcclusion(projection)
+        let panelsBottom =
+          if match.humanSeat >= 0: finishRect(window).origin.y - 18
+          else: hudSize(window).y - 18
+        if not choosingClasses:
+          for seat in 0 ..< match.seats.len:
+            vfx.drawCharacterFlash(seat + 1,
+              play.activeVfx.flashStrength(heroChoice(seat)))
+          vfx.addAttackRing(play, stageEye)
+          vfx.addEffects(play.activeVfx, stageEye)
+          vfx.draw(stageVp)
+          if not inspected.found:
+            # The current player's panel glows like a hovered card. The
+            # panels and their glow hide while the inspector is open.
+            vfx.clear()
+            vfx.addHudHalo(window, playerPanelColumnRect(window,
+              match.seats.len, match.current, panelsBottom), previewTime)
+            vfx.draw(hudHaloProjection(window.size.vec2), depthTest = false)
+        post.present(window.size)
+
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_CULL_FACE)
+        glDisable(GL_BLEND)
+        when not defined(emscripten):
+          glDisable(GL_MULTISAMPLE)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, sk.atlasTextureId())
+        sk.beginUi(window, window.size)
+        if choosingClasses:
+          drawClassHeader(sessionOptions.human)
+          if sessionOptions.human:
+            let picked = classButtons()
+            if picked.isSome:
+              startMatch(picked)
+        else:
+          # The inspector takes the panels' place while it is open.
+          if inspected.found:
+            discard sk.drawCardReading(
+              cardReadingColumnRect(window, panelsBottom), inspected.card,
+              inspected.power, inspected.toughness, inspected.lost)
+          else:
+            sk.drawPlayerPanelColumn(window, match.seats, match.current,
+              match.humanSeat, panelsBottom, previewTime)
+          # The turn header and prompts center on the space left of the
+          # panels.
+          let
+            columnX = playerPanelColumnX(window)
+            centerX = columnX * 0.5'f32
+          sk.drawTurnHeader(centerX, min(920'f32, columnX - 104),
+            match.turnNumber, match.turnLabel, match.humanTurn,
+            if match.game.gameOver: match.turnStatus else: play.statusMessage)
+          sk.drawTossPrompt(window, play, match.game, centerX)
+          sk.drawTargetPrompt(window, play, match.game, centerX)
+          sk.drawCombatPrompt(window, play, match.game, centerX)
+          if not play.attackActive:
+            sk.drawMatchResult(window, play, match.game, match.humanSeat,
+              centerX)
+          sk.drawLabel(play.playHelp(match.humanSeat >= 0),
+            vec2(32, hudSize(window).y - 66), vec2(820, 42), HudMuted, "Small")
+        if not choosingClasses and match.humanSeat >= 0:
+          let
+            yourTurn = match.humanTurn
+            canFinish = yourTurn and not match.game.waitingChoice and
+              not play.pendingTargeting and not play.attackActive and
+              not match.game.gameOver and play.presentationIdle(match.game) and
+              not openingDraw
+          if drawEndTurnButton(sk, window,
+              (if match.game.gameOver: "MATCH ENDED"
+               elif yourTurn: "END TURN" else: "OPPONENT"), canFinish):
+            play.stopTargeting()
+            play.selectedAttacker = 0
+            if match.endTurn():
+              turnPassed()
+        when defined(emscripten):
+          publishStatus((&"Multiplayer match: {layout.playerCount} players. " &
+            play.statusMessage).cstring)
+        when PostPanelControls:
+          drawPostPanel(sk, window, post, courtyard)
+        sk.endUi()
+        when defined(takeScreenshot):
+          captureScreenshot(window, previewScreenshotFrame,
+            max(1, parseInt(getEnv("AWM_CAPTURE_FRAME", "20"))),
+            appDir / &"awm_multiplayer_{layout.playerCount}.png")
+        window.swapBuffers()
+      while not window.closeRequested:
+        pollEvents()
+      return
 
     var
       phase = ChooseClasses
       selectedClass: HeroClass
       game: GameState
-      pendingTargeting = false
-      pendingCardIndex = -1
-      pendingCard: Card
-      pendingChoices: seq[Choice]
-      pendingPicks: seq[Choice]  ## Targets chosen so far for pendingCard.
-      pendingTrigger = false  ## Targeting answers a waiting trigger.
-      tossPicking = false  ## The human is choosing cards to discard.
-      tossPicks: seq[int]  ## Hand positions picked so far.
-      animations: seq[CardAnimation]
-      activeVfx: seq[ActiveVfx]
-      # Visual seeds never advance the game's RNG. Captures can replay a cast.
-      visualRng = when defined(takeScreenshot):
-        initRand(parseBiggestInt(getEnv("AWM_VFX_SEED", "20260909")))
+      # Captures can replay a cast from its visual seed.
+      play = when defined(takeScreenshot):
+        initTablePlay(parseBiggestInt(getEnv("AWM_VFX_SEED", "20260909")))
       else:
-        initRand()
-      statusMessage = ""
+        initTablePlay()
       animationTime = 0.0'f32
       lastFrameTime = epochTime()
-      botWait = 1.2'f32
-      botPlays = 0
+      botClock = initBotClock()
       botClassWait = 1.5'f32
-      selectedAttacker = 0
-      attackActive = false
-      attackSteps: seq[int]
-      attackTarget = Canceled
-      attackPoint: Vec3
-      dyingMinions: seq[DyingMinion]
-      discardFlights: seq[CardAnimation]  # Never block input or bots.
-      queuedEvents: seq[VisualEvent]  ## Visual events waiting for their beat.
-      lastBeatWasDraw = false
-      lastDrawStart = 0.0'f32
-      attackIndex = 0
-      attackForward = true
-      attackElapsed = 0.0'f32
-      attackFinishTurn = false
-      attackDamageApplied = false
     var
-      botVms: array[PlayerCount, BotVm]
+      botVms: seq[BotVm]
       seedRng = initRand()
       uiCapturesMouse = false  ## The pointer is over a tuning window.
 
@@ -1437,66 +942,33 @@ when not defined(headless):
       if sessionOptions.human or phase == ChooseClasses: 0
       else: game.currentPlayer
 
+    activeCameraPlayer = cameraPlayer
+
+    proc handVisible(owner: int): bool =
+      owner == cameraPlayer()
+
+    let duelLayout = TableLayout(
+      handPoses: proc(player, count: int): seq[CardPose] =
+        handPoses(player, count, cameraPlayer().seatSide()),
+      boardPoses: boardPoses,
+      deckPose: deckPose,
+      discardPose: discardPose,
+      spellPose: spellPose,
+      heroPosition: avatarPosition,
+      handVisible: handVisible,
+      overBoard: proc(point: Vec3): bool =
+        abs(point.x) <= BoardWidth * 0.5'f32 and
+          abs(point.z) <= BoardDepth * 0.5'f32,
+      heroLungePoint: proc(fromPose: CardPose, hero: Vec3): Vec3 =
+        # Toward the middle of the hero's side, clear of the other cards.
+        vec3(fromPose.position.x * 0.3, CardPlaneY + 0.3, hero.z * 0.7))
+
     proc humanTurn(): bool =
       sessionOptions.human and botVms[game.currentPlayer] == nil
-
-    proc presentedCardPose(target: Choice, slot, count: int): CardPose =
-      ## Where a targeted card is shown right now: its live slot, or the slot
-      ## it's held in while its death or bounce waits for its beat. Only if
-      ## it's neither does the slot it had when the event was recorded count.
-      let location = game.minionLocation(target.creatureId)
-      if location.found:
-        return dyingMinions.liveBoardPose(location.player, location.index,
-          game.players[location.player].board.len)
-      for i, held in dyingMinions:
-        if held.target == target:
-          return dyingMinions.dyingPose(i,
-            game.players[target.owner].board.len)
-      boardPoses(target.owner, max(1, count))[clamp(slot, 0, max(0, count - 1))]
-
-    proc countHiddenSummons() =
-      hiddenSummons = default(array[PlayerCount, int])
-      for event in queuedEvents:
-        if event.kind == SummonVfx:
-          inc hiddenSummons[event.target.owner]
-
-    proc presentationIdle(): bool =
-      ## Nothing is animating and no visual beat is still waiting to play,
-      ## including events the game produced that the UI hasn't taken yet.
-      animations.len == 0 and activeVfx.len == 0 and queuedEvents.len == 0 and
-        game.visualEvents.len == 0
 
     proc humanActs(): bool =
       ## The human must act now: on their turn, or answering their trigger.
       sessionOptions.human and botVms[game.actingPlayer()] == nil
-
-    proc attackPointFor(target: Choice): Vec3 =
-      ## Where an attacker lunges. Captured when the attack starts, because a
-      ## slain defender leaves the board halfway through the animation.
-      if target.kind == CreatureChoice:
-        let location = game.minionLocation(target.creatureId)
-        if location.found:
-          return dyingMinions.liveBoardPose(location.player, location.index,
-            game.players[location.player].board.len).position
-      avatarPosition(target.owner)
-
-    proc attackLungePoint(fromPose: CardPose): Vec3 =
-      ## Far end of the lunge: toward the hero, or just short of a defender
-      ## so both cards stay visible.
-      if attackTarget.kind == HeroChoice:
-        vec3(fromPose.position.x * 0.3, CardPlaneY + 0.3, attackPoint.z * 0.7)
-      else:
-        fromPose.position + (attackPoint - fromPose.position) * 0.8'f32 +
-          vec3(0, 0.3, 0)
-
-    proc dyingDiscards(owner: int): int =
-      ## Slain cards already in the discard pile but still shown on the board.
-      for dying in dyingMinions:
-        if dying.target.owner == owner and not dying.bouncing:
-          inc result
-
-    proc handVisible(owner: int): bool =
-      owner == cameraPlayer()
 
     block:
       var sources: array[PlayerCount, string]
@@ -1523,27 +995,22 @@ when not defined(headless):
 
     if sessionOptions.human:
       phase = ChooseClasses
-      statusMessage = "Choose your class."
+      play.statusMessage = "Choose your class."
     else:
       phase = ChooseClasses
-      statusMessage = "Bots are choosing classes..."
+      play.statusMessage = "Bots are choosing classes..."
 
     when defined(takeScreenshot):
       var screenshotFrame = 0
     if getEnv("AWM_AUTOSTART") == "1":
       game = newGame(Archer, Mage, 20260904)
       phase = PlayGame
-      animations.addDrawAnimation(
-        game,
-        game.currentPlayer,
-        game.currentPlayer.seatSide(),
-        hidden = false
-      )
-      statusMessage =
+      play.addOpeningHands(game, duelLayout)
+      play.statusMessage =
         &"Player {game.currentPlayer + 1} begins."
     when defined(takeScreenshot):
       if getEnv("AWM_DEMO_BOARD") == "1":
-        animations.setLen(0)
+        play.animations.setLen(0)
         let creatureTargetDemo =
           getEnv("AWM_DEMO_CREATURE_TARGET") == "1"
         game.currentPlayer = 0
@@ -1586,38 +1053,38 @@ when not defined(headless):
             game.players[1].board.add MinionState(id: 10 + i, owner: 1,
               card: card, currentToughness: card.toughness)
           game.nextMinionId = 10 + enemyCards
-        statusMessage =
+        play.statusMessage =
           if creatureTargetDemo:
             "Demo board: Bouncer can target any minion, including itself."
           else:
             "Demo board: Bolt can target either hero."
         if getEnv("AWM_DEMO_TARGET") == "1":
-          pendingCard = game.players[0].hand[0]
-          pendingTargeting = true
+          play.pendingCard = game.players[0].hand[0]
+          play.pendingTargeting = true
           if creatureTargetDemo:
             let
               sourcePose = handPoses(0, 1, 1.0'f32)[0]
               minionId = game.playMinion(0)
               destinationPose =
                 boardPoses(0, game.players[0].board.len)[^1]
-            animations.add newCardAnimation(
-              pendingCard,
+            play.animations.add newCardAnimation(
+              play.pendingCard,
               game.players[0].heroClass,
               sourcePose,
               destinationPose,
               suppressBoardId = minionId
             )
-            pendingCardIndex = -1
-            pendingChoices = game.availableChoices(pendingCard)
+            play.pendingCardIndex = -1
+            play.pendingChoices = game.availableChoices(play.pendingCard)
           else:
-            pendingCardIndex = 0
-            pendingChoices = game.availableChoices(0)
+            play.pendingCardIndex = 0
+            play.pendingChoices = game.availableChoices(0)
         elif getEnv("AWM_DEMO_DISCARD_ANIMATION") == "1":
           let
             card = game.players[0].hand[0]
             sourcePose = handPoses(0, 1, 1.0'f32)[0]
           if game.playCard(0, heroChoice(1)):
-            animations.add newCardAnimation(
+            play.animations.add newCardAnimation(
               card,
               game.players[0].heroClass,
               sourcePose,
@@ -1627,28 +1094,28 @@ when not defined(headless):
               ),
               suppressDiscardOwner = 0
             )
-            statusMessage = "Demo animation: Bolt moves to discard."
+            play.statusMessage = "Demo animation: Bolt moves to discard."
         elif getEnv("AWM_DEMO_BOUNCE_ANIMATION") == "1":
           if game.runMinionRules(
               Mage.classCard(),
               creatureChoice(1, 2)
           ):
-            statusMessage = "Demo animation: Bear returns to hand."
+            play.statusMessage = "Demo animation: Bear returns to hand."
 
         if getEnv("AWM_DEMO_CARD_SET") == "1":
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].hand = @[
             Archer.classCard(), Warrior.classCard(), Mage.classCard()
           ]
           game.players[0].energy = 3
           game.players[0].totalEnergy = 3
-          statusMessage = "Hover a card to inspect its artwork and rules."
+          play.statusMessage = "Hover a card to inspect its artwork and rules."
         if getEnv("AWM_DEMO_PLAYER_TWO") == "1":
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.currentPlayer = 1
         if getEnv("AWM_DEMO_SWORDS") == "1":
           # One Bear already buffed, one damaged: Swords raises both.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Warrior
           game.players[0].board = @[
             MinionState(id: 1, owner: 0, card: Warrior.classCard(),
@@ -1664,10 +1131,10 @@ when not defined(headless):
           game.players[0].totalEnergy = 5
           let spell = game.players[0].hand[0]
           if game.playCard(0):
-            statusMessage = &"Demo: {spell.name} resolves."
+            play.statusMessage = &"Demo: {spell.name} resolves."
         if getEnv("AWM_DEMO_DUEL") == "1":
           # A Bear duels a sturdy Sniper that loses Ranged and survives.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Warrior
           game.players[1].heroClass = Archer
           game.players[0].board = @[MinionState(id: 1, owner: 0,
@@ -1679,51 +1146,51 @@ when not defined(headless):
           game.players[0].energy = 2
           game.players[0].totalEnergy = 2
           if game.playCard(0, @[creatureChoice(0, 1), creatureChoice(1, 2)]):
-            statusMessage = "Demo: Duel."
+            play.statusMessage = "Demo: Duel."
         if getEnv("AWM_DEMO_TACTICIAN") == "1":
           # Tactician enters and weakens the enemy Bear.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Warrior
           game.players[0].hand = @[baseCard("tactician-2")]
           game.players[0].energy = 2
           game.players[0].totalEnergy = 2
           if game.playCard(0, creatureChoice(1, 2)):
-            statusMessage = "Demo: Tactician."
+            play.statusMessage = "Demo: Tactician."
         if getEnv("AWM_DEMO_OOZIFICATION") == "1":
           # Oozification destroys the enemy Bear (toughness 2): its owner
           # gets two Oozes.
           # AWM_DEMO_OOZE_TARGET picks which enemy card (see
           # AWM_DEMO_ENEMY_BOARD).
-          animations.setLen(0)
+          play.animations.setLen(0)
           let targetIndex = parseInt(getEnv("AWM_DEMO_OOZE_TARGET", "0"))
           game.players[0].hand = @[baseCard("oozification-4")]
           game.players[0].energy = 4
           game.players[0].totalEnergy = 4
           let targetId = game.players[1].board[targetIndex].id
           if game.playCard(0, creatureChoice(1, targetId)):
-            statusMessage = "Demo: Oozification."
+            play.statusMessage = "Demo: Oozification."
         if getEnv("AWM_DEMO_PLAN") == "1":
           # Plan enters the board as a trinket and draws a card.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Mage
           game.players[0].hand = @[baseCard("plan-3")]
           game.players[0].energy = 3
           game.players[0].totalEnergy = 3
           if game.playCard(0):
-            statusMessage = "Demo: Plan."
+            play.statusMessage = "Demo: Plan."
         if getEnv("AWM_DEMO_STUDY") == "1":
           # Study draws two, then player 1 chooses a card to discard.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Mage
           game.players[0].hand = @[baseCard("study-2"), baseCard("bouncer-1"),
             baseCard("plan-3")]
           game.players[0].energy = 2
           game.players[0].totalEnergy = 2
           if game.playCard(0):
-            statusMessage = "Demo: Study."
+            play.statusMessage = "Demo: Study."
         if getEnv("AWM_DEMO_BUBBLE") == "1":
           # Player 2's Bear attacks player 1's hero, guarded by two Bubbles.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Mage
           for id in [5, 6]:
             game.players[0].board.add MinionState(id: id, owner: 0,
@@ -1733,11 +1200,11 @@ when not defined(headless):
             card: Warrior.classCard(), currentToughness: 2, canAttack: true)]
           game.players[1].hand.setLen(0)
           game.currentPlayer = 1
-          statusMessage = "Demo: Bubble."
+          play.statusMessage = "Demo: Bubble."
         if getEnv("AWM_DEMO_PRIMORDIAL") == "1":
           # Primordial returns every other card, Plan included, to its
           # owner's hand (see AWM_DEMO_ENEMY_BOARD for the other side).
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Mage
           game.players[0].board.add MinionState(id: 5, owner: 0,
             card: baseCard("plan-3"), enteredTurn: game.turnNumber)
@@ -1746,21 +1213,21 @@ when not defined(headless):
           game.players[0].energy = 10
           game.players[0].totalEnergy = 10
           if game.playCard(0):
-            statusMessage = "Demo: Primordial."
+            play.statusMessage = "Demo: Primordial."
         if getEnv("AWM_DEMO_SHARPSHOOTER_TARGET").len > 0:
           # Sharpshooter enters and shoots that enemy card.
-          animations.setLen(0)
+          play.animations.setLen(0)
           let index = parseInt(getEnv("AWM_DEMO_SHARPSHOOTER_TARGET"))
           game.players[0].hand = @[baseCard("sharpshooter-3")]
           game.players[0].energy = 3
           game.players[0].totalEnergy = 3
           if game.playCard(0,
               creatureChoice(1, game.players[1].board[index].id)):
-            statusMessage = "Demo: Sharpshooter."
+            play.statusMessage = "Demo: Sharpshooter."
         if getEnv("AWM_DEMO_PLAN_TRIGGER") == "1":
           # Plan fires at the start of player 1's next turn: the turn draw,
           # Plan's draw 0.25 s later, then Plan is destroyed.
-          animations.setLen(0)
+          play.animations.setLen(0)
           game.players[0].heroClass = Mage
           game.players[0].board.add MinionState(id: 3, owner: 0,
             card: baseCard("plan-3"), enteredTurn: game.turnNumber)
@@ -1768,58 +1235,37 @@ when not defined(headless):
           game.finishTurn()
           discard game.takeVisualEvents()
           game.finishTurn()
-          statusMessage = "Demo: Plan's trigger."
+          play.statusMessage = "Demo: Plan's trigger."
         if getEnv("AWM_DEMO_TRIGGER_TARGET") == "1":
           # A trinket's trigger waits for player 1 to pick its target.
-          animations.setLen(0)
+          play.animations.setLen(0)
           let snare = Card(name: "Snare", energyCost: 0, kind: Trinket,
             class: some(Mage),
-            rules: rules(on(nextTurn(You), damage(1, target({Minion})))))
+            rules: rules(on(nextTurn(You), damage(1, target({TargetKind.Minion})))))
           game.players[0].board.add MinionState(id: 3, owner: 0, card: snare,
             enteredTurn: game.turnNumber - 2)
           game.nextMinionId = 4
           game.pendingTriggers = @[PendingTrigger(owner: 0, sourceId: 3,
             trigger: 0)]
 
+    when defined(awmLayoutTuning):
+      tuner.announce(duelTuningTargets())
+
     window.onFrame = proc() =
       let dt = frameDelta(lastFrameTime)
       when defined(awmLayoutTuning):
-        # Provisional controls for dialing in the camera and opponent hand.
-        let
-          down = window.buttonDown
-          move = 3.0'f32 * dt
-          turn = 0.35'f32 * dt
-        if down[KeyQ]: opponentHandHeight += move
-        if down[KeyA]: opponentHandHeight -= move
-        if down[KeyS]: opponentHandDistance += move
-        if down[KeyW]: opponentHandDistance -= move
-        if down[KeyY]: activeHandHeight += move
-        if down[KeyH]: activeHandHeight -= move
-        if down[KeyU]: activeHandDistance -= move
-        if down[KeyJ]: activeHandDistance += move
-        if down[KeyI]: handCardRoll += turn
-        if down[KeyK]: handCardRoll -= turn
-        if down[KeyE]: cameraHeight += move
-        if down[KeyD]: cameraHeight -= move
-        if down[KeyR]: cameraDistance -= move
-        if down[KeyF]: cameraDistance += move
-        if down[KeyT]: cameraPitch += turn
-        if down[KeyG]: cameraPitch -= turn
+        # Provisional controls for dialing in the camera and the hands.
+        tuner.tune(window, dt, duelTuningTargets())
         if window.buttonPressed[KeyEnter]:
           echo &"""
-    GameCameraHeight = {cameraHeight:.2f}'f32
-    GameCameraDistance = {cameraDistance:.2f}'f32
-    GameCameraPitch = {cameraPitch:.4f}'f32 # {radToDeg(cameraPitch):.1f} deg down
-    ActiveHandCenterY = {activeHandHeight:.2f}'f32
-    ActiveHandDistance = {activeHandDistance:.2f}'f32
-    OpponentHandCenterY = {opponentHandHeight:.2f}'f32
-    OpponentHandDistance = {opponentHandDistance:.2f}'f32
-    HandCardRoll = {handCardRoll:.4f}'f32 # {radToDeg(handCardRoll):.1f} deg"""
-      activeCameraPlayer = cameraPlayer()
+    DuelCamera = {duelCamera.literal()}
+    DuelPlayerHand = {duelPlayerHand.literal()}
+    DuelOpponentHand = {duelOpponentHand.literal()}
+    DuelSpell = {duelSpell.literal()}"""
       animationTime += dt
-      animations.advanceAnimations(dt)
-      discardFlights.advanceAnimations(dt)
-      activeVfx.advance(dt)
+      play.animations.advanceAnimations(dt)
+      play.discardFlights.advanceAnimations(dt)
+      play.activeVfx.advance(dt)
       sk.uiScale = hudScale(window)
       sk.mousePos = window.mousePos.vec2 / sk.uiScale
       when PostPanelControls:
@@ -1829,134 +1275,20 @@ when not defined(headless):
         botClassWait -= dt
         if botClassWait <= 0:
           let
-            playerClass = visualRng.rand(HeroClass)
-            opponentClass = visualRng.rand(HeroClass)
+            playerClass = play.visualRng.rand(HeroClass)
+            opponentClass = play.visualRng.rand(HeroClass)
           selectedClass = playerClass
           game = newGame(playerClass, opponentClass, gameSeed())
-          dyingMinions.setLen(0)
-          queuedEvents.setLen(0)
-          tossPicking = false
-          discardFlights.setLen(0)
+          play.resetTable()
           phase = PlayGame
-          animations.addDrawAnimation(game, game.currentPlayer,
-            cameraPlayer().seatSide(),
-            hidden = not handVisible(game.currentPlayer))
-          botWait = 1.2'f32
-          botPlays = 0
-          statusMessage = "Watching bot match..."
+          play.addOpeningHands(game, duelLayout)
+          botClock.wait = 1.2'f32
+          botClock.plays = 0
+          play.statusMessage = "Watching bot match..."
 
-      if phase == PlayGame and game.waitingToss and not tossPicking and
-          not pendingTargeting and presentationIdle() and not attackActive and
-          not game.gameOver:
-        let pending = game.pendingToss
-        if humanActs():
-          tossPicking = true
-          tossPicks.setLen(0)
-          selectedAttacker = 0
-          statusMessage = &"{pending.source}: choose cards to discard."
-        else:
-          botWait -= dt
-          if botWait <= 0:
-            if game.applyBotAction(game.nextBotAction()):
-              statusMessage = &"{pending.source}: the bot discards."
-            botWait = 1.2'f32
-
-      if phase == PlayGame and game.waitingTrigger and
-          not game.waitingToss and not pendingTargeting and
-          presentationIdle() and not attackActive and
-          not game.gameOver:
-        let waiting = game.waitingTriggerRules()
-        if humanActs():
-          pendingTargeting = true
-          pendingTrigger = true
-          pendingCard = waiting.card
-          pendingCardIndex = -1
-          pendingPicks.setLen(0)
-          pendingChoices = game.triggerChoices()
-          selectedAttacker = 0
-          statusMessage = &"{waiting.card.name}'s trigger needs a target."
-        else:
-          botWait -= dt
-          if botWait <= 0:
-            let before = game.copyGameState()
-            if game.applyBotAction(game.nextBotAction()):
-              animations.animateTransition(before, game,
-                cameraPlayer().seatSide())
-              statusMessage = &"{waiting.card.name}'s trigger resolves."
-            botWait = 1.2'f32
-
-      if phase == PlayGame and botVms[game.currentPlayer] != nil and
-          not game.waitingChoice and
-          presentationIdle() and not attackActive and
-          not game.gameOver:
-        botWait -= dt
-        if botWait <= 0:
-          let current = game.currentPlayer
-          discard game.takeVisualEvents()
-          let before = game.copyGameState()
-          let decision = botVms[current].runDecision(game)
-          case decision
-          of BotPlayedCard:
-            animations.animateTransition(before, game,
-              cameraPlayer().seatSide())
-            inc botPlays
-            statusMessage = "Bot is playing..."
-          of BotEndedTurn:
-            let attackers = game.eligibleAttackers()
-            if attackers.len > 0:
-              attackActive = true
-              attackSteps = attackers
-              attackTarget = heroChoice((game.currentPlayer + 1) mod PlayerCount)
-              attackPoint = attackPointFor(attackTarget)
-              attackIndex = 0
-              attackForward = true
-              attackElapsed = 0
-              attackDamageApplied = false
-              attackFinishTurn = true
-              statusMessage = "Bot is attacking..."
-            else:
-              game.finishTurn()
-              animations.animateTransition(before, game,
-                cameraPlayer().seatSide())
-              botPlays = 0
-              if botVms[game.currentPlayer] == nil:
-                statusMessage = "Your turn. Select a card to play."
-              else:
-                statusMessage = "Bot is thinking..."
-          of BotFailed:
-            statusMessage = "Bot error: " & botVms[current].lastError
-          botWait = 1.2'f32
-
-      if attackActive:
-        attackElapsed += dt
-        if attackForward:
-          if attackElapsed >= AttackLungeDuration:
-            if not attackDamageApplied:
-              discard game.attack(attackSteps[attackIndex], attackTarget)
-              attackDamageApplied = true
-            attackForward = false
-            attackElapsed = 0
-        else:
-          if attackElapsed >= AttackReturnDuration:
-            inc attackIndex
-            if attackIndex >= attackSteps.len:
-              attackActive = false
-              selectedAttacker = 0
-              if attackFinishTurn and not game.gameOver:
-                let before = game.copyGameState()
-                game.finishTurn()
-                animations.animateTransition(before, game,
-                  cameraPlayer().seatSide())
-                botPlays = 0
-                botWait = 1.2'f32
-                if botVms[game.currentPlayer] == nil:
-                  statusMessage = "Your turn. Select a card to play."
-                else:
-                  statusMessage = "Bot is thinking..."
-            else:
-              attackForward = true
-              attackElapsed = 0
-              attackDamageApplied = false
+      if phase == PlayGame:
+        discard play.updateBots(game, duelLayout, botVms, botClock, humanActs,
+          dt)
 
       let
         aspect = window.size.x.float32 / max(window.size.y.float32, 1)
@@ -1967,22 +1299,14 @@ when not defined(headless):
             1.0'f32
         cameraEye =
           if phase == ChooseClasses:
-            vec3(0, 6.2, 13.5)
+            classChoiceEye
           else:
-            vec3(
-              0,
-              cameraHeight,
-              cameraDistance * currentSide
-            )
+            duelCamera.seatEye(currentSide)
         cameraTarget =
           if phase == ChooseClasses:
-            vec3(0, 1.0, 0)
+            classChoiceTarget
           else:
-            cameraEye + vec3(
-              0,
-              -sin(cameraPitch),
-              -cos(cameraPitch) * currentSide
-            )
+            duelCamera.seatTarget(currentSide)
         view = lookAt(cameraEye, cameraTarget, vec3(0, 1, 0))
         projection = perspective(42.0'f32, aspect, CameraNear, CameraFar)
         viewProjection = projection * view
@@ -1992,290 +1316,46 @@ when not defined(headless):
         hoveredTarget = Canceled
         hoveredBoard = Canceled
       if phase == PlayGame:
-        if tossPicking:
-          hoverIndex = hoveredCard(window, viewProjection, game, currentSide,
+        if play.tossPicking:
+          hoverIndex = hoveredCard(window, viewProjection, game, duelLayout,
             handOwner = game.pendingToss.player)
         elif humanTurn() or (botVms[0] != nil and botVms[1] != nil):
-          hoverIndex = hoveredCard(
-            window, viewProjection, game, currentSide
-          )
+          hoverIndex = hoveredCard(window, viewProjection, game, duelLayout)
         if hoverIndex < 0:
           var boardChoices: seq[Choice]
           for owner in 0 ..< PlayerCount:
             for minion in game.players[owner].board:
-              if not animations.boardCardSuppressed(minion.id) and
-                  not queuedEvents.queuedSummon(minion.id):
+              if not play.animations.boardCardSuppressed(minion.id) and
+                  not play.queuedEvents.queuedSummon(minion.id):
                 boardChoices.add creatureChoice(owner, minion.id)
           hoveredBoard = hoveredCreatureTarget(window, viewProjection,
-            game, boardChoices, dyingMinions)
-        if tossPicking and humanActs() and presentationIdle() and
+            game, play, duelLayout, boardChoices)
+        if play.tossPicking and humanActs() and play.presentationIdle(game) and
             not game.gameOver:
-          let pending = game.pendingToss
-          if window.buttonPressed[KeyEscape] or
-              gamePressed(MouseRight):
-            tossPicks.setLen(0)
-            statusMessage = "Discard picks cleared."
-          elif gamePressed(MouseLeft) and hoverIndex >= 0:
-            let at = tossPicks.find(hoverIndex)
-            if at >= 0:
-              tossPicks.delete(at)
-            else:
-              tossPicks.add hoverIndex
-            if tossPicks.len == pending.count:
-              let picks = tossPicks
-              tossPicking = false
-              tossPicks.setLen(0)
-              statusMessage =
-                if game.resolvePendingToss(picks): &"{pending.source}: discarded."
-                else: "Those cards can't be discarded."
-        elif humanTurn() and presentationIdle() and
-            not pendingTargeting and not attackActive and not game.gameOver:
+          play.updateTossPicking(game, hoverIndex,
+            pick = gamePressed(MouseLeft),
+            clear = window.buttonPressed[KeyEscape] or gamePressed(MouseRight))
+        elif humanTurn() and play.presentationIdle(game) and
+            not play.pendingTargeting and not play.attackActive and not game.gameOver:
           if hoverIndex >= 0 and
               gamePressed(MouseLeft) and
               not finishRect(window).contains(sk.mousePos):
-            let
-              player = game.players[game.currentPlayer]
-              card = player.hand[hoverIndex]
-            if card.energyCost > player.energy:
-              statusMessage =
-                &"Not enough energy to play {card.name}."
-            elif card.needsChoice():
-              if card.kind != Spell:
-                let
-                  sourcePose = handPoses(
-                    game.currentPlayer,
-                    player.hand.len,
-                    currentSide
-                  )[hoverIndex]
-                  minionId = game.playMinion(hoverIndex)
-                if minionId != 0:
-                  # Its own slot, counting only the cards up to it: minions
-                  # its rules summon come after it and appear later.
-                  let
-                    playedIndex = game.minionLocation(minionId).index
-                    destinationPose = dyingMinions.liveBoardPose(
-                      game.currentPlayer, playedIndex, playedIndex + 1)
-                  animations.add newCardAnimation(
-                    card,
-                    player.heroClass,
-                    sourcePose,
-                    destinationPose,
-                    suppressBoardId = minionId
-                  )
-                  pendingCard = card
-                  pendingCardIndex = -1
-                  pendingPicks.setLen(0)
-                  pendingChoices = game.availableChoices(card)
-                  hoverIndex = -1
-                  if pendingChoices.selectableTargetCount() == 0:
-                    discard game.runMinionRules(card, NoTarget,
-                      sourceId = minionId)
-                    pendingChoices.setLen(0)
-                    statusMessage =
-                      &"{card.name} enters play without a target."
-                  else:
-                    pendingTargeting = true
-                    selectedAttacker = 0
-                    statusMessage =
-                      &"{card.name} enters play. Click a highlighted minion or the empty board."
-              else:
-                pendingCard = card
-                pendingCardIndex = hoverIndex
-                pendingPicks.setLen(0)
-                pendingChoices = game.availableChoices(hoverIndex)
-                if pendingChoices.len == 0:
-                  pendingCardIndex = -1
-                  pendingChoices.setLen(0)
-                  statusMessage =
-                    &"{card.name} has no valid targets."
-                else:
-                  pendingTargeting = true
-                  selectedAttacker = 0
-                  statusMessage =
-                    &"Click the highlighted avatar for {card.name}."
-            else:
-              let sourcePose = handPoses(
-                game.currentPlayer,
-                player.hand.len,
-                currentSide
-              )[hoverIndex]
-              case card.kind
-              of Minion, Trinket:
-                let minionId = game.playMinion(hoverIndex)
-                if minionId != 0:
-                  discard game.runMinionRules(card, sourceId = minionId)
-                  # Its own slot, counting only the cards up to it: minions
-                  # its rules summon come after it and appear later.
-                  let
-                    playedIndex = game.minionLocation(minionId).index
-                    destinationPose = dyingMinions.liveBoardPose(
-                      game.currentPlayer, playedIndex, playedIndex + 1)
-                  animations.add newCardAnimation(
-                    card,
-                    player.heroClass,
-                    sourcePose,
-                    destinationPose,
-                    suppressBoardId = minionId
-                  )
-                  statusMessage = &"{card.name} enters the board."
-                  hoverIndex = -1
-              of Spell:
-                if game.playCard(hoverIndex):
-                  let destinationPose = stackTopPose(
-                    discardPose(game.currentPlayer),
-                    game.players[game.currentPlayer].discardPile.len
-                  )
-                  animations.add newCardAnimation(
-                    card,
-                    player.heroClass,
-                    sourcePose,
-                    destinationPose,
-                    suppressDiscardOwner = game.currentPlayer
-                  )
-                  statusMessage =
-                    &"{card.name} resolves and is discarded."
-                  hoverIndex = -1
-          elif gamePressed(MouseLeft) and
-              not finishRect(window).contains(sk.mousePos):
-            let
-              attackable =
-                if selectedAttacker != 0: game.attackTargets(selectedAttacker)
-                else: @[]
-              clicked = hoveredWorldTarget(window, viewProjection, game,
-                attackable, dyingMinions)
-            if not clicked.isCanceled:
-              attackActive = true
-              attackSteps = @[selectedAttacker]
-              attackTarget = clicked
-              attackPoint = attackPointFor(clicked)
-              attackIndex = 0
-              attackForward = true
-              attackElapsed = 0
-              attackDamageApplied = false
-              attackFinishTurn = false
-              statusMessage = "Attacking!"
-            elif hoveredBoard.kind == CreatureChoice and
-                hoveredBoard.owner == game.currentPlayer:
-              let minionId = hoveredBoard.creatureId
-              if minionId == selectedAttacker:
-                selectedAttacker = 0
-                statusMessage = "Attack canceled."
-              elif game.attackTargets(minionId).len > 0:
-                selectedAttacker = minionId
-                statusMessage =
-                  "Click an enemy minion or hero to attack. Right-click cancels."
-              else:
-                statusMessage = "That minion can't attack this turn."
-          elif selectedAttacker != 0 and
-              (gamePressed(MouseRight) or
-                window.buttonPressed[KeyEscape]):
-            selectedAttacker = 0
-            statusMessage = "Attack canceled."
-        elif humanActs() and pendingTargeting and presentationIdle() and
+            if play.playHandCard(game, duelLayout, hoverIndex):
+              hoverIndex = -1
+          else:
+            play.updateAttack(game, duelLayout, window, viewProjection,
+              hoveredBoard,
+              pick = gamePressed(MouseLeft) and
+                not finishRect(window).contains(sk.mousePos),
+              cancel = gamePressed(MouseRight) or
+                window.buttonPressed[KeyEscape])
+        elif humanActs() and play.pendingTargeting and play.presentationIdle(game) and
             not game.gameOver:
-          hoveredTarget = hoveredWorldTarget(
-            window,
-            viewProjection,
-            game,
-            pendingChoices,
-            dyingMinions
-          )
-          let
-            card = pendingCard
-            pendingRules =
-              if pendingTrigger: game.waitingTriggerRules().rules
-              else: card.rules
-          if pendingTrigger and (window.buttonPressed[KeyEscape] or
-              gamePressed(MouseRight)):
-            statusMessage =
-              &"{card.name}'s trigger can't be canceled: choose a target."
-          elif window.buttonPressed[KeyEscape] or
-              gamePressed(MouseRight):
-            if card.kind != Spell:
-              discard game.runMinionRules(card, NoTarget)
-              statusMessage =
-                &"{card.name}'s rule finishes without a target."
-            else:
-              statusMessage = &"{card.name} canceled."
-            pendingTargeting = false
-            pendingCardIndex = -1
-            pendingChoices.setLen(0)
-          elif gamePressed(MouseLeft) and
-              not finishRect(window).contains(sk.mousePos):
-            var selectedChoice = hoveredTarget
-            if selectedChoice.isCanceled and
-                card.kind != Spell and
-                hoverIndex < 0 and
-                mouseOverBoard(window, viewProjection) and
-                pendingChoices.choiceIsLegal(NoTarget):
-              selectedChoice = NoTarget
-            if not selectedChoice.isCanceled and
-                pendingPicks.len + 1 < pendingRules.targetCount():
-              # More targets to choose (Duel): keep the pick, offer the next.
-              pendingPicks.add selectedChoice
-              pendingChoices =
-                if pendingTrigger:
-                  game.triggerChoices(pendingPicks)
-                elif card.kind != Spell:
-                  game.availableChoices(card, pendingPicks)
-                else:
-                  game.availableChoices(pendingCardIndex, pendingPicks)
-              statusMessage =
-                &"Choose target {pendingPicks.len + 1} of " &
-                  &"{pendingRules.targetCount()} for {card.name}."
-            elif not selectedChoice.isCanceled:
-              var
-                spellAnimation = false
-                spellSourcePose: CardPose
-                spellClass: HeroClass
-              if card.kind == Spell and
-                  pendingCardIndex >= 0 and
-                  pendingCardIndex <
-                    game.players[game.currentPlayer].hand.len:
-                spellAnimation = true
-                spellClass =
-                  game.players[game.currentPlayer].heroClass
-                spellSourcePose = handPoses(
-                  game.currentPlayer,
-                  game.players[game.currentPlayer].hand.len,
-                  currentSide
-                )[pendingCardIndex]
-              let resolved =
-                if pendingTrigger:
-                  game.resolvePendingTrigger(pendingPicks & selectedChoice)
-                elif card.kind != Spell:
-                  game.runMinionRules(card, pendingPicks & selectedChoice)
-                else:
-                  game.playCard(pendingCardIndex, pendingPicks & selectedChoice)
-              if resolved and spellAnimation:
-                let destinationPose = stackTopPose(
-                  discardPose(game.currentPlayer),
-                  game.players[game.currentPlayer].discardPile.len
-                )
-                animations.add newCardAnimation(
-                  card,
-                  spellClass,
-                  spellSourcePose,
-                  destinationPose,
-                  suppressDiscardOwner = game.currentPlayer
-                )
-              if resolved:
-                statusMessage =
-                  if pendingTrigger:
-                    &"{card.name}'s trigger resolves."
-                  elif card.kind != Spell:
-                    if selectedChoice.isNoTarget:
-                      &"{card.name}'s rule finishes without a target."
-                    else:
-                      &"{card.name}'s rule resolves."
-                  else:
-                    &"{card.name} resolves and is discarded."
-              else:
-                statusMessage = &"{card.name} could not resolve."
-              pendingTargeting = false
-              pendingTrigger = false
-              pendingCardIndex = -1
-              pendingChoices.setLen(0)
+          hoveredTarget = play.updateTargeting(game, duelLayout, window,
+            viewProjection, hoverIndex,
+            pick = gamePressed(MouseLeft) and
+              not finishRect(window).contains(sk.mousePos),
+            cancel = window.buttonPressed[KeyEscape] or gamePressed(MouseRight))
 
       when defined(takeScreenshot):
         if getEnv("AWM_CAPTURE_NO_HOVER") == "1":
@@ -2283,8 +1363,8 @@ when not defined(headless):
           hoveredBoard = Canceled
           hoveredTarget = Canceled
         if getEnv("AWM_DEMO_HALO") == "1":
-          if pendingTargeting:
-            for choice in pendingChoices:
+          if play.pendingTargeting:
+            for choice in play.pendingChoices:
               if choice.kind == CreatureChoice:
                 hoveredBoard = choice
                 hoveredTarget = choice
@@ -2295,345 +1375,28 @@ when not defined(headless):
           else:
             hoverIndex = 0
 
-      var
-        attackHoverTarget = Canceled
-        attackChoices: seq[Choice]
-      if selectedAttacker != 0 and not attackActive:
-        attackChoices = game.attackTargets(selectedAttacker)
-        if attackChoices.len == 0:
-          # The attacker left the board or can no longer attack.
-          selectedAttacker = 0
+      var attackHoverTarget = Canceled
+      let attackChoices = play.attackChoices(game)
       if humanTurn() and attackChoices.len > 0 and
-          not pendingTargeting and presentationIdle():
-        attackHoverTarget = hoveredWorldTarget(window, viewProjection, game,
-          attackChoices, dyingMinions)
+          not play.pendingTargeting and play.presentationIdle(game):
+        attackHoverTarget = hoveredWorldTarget(window, viewProjection, game, play,
+          duelLayout, attackChoices)
 
       if phase == PlayGame:
-        # Visual events play beat by beat. A beat waits until the previous
-        # beats' animations and effects finish; a draw right after a draw
-        # only waits 0.25 s, so draws overlap. Until its beat plays, a slain
-        # card holds its place and a summoned or drawn card stays hidden.
-        for event in game.takeVisualEvents():
-          if event.kind == DeathVfx:
-            var dying = DyingMinion(target: event.target, card: event.card,
-              power: event.power,
-              heroClass: game.players[event.target.owner].heroClass,
-              boardIndex: event.boardIndex, held: true)
-            if attackActive and attackIndex < attackSteps.len and
-                attackSteps[attackIndex] == event.target.creatureId:
-              # A slain attacker stays where its lunge landed.
-              dying.atLunge = true
-              dying.lungePoint = attackLungePoint(dyingMinions.liveBoardPose(
-                event.target.owner, event.boardIndex, event.boardCount))
-            dyingMinions.add dying
-          elif event.kind == BounceVfx:
-            # Keep the card in its slot until its beat sends it home.
-            dyingMinions.add DyingMinion(target: event.target, card: event.card,
-              heroClass: game.players[event.target.owner].heroClass,
-              boardIndex: event.boardIndex, held: true, bouncing: true)
-          queuedEvents.add event
-        # Before any beat plays: VFX positions are fixed when they start, so
-        # the layout must already leave out summons that haven't appeared.
-        countHiddenSummons()
-        while queuedEvents.len > 0:
-          let beat = queuedEvents[0].beat
-          var
-            count = 0
-            drawOnly = true
-          while count < queuedEvents.len and queuedEvents[count].beat == beat:
-            if queuedEvents[count].kind != DrawVfx:
-              drawOnly = false
-            inc count
-          # A slain card whose death already played is part of that beat's
-          # animation until it has left the board for its discard pile.
-          var slainLeaving = discardFlights.len > 0
-          for dying in dyingMinions:
-            if not dying.held:
-              slainLeaving = true
-          let ready =
-            if drawOnly and lastBeatWasDraw:
-              animationTime - lastDrawStart >= 0.25'f32
-            else:
-              animations.len == 0 and activeVfx.len == 0 and not slainLeaving
-          if not ready:
-            break
-          for event in queuedEvents[0 ..< count]:
-            case event.kind
-            of DrawVfx:
-              let owner = event.target.owner
-              animations.addDrawAnimation(game, owner,
-                cameraPlayer().seatSide(), hidden = not handVisible(owner),
-                handIndex = event.boardIndex)
-            of DeathVfx:
-              for dying in dyingMinions.mitems:
-                if dying.held and dying.target == event.target:
-                  dying.held = false
-                  break
-            of SummonVfx:
-              discard  # Leaving the queue is what reveals the minion.
-            of TossVfx:
-              let owner = event.target.owner
-              animations.add newCardAnimation(event.card,
-                game.players[owner].heroClass,
-                handPoses(owner, max(1, event.boardCount),
-                  cameraPlayer().seatSide())[
-                    clamp(event.handIndex, 0, max(0, event.boardCount - 1))],
-                stackTopPose(discardPose(owner),
-                  game.players[owner].discardPile.len),
-                suppressDiscardOwner = owner)
-            of BounceVfx:
-              let
-                owner = event.target.owner
-                source = presentedCardPose(event.target, event.boardIndex,
-                  event.boardCount)
-              for i in 0 ..< dyingMinions.len:
-                if dyingMinions[i].bouncing and
-                    dyingMinions[i].target == event.target:
-                  dyingMinions.delete(i)
-                  break
-              var flight = newCardAnimation(event.card,
-                game.players[owner].heroClass, source,
-                handPoses(owner, max(1, game.players[owner].hand.len),
-                  cameraPlayer().seatSide())[
-                    clamp(event.handIndex, 0,
-                      max(0, game.players[owner].hand.len - 1))],
-                arcHeight = 1.15'f32, suppressHandOwner = owner,
-                suppressHandIndex = event.handIndex, duration = 0.82'f32,
-                trackingTarget = event.target,
-                hidden = not handVisible(owner))
-              # Its bubble (same beat) forms first, then rides along.
-              flight.elapsed = -0.2'f32
-              animations.add flight
-            else:
-              let position =
-                if event.target.kind == HeroChoice:
-                  avatarPosition(event.target.owner) + vec3(0, 1.25, 0)
-                else:
-                  presentedCardPose(event.target, event.boardIndex,
-                    event.boardCount).position + vec3(0, CardHeight, 0)
-              activeVfx.add newVfx(event.kind, event.target, position,
-                visualRng.rand(0x7fff_ffff))
-          queuedEvents = queuedEvents[count .. ^1]
-          lastBeatWasDraw = drawOnly
-          if drawOnly:
-            lastDrawStart = animationTime
-          countHiddenSummons()
-        for effect in activeVfx.mitems:
-          if effect.kind == BubbleVfx:
-            for animation in animations:
-              if animation.trackingTarget == effect.target:
-                effect.position = animation.animationPose().position + vec3(0, CardHeight, 0)
-        for i in countdown(dyingMinions.high, 0):
-          let dying = dyingMinions[i]
-          var effectsPending = false
-          for effect in activeVfx:
-            if effect.target == dying.target:
-              effectsPending = true
-          if not effectsPending and not dying.held:
-            let owner = dying.target.owner
-            discardFlights.add newCardAnimation(dying.card, dying.heroClass,
-              dyingMinions.dyingPose(i, game.players[owner].board.len),
-              stackTopPose(discardPose(owner),
-                game.players[owner].discardPile.len),
-              suppressDiscardOwner = owner)
-            dyingMinions.delete(i)
+        play.presentVisualEvents(game, duelLayout, animationTime)
 
       solid.clear()
       cardSurfaces.clear()
       vfx.clear()
       if phase == ChooseClasses:
-        solid.addBox(
-          vec3(0, -0.3, 0),
-          vec3(15, 0.55, 7),
-          vec4(0.20, 0.24, 0.30, 1),
-          sideFactor = 0.5
-        )
-        for heroClass in HeroClass:
-          let x = (heroClass.ord.float32 - 1.0'f32) * 4.2'f32
-          solid.addBox(
-            vec3(x, 0.05, 0),
-            vec3(3.0, 0.18, 3.0),
-            heroClass.classColor().darker(0.72),
-            sideFactor = 0.55
-          )
+        addClassStage()
       else:
-        for playerIndex in 0 ..< PlayerCount:
-          let
-            player = game.players[playerIndex]
-            hiddenDiscardCards =
-              animations.discardCardsSuppressed(playerIndex) +
-              discardFlights.discardCardsSuppressed(playerIndex) +
-              dyingDiscards(playerIndex)
-          solid.addCardStack(
-            cardSurfaces, sk,
-            deckPose(playerIndex),
-            player.deck.len,
-            player.heroClass,
-          )
-          solid.addCardStack(
-            cardSurfaces, sk,
-            discardPose(playerIndex),
-            max(0, player.discardPile.len - hiddenDiscardCards),
-            player.heroClass,
-            hidden = false,
-            card =
-              if player.discardPile.len > hiddenDiscardCards:
-                player.discardPile[player.discardPile.high - hiddenDiscardCards]
-              else:
-                Card()
-          )
-          for minionIndex in 0 ..< player.board.len:
-            let
-              pose = dyingMinions.liveBoardPose(playerIndex, minionIndex,
-                player.board.len)
-              minion = player.board[minionIndex]
-              minionChoice = creatureChoice(
-                playerIndex,
-                minion.id
-              )
-              targetable =
-                (pendingTargeting and
-                  pendingChoices.choiceIsLegal(minionChoice)) or
-                attackChoices.choiceIsLegal(minionChoice)
-              attackerSelected =
-                playerIndex == game.currentPlayer and
-                minion.id == selectedAttacker
-            if animations.boardCardSuppressed(minion.id) or
-                queuedEvents.queuedSummon(minion.id):
-              continue
-            if attackActive and attackIndex < attackSteps.len and
-                attackSteps[attackIndex] == minion.id:
-              continue
-            solid.addCard(
-              cardSurfaces, sk,
-              pose,
-              player.heroClass,
-              false,
-              true,
-              hoveredBoard == minionChoice or attackerSelected,
-              targetable or attackerSelected,
-              card = minion.card,
-              currentPower = minion.power,
-              currentToughness = minion.currentToughness,
-              damageFlash = activeVfx.flashStrength(minionChoice),
-              lostKeywords = minion.lostKeywords
-            )
-            vfx.addCardGlow(pose,
-                hoveredBoard == minionChoice or attackerSelected,
-                targetable or attackerSelected,
-                pendingTargeting or attackerSelected,
-                animationTime)
-
-        let current = cameraPlayer()
-        for i, pose in handPoses(
-            current,
-            game.players[current].hand.len,
-            currentSide
-        ):
-          if animations.handCardSuppressed(current, i) or
-              queuedEvents.queuedDraw(current, i):
-            continue
-          let
-            card = game.players[current].hand[i]
-            tossingHere = tossPicking and current == game.pendingToss.player
-            picked = tossingHere and i in tossPicks
-          solid.addCard(
-            cardSurfaces, sk,
-            pose,
-            game.players[current].heroClass,
-            not handVisible(current),
-            (humanTurn() and card.energyCost <= game.players[current].energy) or
-              tossingHere,
-            (
-              i == hoverIndex or
-              (pendingTargeting and i == pendingCardIndex)
-            ),
-            targetable = picked,
-            card = card
-          )
-          vfx.addCardGlow(pose,
-              i == hoverIndex or (pendingTargeting and i == pendingCardIndex),
-              picked, pendingTargeting or tossingHere, animationTime)
-
-        let opponent = (current + 1) mod PlayerCount
-        for i, pose in handPoses(
-            opponent,
-            game.players[opponent].hand.len,
-            currentSide
-        ):
-          if animations.handCardSuppressed(opponent, i) or
-              queuedEvents.queuedDraw(opponent, i):
-            continue
-          solid.addCard(
-            cardSurfaces, sk,
-            pose,
-            game.players[opponent].heroClass,
-            not handVisible(opponent),
-            false,
-            false,
-            card = game.players[opponent].hand[i]
-          )
-
-        for animation in animations & discardFlights:
-          solid.addCard(
-            cardSurfaces, sk,
-            animation.animationPose(),
-            animation.heroClass,
-            animation.hidden,
-            true,
-            false,
-            card = animation.card
-          )
-
-        for i, dying in dyingMinions:
-          solid.addCard(
-            cardSurfaces, sk,
-            dyingMinions.dyingPose(i,
-              game.players[dying.target.owner].board.len),
-            dying.heroClass,
-            false, true, false,
-            card = dying.card,
-            currentPower = dying.power,
-            currentToughness = 0,
-            damageFlash = activeVfx.flashStrength(dying.target)
-          )
-
-        if attackActive and attackIndex < attackSteps.len:
-          let
-            atkMinionId = attackSteps[attackIndex]
-            atkLocation = game.minionLocation(atkMinionId)
-          if atkLocation.found:
-            let
-              atkMinion = game.players[atkLocation.player].board[atkLocation.index]
-              atkFromPose = dyingMinions.liveBoardPose(atkLocation.player,
-                atkLocation.index, game.players[atkLocation.player].board.len)
-              atkForwardPos = CardPose(position: attackLungePoint(atkFromPose),
-                yaw: atkFromPose.yaw)
-              atkDuration = if attackForward: AttackLungeDuration
-                else: AttackReturnDuration
-              atkRaw = clamp(attackElapsed / atkDuration, 0.0'f32, 1.0'f32)
-              atkEased = atkRaw * atkRaw * (3.0'f32 - 2.0'f32 * atkRaw)
-            var atkPose: CardPose
-            if attackForward:
-              atkPose.position = atkFromPose.position +
-                (atkForwardPos.position - atkFromPose.position) * atkEased
-              atkPose.position.y += sin(PI.float32 * atkRaw) * 0.8'f32
-            else:
-              atkPose.position = atkForwardPos.position +
-                (atkFromPose.position - atkForwardPos.position) * atkEased
-              atkPose.position.y += sin(PI.float32 * atkRaw) * 0.4'f32
-            atkPose.yaw = atkFromPose.yaw
-            solid.addCard(
-              cardSurfaces, sk,
-              atkPose,
-              game.players[atkLocation.player].heroClass,
-              false, true, false,
-              card = atkMinion.card,
-              currentPower = atkMinion.power,
-              currentToughness = atkMinion.currentToughness,
-              lostKeywords = atkMinion.lostKeywords
-            )
-            vfx.addCardGlow(atkPose, true, true, true, animationTime)
+        addTableCards(solid, cardSurfaces, vfx, sk, play, game, duelLayout,
+          animationTime, cameraPlayer(), hoverIndex, hoveredBoard,
+          humanTurn(), attackChoices, play.selectedAttacker,
+          play.lungingMinion())
+        addAttackCard(solid, cardSurfaces, vfx, sk, play, game, duelLayout,
+          animationTime)
 
       if window.buttonPressed[KeyF8]:
         post.settings.enabled = not post.settings.enabled
@@ -2663,73 +1426,28 @@ when not defined(headless):
       glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
       glStencilFunc(GL_ALWAYS, 0, 0xff)
       if phase == ChooseClasses:
-        for heroClass in HeroClass:
-          let
-            x = (heroClass.ord.float32 - 1.0'f32) * 4.2'f32
-            chosen = selectedClass == heroClass
-          drawCharacter(
-            scene,
-            models[0][heroClass],
-            vec3(x, 0.15, 0),
-            0,
-            idleClips[0][heroClass],
-            animationTime,
-            tint =
-              if chosen:
-                color(1.08, 1.08, 1.08, 1)
-              else:
-                color(1, 1, 1, 1),
-            sizeFactor = if chosen: 1.06'f32 else: 1.0'f32
-          )
+        drawClassHeroes(selectedClass, animationTime)
       else:
         for playerIndex in 0 ..< PlayerCount:
           let
             player = game.players[playerIndex]
-            heroTarget = heroChoice(playerIndex)
-            spellTargetable =
-              pendingTargeting and
-              pendingChoices.choiceIsLegal(heroTarget)
-            attackTargetable =
-              attackChoices.choiceIsLegal(heroTarget) and not pendingTargeting
-            targetable = spellTargetable or attackTargetable
-            spellTargetHovered = spellTargetable and hoveredTarget == heroTarget
-            attackTargetHovered = attackTargetable and
-              attackHoverTarget == heroTarget
-            targetHovered = spellTargetHovered or attackTargetHovered
-            damageFlash = activeVfx.flashStrength(heroTarget)
+            look = play.heroLook(game, playerIndex, hoveredTarget,
+              attackChoices, attackHoverTarget)
           glStencilFunc(GL_ALWAYS, (playerIndex + 1).GLint, 0xff)
-          if targetable:
+          if look.targetable:
             vfx.addTargetRing(avatarPosition(playerIndex) + vec3(0, 0.04, 0),
-              cameraEye, 0.95, if targetHovered: 1.1'f32 else: 0.28'f32)
+              cameraEye, 0.95, if look.hovered: 1.1'f32 else: 0.28'f32)
+          let pose = heroClip(playerIndex, player.heroClass,
+            play.deathClock(game, playerIndex, animationTime), animationTime)
           drawCharacter(
             scene,
             models[playerIndex][player.heroClass],
             avatarPosition(playerIndex),
             if playerIndex == 0: PI.float32 else: 0,
-            idleClips[playerIndex][player.heroClass],
-            animationTime,
-            tint =
-              if damageFlash > 0:
-                color(1.0, 1.0, 1.0, 1)
-              elif targetHovered:
-                color(1.5, 0.52, 0.52, 1)
-              elif targetable:
-                color(1.18, 0.85, 0.85, 1)
-              elif pendingTargeting:
-                color(0.52, 0.52, 0.58, 1)
-              elif playerIndex == game.currentPlayer:
-                color(1.08, 1.08, 1.08, 1)
-              else:
-                color(0.72, 0.72, 0.78, 1),
-            sizeFactor =
-              if targetHovered:
-                1.08'f32
-              elif targetable:
-                1.02'f32
-              elif playerIndex == game.currentPlayer:
-                1.0'f32
-              else:
-                0.92'f32
+            pose.clip,
+            pose.time,
+            tint = look.tint,
+            sizeFactor = look.sizeFactor
           )
       finishCharacters(scene)
       glDisable(GL_STENCIL_TEST)
@@ -2741,12 +1459,9 @@ when not defined(headless):
       if phase == PlayGame:
         for playerIndex in 0 ..< PlayerCount:
           vfx.drawCharacterFlash(playerIndex + 1,
-            activeVfx.flashStrength(heroChoice(playerIndex)))
-        if attackActive and not attackTarget.isCanceled:
-          vfx.addTargetRing(
-            attackPoint + vec3(0, 0.04, 0),
-            cameraEye, 0.95, 0.8'f32)
-        vfx.addEffects(activeVfx, cameraEye)
+            play.activeVfx.flashStrength(heroChoice(playerIndex)))
+        vfx.addAttackRing(play, cameraEye)
+        vfx.addEffects(play.activeVfx, cameraEye)
         vfx.draw(viewProjection)
       post.present(window.size)
 
@@ -2769,281 +1484,83 @@ when not defined(headless):
             HudIvory, "Small")
 
       if phase == ChooseClasses:
-        sk.drawRect(
-          vec2(0),
-          vec2(hudSize(window).x, 180),
-          rgbx(14, 17, 24, 238)
-        )
-        sk.drawLabel(
-          "ARCHERS | WARRIORS | MAGES",
-          vec2(0, 15),
-          vec2(hudSize(window).x, 78),
-          rgbx(243, 218, 153, 255),
-          "H1",
-          CenterAlign
-        )
-        sk.drawLabel(
-          (if sessionOptions.human: "CHOOSE YOUR CLASS"
-           else: "BOTS ARE CHOOSING CLASSES..."),
-          vec2(0, 104),
-          vec2(hudSize(window).x, 48),
-          rgbx(221, 225, 233, 255),
-          "Default",
-          CenterAlign
-        )
+        drawClassHeader(sessionOptions.human)
         if sessionOptions.human:
-          for heroClass in HeroClass:
-            let
-              x = hudSize(window).x * 0.5'f32 +
-                (heroClass.ord.float32 - 1.0'f32) * 400.0'f32
-              rect = UiRect(
-                origin: vec2(x - 140, hudSize(window).y - 180),
-                size: vec2(280, 84)
-              )
-            if drawButton(
-                sk,
-                window,
-                rect,
-                heroClass.className()
-            ):
-              selectedClass = heroClass
-              game = newGame(
-                heroClass,
-                sessionOptions.opponentClass,
-                gameSeed()
-              )
-              dyingMinions.setLen(0)
-              queuedEvents.setLen(0)
-              tossPicking = false
-              discardFlights.setLen(0)
-              phase = PlayGame
-              animations.addDrawAnimation(game, game.currentPlayer,
-                cameraPlayer().seatSide(),
-                hidden = not handVisible(game.currentPlayer))
-              botWait = 1.2'f32
-              botPlays = 0
-              if game.currentPlayer == 0:
-                statusMessage = "Your turn. Select a card to play."
-              else:
-                statusMessage = "Your opponent is thinking..."
+          let picked = classButtons()
+          if picked.isSome:
+            let heroClass = picked.get
+            selectedClass = heroClass
+            game = newGame(
+              heroClass,
+              sessionOptions.opponentClass,
+              gameSeed()
+            )
+            play.resetTable()
+            phase = PlayGame
+            play.addOpeningHands(game, duelLayout)
+            botClock.wait = 1.2'f32
+            botClock.plays = 0
+            if game.currentPlayer == 0:
+              play.statusMessage = "Your turn. Select a card to play."
+            else:
+              play.statusMessage = "Your opponent is thinking..."
       else:
         drawPlayerPanel(sk, window, game, 0, sessionOptions.human, animationTime)
         drawPlayerPanel(sk, window, game, 1, sessionOptions.human, animationTime)
-        drawTurnHeader(sk, window, game, sessionOptions.human, statusMessage)
+        drawTurnHeader(sk, window, game, sessionOptions.human, play.statusMessage)
         let inspectingCard = drawCardReadingView(
           sk,
           window,
           game,
           viewProjection,
-          animations,
+          play,
+          duelLayout,
           hoverIndex,
           false,
-          dying = dyingMinions,
-          discardFlights = discardFlights,
-          queued = queuedEvents,
-          handOwner = if tossPicking: game.pendingToss.player else: -1
+          handOwner = if play.tossPicking: game.pendingToss.player else: -1
         )
         drawDeckLabels(sk, window, game, viewProjection, inspectingCard)
         sk.drawLabel(
-          if attackActive:
-            "Minions are attacking..."
-          elif selectedAttacker != 0:
-            "Click an enemy minion or hero to attack. Right-click cancels."
-          elif tossPicking:
-            "Click cards in your hand to discard them."
-          elif pendingTargeting and pendingTrigger:
-            "Choose a highlighted target, or the empty board for none."
-          elif pendingTargeting and pendingCard.kind != Spell:
-            "Choose a highlighted target. Right-click for no target."
-          elif pendingTargeting:
-            "Choose a highlighted target. Right-click cancels."
-          elif sessionOptions.human:
-            "Hover to inspect a card. Select a card to play."
-          else:
-            "Hover to inspect a card.",
+          play.playHelp(sessionOptions.human),
           vec2(32, hudSize(window).y - 66),
           vec2(820, 42),
           HudMuted,
           "Small"
         )
-        let
-          finish = finishRect(window)
-          canFinish = humanTurn() and not game.waitingChoice and
-            not pendingTargeting and not attackActive and not game.gameOver and
-            presentationIdle()
-          finishClicked = drawButton(sk, window, finish,
+        let canFinish = humanTurn() and not game.waitingChoice and
+          not play.pendingTargeting and not play.attackActive and not game.gameOver and
+          play.presentationIdle(game)
+        if drawEndTurnButton(sk, window,
             (if game.gameOver: "MATCH ENDED"
              elif not humanTurn(): "OPPONENT"
-             else: "END TURN"), enabled = canFinish)
-          finishShortcut = when defined(awmLayoutTuning): false
-            else: window.buttonPressed[KeyEnter]
-        sk.drawLabel(if canFinish: "Press Enter" else: "",
-          finish.origin + vec2(0, finish.size.y + 6), vec2(finish.size.x, 32),
-          HudMuted, "Small", CenterAlign)
-        if finishClicked or (canFinish and finishShortcut):
-          selectedAttacker = 0
+             else: "END TURN"), canFinish):
+          play.selectedAttacker = 0
           game.finishTurn()
-          botWait = 1.2'f32
-          botPlays = 0
-          statusMessage = "Your opponent is thinking..."
-          pendingTargeting = false
-          pendingCardIndex = -1
-          pendingChoices.setLen(0)
+          botClock.wait = 1.2'f32
+          botClock.plays = 0
+          play.statusMessage = "Your opponent is thinking..."
+          play.pendingTargeting = false
+          play.pendingCardIndex = -1
+          play.pendingChoices.setLen(0)
 
-        if tossPicking:
-          let
-            pending = game.pendingToss
-            accent = HudClassInk[game.players[pending.player].heroClass]
-            ask =
-              if pending.count == 1: "Choose a card to discard."
-              else: &"Choose {pending.count} cards to discard " &
-                &"({tossPicks.len} of {pending.count} chosen)."
-            banner = UiRect(
-              origin: vec2(hudSize(window).x * 0.5'f32 - 430, HudHelperY),
-              size: vec2(860, 112)
-            )
-          sk.drawHudNotice(banner)
-          sk.drawLabel(ask, banner.origin + vec2(22, 10),
-            vec2(banner.size.x - 44, 30), accent, "Prompt", CenterAlign)
-          sk.drawLabel(&"{pending.source}: {pending.text}",
-            banner.origin + vec2(22, 46), vec2(banner.size.x - 44, 28),
-            HudIvory, "Small", CenterAlign)
-          sk.drawLabel("Click cards in your hand. Right-click clears your picks.",
-            banner.origin + vec2(22, 76), vec2(banner.size.x - 44, 28),
-            HudMuted, "Small", CenterAlign)
+        sk.drawTossPrompt(window, play, game)
+        sk.drawTargetPrompt(window, play, game)
 
-        if pendingTargeting:
-          let
-            card = pendingCard
-            rules =
-              if pendingTrigger: game.waitingTriggerRules().rules
-              else: card.rules
-            step = pendingPicks.len
-            count = rules.targetCount()
-            # The rules' own text: "Choose a minion." for "Deal 1 damage to
-            # a minion."
-            prompt = rules.targetPrompt(card, step)
-            accent =
-              HudClassInk[game.players[game.actingPlayer()].heroClass]
-            progress = if count > 1: &" ({step + 1} of {count})" else: ""
-            source = if pendingTrigger: &"{card.name}'s trigger" else: card.name
-            hint =
-              if pendingTrigger:
-                "Click the empty board for no target."
-              elif card.kind != Spell:
-                "Right-click or the empty board: no target."
-              else:
-                "Right-click cancels."
-            banner = UiRect(
-              origin: vec2(
-                hudSize(window).x * 0.5'f32 - 430,
-                HudHelperY
-              ),
-              size: vec2(860, 112)
-            )
-          sk.drawHudNotice(banner)
-          sk.drawLabel(
-            prompt.choose & progress,
-            banner.origin + vec2(22, 10),
-            vec2(banner.size.x - 44, 30),
-            accent,
-            "Prompt",
-            CenterAlign
-          )
-          sk.drawLabel(
-            &"{source}: {prompt.rule}",
-            banner.origin + vec2(22, 46),
-            vec2(banner.size.x - 44, 28),
-            HudIvory,
-            "Small",
-            CenterAlign
-          )
-          sk.drawLabel(
-            hint,
-            banner.origin + vec2(22, 76),
-            vec2(banner.size.x - 44, 28),
-            HudMuted,
-            "Small",
-            CenterAlign
-          )
+        sk.drawCombatPrompt(window, play, game)
 
-        if selectedAttacker != 0 and not pendingTargeting:
-          let
-            accent =
-              HudClassInk[game.players[game.currentPlayer].heroClass]
-            instruction =
-              if attackActive: "Attacking!"
-              else: "Click an enemy minion or hero. Right-click cancels."
-            banner = UiRect(
-              origin: vec2(
-                hudSize(window).x * 0.5'f32 - 430,
-                HudHelperY
-              ),
-              size: vec2(860, 84)
-            )
-          sk.drawHudNotice(banner)
-          sk.drawLabel(
-            "COMBAT",
-            banner.origin + vec2(22, 10),
-            vec2(banner.size.x - 44, 30),
-            accent,
-            "Prompt",
-            CenterAlign
-          )
-          sk.drawLabel(
-            instruction,
-            banner.origin + vec2(22, 46),
-            vec2(banner.size.x - 44, 28),
-            HudIvory,
-            "Small",
-            CenterAlign
-          )
-
-        if game.gameOver and presentationIdle() and not attackActive:
-          let
-            winnerAccent =
-              game.players[game.winner].heroClass.classUiColor()
-            winnerText =
-              if sessionOptions.human:
-                (if game.winner == 0: "YOU WIN!" else: "YOU LOSE!")
-              else:
-                &"PLAYER {game.winner + 1} WINS!"
-            winnerDetail =
-              &"Turn {game.turnNumber} — " &
-              game.players[game.winner].heroClass.className() &
-              " is victorious."
-            overlay = UiRect(
-              origin: vec2(
-                hudSize(window).x * 0.5'f32 - 380,
-                hudSize(window).y * 0.5'f32 - 80),
-              size: vec2(760, 160))
-          sk.drawHudNotice(overlay)
-          sk.drawLabel(
-            winnerText,
-            overlay.origin + vec2(0, 18),
-            vec2(overlay.size.x, 70),
-            winnerAccent,
-            "H1",
-            CenterAlign
-          )
-          sk.drawLabel(
-            winnerDetail,
-            overlay.origin + vec2(0, 100),
-            vec2(overlay.size.x, 40),
-            rgbx(205, 209, 219, 255),
-            "Default",
-            CenterAlign
-          )
+        if not play.attackActive:
+          sk.drawMatchResult(window, play, game,
+            if sessionOptions.human: 0 else: -1)
 
       when defined(emscripten):
         let role = if sessionOptions.human: "Human player" else: "Bot match"
-        var summary = role & ". " & statusMessage
+        var summary = role & ". " & play.statusMessage
         if phase == PlayGame:
           summary.add &" Turn {game.turnNumber}. Active player {game.currentPlayer + 1}."
           for owner, player in game.players:
             summary.add &" Player {owner + 1} {player.heroClass.className()}: life {player.life}, energy {player.energy}/{player.totalEnergy}, hand {player.hand.len}, board {player.board.len}, deck {player.deck.len}, discard {player.discardPile.len}."
-          if humanTurn() and not pendingTargeting and
-              presentationIdle():
+          if humanTurn() and not play.pendingTargeting and
+              play.presentationIdle(game):
             summary.add " Ready for your action."
         publishStatus(summary.cstring)
 

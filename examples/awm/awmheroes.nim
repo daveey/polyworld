@@ -16,6 +16,7 @@ const
     "Idle_Loop", "Sword_Idle", "Spell_Simple_Idle_Loop"
   ]
   FitClip = "Idle_Loop" ## Neutral pose used to measure every hero's body.
+  HeroDeathClip* = "Death01" ## Played once when a hero dies; holds its end.
 
 type
   RosterEntry = object
@@ -54,6 +55,7 @@ proc heroClips(heroClass: HeroClass): seq[string] =
   result.add FitClip
   if HeroIdleClips[heroClass] != FitClip:
     result.add HeroIdleClips[heroClass]
+  result.add HeroDeathClip
 
 proc loadHeroModel*(
   manifest: Manifest,

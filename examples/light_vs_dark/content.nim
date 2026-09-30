@@ -10,9 +10,10 @@ import
 ## Match shape
 
 const
-  GridSide* = 128'i32
-    ## Tiles along one edge of the map, matching `pathing.GridTiles`.
-  GridCells* = GridSide * GridSide
+  DefaultMapSize* = 90'i32
+    ## Baseline tile side length for a two-player match.
+  DefaultSpawnDistance* = 45'i32
+    ## Minimum distance between starting bases with compact map defaults.
   TickRate* = SharedTickRate
     ## Simulation ticks per second.
   DecisionTicks* = 1'i32
@@ -23,7 +24,8 @@ const
   DefaultSeconds* = 1_200'i32
     ## Twenty minutes, the default match length.
   DefaultSeed* = 2026'i32
-  PlayerCount* = 2
+  DefaultPlayerCount* = 2
+  FactionCount* = 2
   LightPlayer* = 0'i32
   DarkPlayer* = 1'i32
 
@@ -45,28 +47,6 @@ proc tile2*(x, y: int32): Tile2 =
   ## Builds one tile coordinate from wider integers.
   Tile2(x: int16(x), y: int16(y))
 
-proc inGrid*(x, y: int32): bool =
-  ## Returns whether a coordinate pair names a tile on the map.
-  x >= 0 and x < GridSide and y >= 0 and y < GridSide
-
-proc inGrid*(tile: Tile2): bool =
-  ## Returns whether a tile coordinate names a tile on the map.
-  inGrid(int32(tile.x), int32(tile.y))
-
-proc tileIndex*(x, y: int32): int32 =
-  ## Returns the flat row-major index of an on-map tile.
-  y * GridSide + x
-
-proc tileIndex*(tile: Tile2): int32 =
-  ## Returns the flat row-major index of an on-map tile.
-  tileIndex(int32(tile.x), int32(tile.y))
-
-proc mirrorTile*(x, y: int32): (int32, int32) =
-  ## Rotates a tile 180 degrees about the centre of the map. The two starting
-  ## positions map onto each other under this, which is what makes the
-  ## generated map fair by construction.
-  (GridSide - 1 - x, GridSide - 1 - y)
-
 proc chebyshev*(first, second: Tile2): int32 =
   ## Returns the king-move distance between two tiles.
   max(abs(int32(first.x) - int32(second.x)),
@@ -81,10 +61,10 @@ proc chebyshev*(first, second: Tile2): int32 =
 const
   NoEntity* = 0'i32
   FirstMineId* = 10'i32
-  LastMineId* = 99'i32
-  FirstBuildingId* = 1_000'i32
-  LastBuildingId* = 999_999'i32
-  FirstUnitId* = 1_000_000'i32
+  LastMineId* = 999_999'i32
+  FirstBuildingId* = 1_000_000'i32
+  LastBuildingId* = 999_999_999'i32
+  FirstUnitId* = 1_000_000_000'i32
   LastUnitId* = int32.high - 1
 
 proc isMineId*(id: int32): bool =
@@ -272,14 +252,14 @@ const DarkUnits: array[UnitKind, UnitStats] = [
   )
 ]
 
-const UnitTable*: array[PlayerCount, array[UnitKind, UnitStats]] = [
+const UnitTable*: array[FactionCount, array[UnitKind, UnitStats]] = [
   LightUnits,
   DarkUnits
 ]
 
 proc unitOf*(player: int32, kind: UnitKind): UnitStats =
   ## Returns one side's stats for a unit kind.
-  UnitTable[player][kind]
+  UnitTable[player mod FactionCount][kind]
 
 proc attackDamage*(stats: UnitStats, armor: int32): int32 =
   ## Piercing always lands; basic is reduced by armor and never below zero.
@@ -399,11 +379,11 @@ type
 proc contentHash*(): uint64 =
   ## Hashes every tuning value that can change how a match plays out.
   var hash = HashySeed
-  hash.addHashy(GridSide)
+  hash.addHashy(DefaultMapSize)
   hash.addHashy(TickRate)
   hash.addHashy(DecisionTicks)
   hash.addHashy(VisionTicks)
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< FactionCount:
     for kind in UnitKind:
       let stats = UnitTable[player][kind]
       hash.addHashy(int32(player))

@@ -26,7 +26,9 @@ proc fail(message: string) {.noreturn.} =
   ## Raises one replay-specific error.
   raise newException(ReplayError, message)
 
-proc validateConfig*[Preset](config: MatchConfig[Preset], count: int) =
+proc validateConfig*[Preset, Draft](
+    config: MatchConfig[Preset, Draft], count: int
+) =
   ## Checks the recorded match config and its ordered public player records.
   if config.players.len != count:
     fail("replay configuration players do not match its seats")

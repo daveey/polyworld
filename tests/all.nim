@@ -15,6 +15,7 @@ import
   test_policy_packages,
   test_gota_neural,
   test_gota_andre,
+  test_gota_fly,
   test_gota_host,
   test_gota_observations,
   test_gota_replays,

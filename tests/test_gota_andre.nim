@@ -2,7 +2,7 @@ import
   std/[os, strutils, tempfiles],
   bassy,
   polyworld/cli,
-  ../examples/gods_of_the_arena/neural/[common, richard, david, andre],
+  ../examples/gods_of_the_arena/neural/[common, richard, david, andre, fly],
   ../examples/gods_of_the_arena/[bots, content, maps, replays, sim],
   neuralfixtures
 
@@ -101,7 +101,8 @@ block:
     context = NeuralContext(policy: policy)
   var host = initHost()
   host.addNeuralFunctions(
-    richardRunner(context), davidRunner(context), andreRunner(context)
+    richardRunner(context), davidRunner(context), andreRunner(context),
+    flyRunner(context)
   )
   var limits = defaultLimits()
   limits.maxNativeMemoryBytes = NativeMemoryBytes

@@ -1,7 +1,7 @@
 ' Light vs Dark reference overlord.
 '
 ' You command one player, not one unit. Every decision runs from the top of
-' this file with a fresh instruction budget, five times a second. Globals and
+' this file with a fresh instruction budget each tick. Globals and
 ' arrays survive between decisions; registers do not.
 '
 ' BUDGET. You get 300000 instructions and 400000 work units per decision.
@@ -12,7 +12,12 @@
 ' searching inside the host where it is cheap.
 '
 ' READ-ONLY VALUES
-'   selfPlayer enemyPlayer worldTick gold wood foodUsed foodCap
+'   selfPlayer enemyPlayer playerCount enemyHomeX enemyHomeY
+'   worldTick gold wood foodUsed foodCap
+' enemyPlayer is the nearest player at war with us, or -1 when at peace.
+' neighborCount and neighbor(rank) list living opponents, closest first.
+' Ranking uses starting-base distance, with player IDs breaking ties.
+' tickRate is the number of simulation ticks per second.
 '   obsCount ownUnits ownBuildings homeX homeY mapSize decisionPeriod
 '
 ' OBSERVATIONS, index 0 to obsCount - 1. The list is ordered: your buildings
@@ -56,6 +61,17 @@
 ' harvest wants a mine id with isTree 0, or a tile index with isTree 1.
 ' attackMove marches to a tile but stops to fight whoever it sees.
 ' moveUnit ignores everyone and walks through.
+'
+' DIPLOMACY
+' relation(player): 0 neutral, 1 warning, 2 war, 3 allied, 4 ending.
+' Only war permits combat. Direct allies share vision.
+' relationTicks(player), relationInitiator(player), sharesVision(player)
+' offerKind(player): 0 none, 1 peace, 2 alliance.
+' offerSender(player), offerId(player), offerTicks(player)
+' declareWar(player), withdrawWar(player), endAlliance(player)
+' offerPeace(player), offerAlliance(player)
+' acceptOffer(player, id), declineOffer(player, id), withdrawOffer(player, id)
+' Reply with the exact current offer ID. Commands return 1 or 0.
 
 sub trySite(siteX, siteY)
   if placed <> 0 or canPlace(wanted, siteX, siteY) = 0 then
@@ -84,6 +100,61 @@ sub trySite(siteX, siteY)
   wend
   placed = build(builderPeon, wanted, siteX, siteY)
 end sub
+
+' Diplomacy is reconsidered each second and immediately after eliminations.
+' Prefer nearby allies and a strict majority of distant opponents as enemies.
+if worldTick >= nextDiplomacyTick or neighborCount <> lastNeighborCount then
+  nextDiplomacyTick = worldTick + tickRate
+  lastNeighborCount = neighborCount
+  warCount = (neighborCount \ 2) + 1
+  if warCount > neighborCount then
+    warCount = neighborCount
+  end if
+  allyCount = neighborCount - warCount
+  neighborRank = 0
+  while neighborRank < neighborCount
+    otherPlayer = neighbor(neighborRank)
+    wantsAlliance = neighborRank < allyCount
+    pendingOffer = offerKind(otherPlayer)
+    if pendingOffer <> 0 then
+      pendingId = offerId(otherPlayer)
+      if offerSender(otherPlayer) <> selfPlayer then
+        if wantsAlliance then
+          discardResult = acceptOffer(otherPlayer, pendingId)
+        else
+          discardResult = declineOffer(otherPlayer, pendingId)
+        end if
+      else
+        if wantsAlliance = 0 then
+          discardResult = withdrawOffer(otherPlayer, pendingId)
+        end if
+      end if
+    end if
+
+    ' 0 neutral, 1 war warning, 2 war, 3 allied, 4 alliance ending.
+    diplomaticState = relation(otherPlayer)
+    if wantsAlliance then
+      if diplomaticState = 1 and relationInitiator(otherPlayer) = selfPlayer then
+        discardResult = withdrawWar(otherPlayer)
+        diplomaticState = relation(otherPlayer)
+      end if
+      if diplomaticState = 0 then
+        discardResult = offerAlliance(otherPlayer)
+      end if
+      if diplomaticState = 1 or diplomaticState = 2 then
+        discardResult = offerPeace(otherPlayer)
+      end if
+    else
+      if diplomaticState = 3 then
+        discardResult = endAlliance(otherPlayer)
+      end if
+      if diplomaticState = 0 then
+        discardResult = declareWar(otherPlayer)
+      end if
+    end if
+    neighborRank = neighborRank + 1
+  wend
+end if
 
 decisions = decisions + 1
 
@@ -174,7 +245,7 @@ while index < obsCount
     end if
   end if
 
-  if kind = 2 and owner = enemyPlayer then
+  if kind = 2 and owner >= 0 and relation(owner) = 2 then
     if enemyTarget = 0 then
       enemyTarget = obsId(index)
     end if
@@ -340,8 +411,10 @@ while index < obsCount
       if foe <> 0 then
         discardResult = attackUnit(id, foe)
       else
-        if attacking = 1 then
-          discardResult = attackMove(id, mapSize - 1 - homeX, mapSize - 1 - homeY)
+        if attacking = 1 and enemyPlayer >= 0 then
+          if relation(enemyPlayer) = 2 then
+            discardResult = attackMove(id, enemyHomeX, enemyHomeY)
+          end if
         end if
       end if
     end if

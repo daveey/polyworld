@@ -133,10 +133,11 @@
 
   <main class="wrap">
     <p class="lede">
-      A 1v1 real-time strategy match on a 128-tile map that is fair by
-      construction: Dark's half is Light's half rotated 180 degrees. Two
-      BASIC overlords gather gold and wood, raise an army, and try to wipe
-      the other side out.
+      A real-time strategy match for any supplied roster of BASIC overlords.
+      Each player gets a spawn zone, a main gold mine, and nearby expansions
+      (two by default). Spoke or seeded random layouts keep starting zones
+      apart, and the map grows with the roster. Gather gold and wood, raise
+      an army, and outlast the other players.
     </p>
 
     <section class="facts">
@@ -180,6 +181,34 @@
           <div class="chip"><img src="../../../../polyworld_art/icons/day.png" alt=""><div><b>Clock</b><div class="muted">24 ticks a second, fog of war</div></div></div>
         </div>
       </div>
+    </section>
+
+    <section id="diplomacy">
+      <p class="kicker">ALLIES AND ENEMIES</p>
+      <h2>Diplomacy</h2>
+      <p>
+        Everyone starts neutral. Declaring war gives both players a warning
+        before combat is allowed, 10 simulated seconds by default. Peace and
+        alliance offers need the other player's agreement. Allies share live
+        vision and cannot attack each other. Ending an alliance takes twice
+        the war warning, followed by a separate full warning to declare war.
+      </p>
+      <p>
+        The base policy favors nearby allies and farther enemies. With M
+        surviving opponents, it seeks war with floor(M / 2) + 1 of them,
+        capped at M. It reconsiders after eliminations, negotiates peace with
+        new preferred allies, and ends alliances with new preferred enemies.
+        With two or three players left, every opponent becomes a war target.
+      </p>
+      <p>
+        BASIC exposes <code>neighborCount</code> and <code>neighbor(rank)</code>
+        ordered by starting-base distance, plus <code>relation(player)</code>,
+        <code>offerKind(player)</code>, and <code>offerId(player)</code>.
+        Use <code>declareWar</code>, <code>offerPeace</code>,
+        <code>offerAlliance</code>, and <code>endAlliance</code> with a player ID.
+        Replies <code>acceptOffer</code> and <code>declineOffer</code> take both
+        the player ID and the current offer ID. Attack orders do not declare war.
+      </p>
     </section>
 
     <section id="units">

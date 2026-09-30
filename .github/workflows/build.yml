@@ -32,8 +32,8 @@ jobs:
           nimby install "${{ github.event.repository.name }}/${{ github.event.repository.name }}.nimble"
           nimby sync "${{ github.event.repository.name }}/nimby.lock"
       - name: Run release tests and all-game determinism
-        run: nim r -d:release tests/all.nim
+        run: nim r -d:release -d:bassyNativeStrict tests/all.nim
       - name: Test lockstep training API
-        run: nim r -d:release -d:headless tests/test_gota_lockstep.nim
+        run: nim r -d:release -d:headless -d:bassyNativeStrict tests/test_gota_lockstep.nim
       - name: Check neural converters
         run: python tests/test_neural_converters.py

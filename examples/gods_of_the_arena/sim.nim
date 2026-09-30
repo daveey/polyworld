@@ -314,6 +314,7 @@ type
     nextFootmanId*: int32
     tick*: int32
     phase*: MatchPhase
+    draftMode*: DraftMode
     drafting*: bool
       ## Preserves the initial setup when capturing a replay after drafting.
     draftOrder*: seq[int]
@@ -2028,7 +2029,8 @@ proc currentSetup*(game: Game, maximumTicks: uint32): Setup =
     gridTiles: uint16(game.map.resolution),
     spawnIntervalTicks: uint32(game.world.spawnIntervalTicks),
     maximumTicks: maximumTicks,
-    drafting: game.world.drafting
+    drafting: game.world.drafting,
+    draftMode: game.world.draftMode
   )
   for hero in game.world.heroes:
     result.heroes.add ReplayHero(
@@ -2398,6 +2400,23 @@ proc worldObjectAt*(
     return false
   value = world.scriptObjects[team][index]
   true
+
+proc scriptObject*(
+    world: World,
+    heroId: int32,
+    index: int,
+    team: var Team
+): ptr WorldObject =
+  ## Returns one object of a hero's visibility-filtered enumeration where
+  ## it sits, along with the hero's team, or nil. Nothing is copied, and
+  ## the object stays put until the next decision frame rebuilds the
+  ## enumeration, so read what is needed from it straight away.
+  if world.heroIndex(heroId) < 0:
+    return nil
+  team = world.ensureScriptObjects(heroId)
+  if index < 0 or index >= world.scriptObjectCount[team]:
+    return nil
+  world.scriptObjects[team][index].addr
 
 proc worldObjectById*(
     world: World,
@@ -3920,13 +3939,26 @@ proc draftedClass*(world: World, heroId: int32): int32 =
     return -1
   world.heroes[index].class.ord.int32
 
-proc heroAvailable*(world: World, classId: int32): bool =
-  ## Checks the shared hero pool without exposing any hidden world state.
+proc heroAvailable*(world: World, classId: int32, heroId = 0'i32): bool =
+  ## Checks the picker's legal pool, defaulting to the active draft player.
   if classId < 0 or classId > HeroClass.high.ord:
     return false
+  let index = world.heroIndex(
+    if heroId == 0: world.draftHeroId() else: heroId
+  )
+  if world.draftMode == TeamDraft and index < 0:
+    return false
   for hero in world.heroes:
-    if hero.drafted and hero.class.ord == classId:
+    if not hero.drafted or hero.class.ord != classId:
+      continue
+    case world.draftMode
+    of UniqueDraft:
       return false
+    of TeamDraft:
+      if hero.team == world.heroes[index].team:
+        return false
+    of OpenDraft:
+      discard
   true
 
 proc initDraft(world: World) =
@@ -3953,12 +3985,12 @@ proc initDraft(world: World) =
 proc applyDraft*(
     world: World, heroId, classId: int32, cause = Command
 ): bool =
-  ## Locks a unique hero for the active player and advances the draft.
+  ## Locks a legal hero for the active player and advances the draft.
   let error =
     if world.phase != Drafting: ActionNotDrafting
     elif world.draftHeroId() != heroId: ActionNotDraftTurn
     elif classId < 0 or classId > HeroClass.high.ord: ActionUnknownHero
-    elif not world.heroAvailable(classId): ActionHeroTaken
+    elif not world.heroAvailable(classId, heroId): ActionHeroTaken
     else: NoActionError
   if error != NoActionError:
     return world.finishAction(heroId, ActionDraft, 0, classId, 0, error)
@@ -5362,6 +5394,7 @@ proc stateHash*(game: Game): uint64 =
   hash.addHashy(game.map.hash)
   hash.addHashy(world.tick)
   hash.addHashy(world.phase.ord)
+  hash.addHashy(world.draftMode)
   hash.addHashy(world.drafting)
   hash.addHashy(world.draftTurn)
   hash.addHashy(world.draftTicks)
@@ -5903,11 +5936,14 @@ proc newGame*(
     botCount: int,
     replayMode: bool,
     replayData: ReplayData,
-    drafting = true
+    drafting = true,
+    draftMode = UniqueDraft
 ): Game =
   ## Builds one match session: world, lane paths, towers, and heroes.
   result = Game(
     world: World(
+      draftMode:
+        if replayMode: replayData.header.setup.draftMode else: draftMode,
       forts: startingForts(map),
       nextFootmanId: FirstFootmanId,
       winner: RedTeam,

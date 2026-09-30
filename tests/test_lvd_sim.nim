@@ -17,6 +17,10 @@ map.validateMap()
 
 const MatchTicks = DefaultSeconds * TickRate
 
+proc arenaTile(x: int32, y = 0'i32): Tile2 =
+  ## Names a position in the generated central combat clearing.
+  tile2(map.side div 2 + x, map.side div 2 + y)
+
 proc stateHash(w: World): uint64 =
   ## Wraps a world in a session so tests can use the public hasher.
   var game = Game()
@@ -29,6 +33,10 @@ proc noDecisions(w: World) = discard
 proc run(w: World, ticks: int32) =
   for _ in 0 ..< ticks:
     w.tickWorld(noDecisions)
+
+proc wartime(w: World) =
+  ## Sets combat fixtures at war; separate diplomacy tests cover transitions.
+  w.diplomacy.pairs[w.diplomacy.pairIndex(LightPlayer, DarkPlayer)].state = AtWar
 
 proc checkOccupancy(w: World, label: string) =
   ## Every living unit's tile matches its body and stands on open terrain.
@@ -45,9 +53,9 @@ proc checkOccupancy(w: World, label: string) =
 echo "Testing the opening position"
 block openingIsSane:
   var w = newWorld(map, MatchTicks)
-  doAssert w.units.len == int(StartingPeons) * PlayerCount
-  doAssert w.buildings.len == map.mines.len + PlayerCount
-  for player in 0'i32 ..< PlayerCount:
+  doAssert w.units.len == int(StartingPeons) * DefaultPlayerCount
+  doAssert w.buildings.len == map.mines.len + DefaultPlayerCount
+  for player in 0'i32 ..< DefaultPlayerCount:
     doAssert w.players[player].gold == StartingGold
     doAssert w.players[player].wood == StartingWood
     doAssert w.players[player].foodUsed == StartingPeons
@@ -61,8 +69,7 @@ block openingIsSane:
   doAssert not w.visible(LightPlayer, darkHall)
   doAssert w.visible(LightPlayer, map.hallOrigin[LightPlayer])
   doAssert w.exploredCount[LightPlayer] > 0
-  doAssert w.exploredCount[LightPlayer] == w.exploredCount[DarkPlayer],
-    "the two openings reveal different amounts of ground"
+  doAssert w.exploredCount[DarkPlayer] > 0
 
 echo "Testing rectangular construction reserves and releases its base"
 block rectangularConstruction:
@@ -75,16 +82,16 @@ block rectangularConstruction:
       if w.canPlace(TownHallBuilding, x, y):
         site = tile2(x, y)
         break
-    if inGrid(site):
+    if map.inGrid(site):
       break
-  doAssert inGrid(site)
+  doAssert map.inGrid(site)
   let
     size = BuildingTable[TownHallBuilding].footprint
     x = int32(site.x)
     y = int32(site.y)
   doAssert size.width > size.depth
-  doAssert not w.canPlace(TownHallBuilding, GridSide - size.width + 1, y)
-  doAssert not w.canPlace(TownHallBuilding, x, GridSide - size.depth + 1)
+  doAssert not w.canPlace(TownHallBuilding, map.side - size.width + 1, y)
+  doAssert not w.canPlace(TownHallBuilding, x, map.side - size.depth + 1)
   doAssert w.applyBuild(
     LightPlayer, w.units[0].id, TownHallBuilding.ord.int32, x, y
   )
@@ -94,8 +101,9 @@ block rectangularConstruction:
     if blocker == id:
       inc occupied
   doAssert occupied == size.width * size.depth
-  doAssert w.blocker[tileIndex(x + size.width - 1, y + size.depth - 1)] == id
-  doAssert w.blocker[tileIndex(x, y + size.depth)] != id
+  let corner = map.tileIndex(x + size.width - 1, y + size.depth - 1)
+  doAssert w.blocker[corner] == id
+  doAssert w.blocker[map.tileIndex(x, y + size.depth)] != id
   doAssert not w.canPlace(FarmBuilding, x + size.width - 1, y)
   doAssert w.applyCancel(LightPlayer, id)
   doAssert w.canPlace(TownHallBuilding, x, y)
@@ -113,10 +121,12 @@ block startingFootprints:
         int32(structure.origin.y) + structure.footprint.depth:
           for x in int32(structure.origin.x) ..<
             int32(structure.origin.x) + structure.footprint.width:
-              let tile = tileIndex(x, y)
+              let tile = startingMap.tileIndex(x, y)
               doAssert startingMap.passable[tile] == 1
               doAssert w.blocker[tile] == structure.id
-      doAssert inGrid(w.freeTileAround(structure.origin, structure.footprint))
+      doAssert startingMap.inGrid(
+        w.freeTileAround(structure.origin, structure.footprint)
+      )
 
 echo "Testing determinism across identical runs"
 block twoRunsAgree:
@@ -151,12 +161,15 @@ block hashIgnoresDerivedState:
 echo "Testing movement, occupancy, and arrival"
 block unitsWalkAndNeverOverlap:
   var w = newWorld(map, MatchTicks)
-  ## March every Light peon at a distant tile on its own side of the river.
+  ## March every Light peon into the central clearing.
+  let rally = tile2(map.side div 2, map.side div 2)
   var ordered = 0
   for index in 0 ..< w.units.len:
     if w.units[index].owner != LightPlayer:
       continue
-    if w.applyMove(LightPlayer, w.units[index].id, 40, 40):
+    if w.applyMove(
+      LightPlayer, w.units[index].id, int32(rally.x), int32(rally.y)
+    ):
       inc ordered
   doAssert ordered == StartingPeons, &"only {ordered} peons accepted a move"
   for tick in 1 .. TickRate * 50:
@@ -166,7 +179,7 @@ block unitsWalkAndNeverOverlap:
   var arrived = 0
   for unit in w.units:
     if unit.owner == LightPlayer and
-        tileDistance(unit.tile, tile2(40, 40)) <= 3:
+        tileDistance(unit.tile, rally) <= 3:
       inc arrived
   doAssert arrived >= StartingPeons - 1,
     &"only {arrived} of {StartingPeons} peons reached the rally tile"
@@ -181,8 +194,8 @@ block pathsGoAroundOtherUnits:
   doAssert w.units[1].owner == LightPlayer
   var start, mid, goal = NoTile
   block found:
-    for y in 0'i32 ..< GridSide:
-      for x in 0'i32 ..< GridSide - 4:
+    for y in 0'i32 ..< map.side:
+      for x in 0'i32 ..< map.side - 4:
         var open = true
         for ox in 0'i32 .. 4:
           if not w.tileFree(x + ox, y) or
@@ -195,7 +208,7 @@ block pathsGoAroundOtherUnits:
           mid = tile2(x + 2, y)
           goal = tile2(x + 4, y)
           break found
-  doAssert inGrid(start), "no open five-tile corridor on the map"
+  doAssert map.inGrid(start), "no open five-tile corridor on the map"
   for (id, tile) in [(walkerId, start), (blockerId, mid)]:
     let index = w.unitIndex(id)
     w.place(w.units[index], tile)
@@ -238,11 +251,11 @@ block movesToBlockedGroundAreRejected:
   let peon = w.units[0].id
   ## The middle of the river is not standable terrain.
   var wet = tile2(-1, -1)
-  for index in 0 ..< GridCells:
+  for index in 0 ..< (map.side * map.side):
     if map.passable[index] == 0:
-      wet = tile2(int32(index) mod GridSide, int32(index) div GridSide)
+      wet = tile2(int32(index) mod map.side, int32(index) div map.side)
       break
-  doAssert inGrid(wet)
+  doAssert map.inGrid(wet)
   doAssert not w.applyMove(LightPlayer, peon, int32(wet.x), int32(wet.y)),
     "a move onto impassable terrain was accepted"
 
@@ -254,25 +267,28 @@ block ownershipIsEnforced:
       darkPeon = unit.id
       break
   doAssert darkPeon != NoEntity
-  doAssert not w.applyMove(LightPlayer, darkPeon, 40, 40),
+  let centre = map.side div 2
+  doAssert not w.applyMove(LightPlayer, darkPeon, centre, centre),
     "Light commanded a Dark unit"
   doAssert not w.applyCancel(LightPlayer, darkPeon),
     "Light cancelled a Dark unit's order"
-  doAssert w.applyMove(DarkPlayer, darkPeon, 100, 100),
+  doAssert w.applyMove(DarkPlayer, darkPeon, centre, centre),
     "Dark could not command its own unit"
 
 echo "Testing only accepted RTS commands contribute to APM"
 block:
-  let game = newGame(map, MatchTicks)
+  let
+    game = newGame(map, MatchTicks)
+    centre = map.side div 2
   var darkPeon = NoEntity
   for unit in game.world.units:
     if unit.owner == DarkPlayer:
       darkPeon = unit.id
       break
-  doAssert not game.applyMove(LightPlayer, darkPeon, 100, 100)
+  doAssert not game.applyMove(LightPlayer, darkPeon, centre, centre)
   doAssert not game.applyCancel(LightPlayer, darkPeon)
   doAssert game.metrics.read(LightPlayer, 0).commands == 0
-  doAssert game.applyMove(DarkPlayer, darkPeon, 100, 100)
+  doAssert game.applyMove(DarkPlayer, darkPeon, centre, centre)
   doAssert game.metrics.read(DarkPlayer, 0).commands == 1
 
 echo "Testing failure queries are read-only"
@@ -310,7 +326,9 @@ block:
     game = newGame(map, MatchTicks)
     unit = game.world.units[0]
   game.world.tick = DecisionTicks
-  game.recorder = initReplayRecorder(Setup())
+  game.recorder = initReplayRecorder(Setup(
+    players: @[ReplayPlayerSetup(id: 0), ReplayPlayerSetup(id: 1)]
+  ))
   unit.orderFailed = true
   let before = game.stateHash()
   doAssert not game.applyMove(LightPlayer, unit.id, -1, -1)
@@ -385,21 +403,21 @@ block liveHistorySeek:
   let setup = Setup(
     mapSeed: DefaultSeed,
     tickRate: uint16(TickRate),
-    gridTiles: uint16(GridSide),
+    gridTiles: uint16(map.side),
     decisionTicks: uint16(DecisionTicks),
     maximumTicks: uint32(Ticks),
     mapHash: map.hash,
     contentHash: contentHash(),
-    players: [
+    players: @[
       ReplayPlayerSetup(
         id: 0,
-        startX: uint8(map.hallOrigin[LightPlayer].x),
-        startY: uint8(map.hallOrigin[LightPlayer].y)
+        startX: int32(map.hallOrigin[LightPlayer].x),
+        startY: int32(map.hallOrigin[LightPlayer].y)
       ),
       ReplayPlayerSetup(
         id: 1,
-        startX: uint8(map.hallOrigin[DarkPlayer].x),
-        startY: uint8(map.hallOrigin[DarkPlayer].y)
+        startX: int32(map.hallOrigin[DarkPlayer].x),
+        startY: int32(map.hallOrigin[DarkPlayer].y)
       )
     ]
   )
@@ -410,7 +428,7 @@ block liveHistorySeek:
 
   proc liveOrders(w: World) =
     ## Issues one accepted move per decision so the live tape is not empty.
-    let playerId = (w.tick div DecisionTicks) mod PlayerCount
+    let playerId = (w.tick div DecisionTicks) mod DefaultPlayerCount
     for index in 0 ..< w.units.len:
       if w.units[index].owner != playerId or
           w.units[index].state != UnitIdle:
@@ -501,10 +519,10 @@ block woodFlowsAndTreesFall:
   var w = newWorld(map, MatchTicks)
   var treeIndex = -1'i32
   var best = int32.high
-  for index in 0 ..< GridCells:
+  for index in 0 ..< (map.side * map.side):
     if w.treeWood[index] <= 0:
       continue
-    let tile = tile2(int32(index) mod GridSide, int32(index) div GridSide)
+    let tile = tile2(int32(index) mod map.side, int32(index) div map.side)
     let distance = tileDistance(map.hallOrigin[LightPlayer], tile)
     if distance < best:
       best = distance
@@ -530,7 +548,7 @@ block woodFlowsAndTreesFall:
     if edit.index == treeIndex:
       felledAssigned = true
   doAssert felledAssigned, "the assigned tree was never felled"
-  doAssert w.tileOpen(tile2(treeIndex mod GridSide, treeIndex div GridSide)),
+  doAssert w.tileOpen(tile2(treeIndex mod map.side, treeIndex div map.side)),
     "the felled tree still blocks its tile"
   doAssert gained >= int32(WoodPerTree),
     &"a tree yielded {gained} wood instead of at least {WoodPerTree}"
@@ -559,11 +577,11 @@ block woodGoesToCloserDrop:
         if w.canPlace(LumberMillBuilding, x, y):
           site = tile2(x, y)
           break
-      if inGrid(site):
+      if map.inGrid(site):
         break
-    if inGrid(site):
+    if map.inGrid(site):
       break
-  doAssert inGrid(site), "no mill site near the hall"
+  doAssert map.inGrid(site), "no mill site near the hall"
   doAssert w.applyBuild(
     LightPlayer,
     peon,
@@ -608,12 +626,12 @@ block basesGrow:
         let
           x = int32(hall.x) + dx
           y = int32(hall.y) + dy
-        if inGrid(x, y) and w.canPlace(FarmBuilding, x, y):
+        if map.inGrid(x, y) and w.canPlace(FarmBuilding, x, y):
           site = tile2(x, y)
           break
-      if inGrid(site): break
-    if inGrid(site): break
-  doAssert inGrid(site), "nowhere to put a farm near the opening base"
+      if map.inGrid(site): break
+    if map.inGrid(site): break
+  doAssert map.inGrid(site), "nowhere to put a farm near the opening base"
 
   let
     goldBefore = w.players[LightPlayer].gold
@@ -711,7 +729,7 @@ block openingBuild:
     runBotDecisions(game)
   for _ in 1 .. TickRate * 30:
     game.world.tickWorld(decide)
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< DefaultPlayerCount:
     doAssert game.brains[player] != nil and game.brains[player].ready,
       "player " & $player & " did not load the reference overlord"
     doAssert not game.brains[player].failed,
@@ -728,16 +746,17 @@ block openingBuild:
 echo "Testing combat and defeat"
 block unitsFightAndDie:
   var w = newWorld(map, MatchTicks)
+  w.wartime()
   let
     attacker = w.units[0].id
     defender = w.units[int(StartingPeons)].id
   doAssert w.units[0].owner == LightPlayer
   doAssert w.unitOwner(defender) == DarkPlayer
   ## Stand them next to each other in open ground and let them brawl.
-  let arena = tile2(60, 20)
+  let arena = arenaTile(-4)
   doAssert w.tileFree(int32(arena.x), int32(arena.y))
   doAssert w.tileFree(int32(arena.x) + 1, int32(arena.y))
-  for (id, tile) in [(attacker, arena), (defender, tile2(61, 20))]:
+  for (id, tile) in [(attacker, arena), (defender, arenaTile(-3))]:
     let index = w.unitIndex(id)
     w.place(w.units[index], tile)
   w.rebuildVision()
@@ -781,11 +800,14 @@ block reachingTheCapDecidesOnScore:
 echo "Testing attack-move engages enemies that a move walks past"
 block attackMoveFightsOnTheWay:
   var w = newWorld(map, MatchTicks)
+  w.wartime()
   let
-    walker = w.spawnUnit(LightPlayer, SoldierUnit, tile2(60, 20))
-    foe = w.spawnUnit(DarkPlayer, SoldierUnit, tile2(63, 20))
+    walker = w.spawnUnit(LightPlayer, SoldierUnit, arenaTile(-4))
+    foe = w.spawnUnit(DarkPlayer, SoldierUnit, arenaTile(-1))
   w.rebuildVision()
-  doAssert w.applyAttackMove(LightPlayer, walker, 70, 20)
+  doAssert w.applyAttackMove(
+    LightPlayer, walker, map.side div 2 + 6, map.side div 2
+  )
   let hpBefore = w.units[w.unitIndex(foe)].hp
   w.run(TickRate * 8)
   doAssert not w.hasUnit(foe) or
@@ -794,11 +816,12 @@ block attackMoveFightsOnTheWay:
 
 block plainMoveIgnoresEnemies:
   var w = newWorld(map, MatchTicks)
+  w.wartime()
   let
-    walker = w.spawnUnit(LightPlayer, SoldierUnit, tile2(60, 20))
-    foe = w.spawnUnit(DarkPlayer, SoldierUnit, tile2(63, 20))
+    walker = w.spawnUnit(LightPlayer, SoldierUnit, arenaTile(-4))
+    foe = w.spawnUnit(DarkPlayer, SoldierUnit, arenaTile(-1))
   w.rebuildVision()
-  doAssert w.applyMove(LightPlayer, walker, 70, 20)
+  doAssert w.applyMove(LightPlayer, walker, map.side div 2 + 6, map.side div 2)
   let hpBefore = w.units[w.unitIndex(foe)].hp
   w.run(TickRate * 2)
   doAssert w.hasUnit(foe)
@@ -809,11 +832,14 @@ block plainMoveIgnoresEnemies:
 
 block attackMoveStopsAtRange:
   var w = newWorld(map, MatchTicks)
+  w.wartime()
   let
-    archer = w.spawnUnit(LightPlayer, ArcherUnit, tile2(60, 20))
-    foe = w.spawnUnit(DarkPlayer, PeonUnit, tile2(66, 20))
+    archer = w.spawnUnit(LightPlayer, ArcherUnit, arenaTile(-4))
+    foe = w.spawnUnit(DarkPlayer, PeonUnit, arenaTile(2))
   w.rebuildVision()
-  doAssert w.applyAttackMove(LightPlayer, archer, 70, 20)
+  doAssert w.applyAttackMove(
+    LightPlayer, archer, map.side div 2 + 6, map.side div 2
+  )
   let hpBefore = w.units[w.unitIndex(foe)].hp
   w.run(TickRate * 8)
   doAssert w.hasUnit(foe)
@@ -835,10 +861,10 @@ proc placeSquad(w: World, player: int32, anchor: Tile2,
         for dy in -radius .. radius:
           for dx in -radius .. radius:
             let tile = tile2(int32(anchor.x) + dx, int32(anchor.y) + dy)
-            if inGrid(tile) and w.tileFree(int32(tile.x), int32(tile.y)):
+            if map.inGrid(tile) and w.tileFree(int32(tile.x), int32(tile.y)):
               spawn = tile
               break search
-    if not inGrid(spawn):
+    if not map.inGrid(spawn):
       return
     result.add w.spawnUnit(player, SoldierUnit, spawn)
     w.players[player].foodUsed += UnitTable[player][SoldierUnit].food
@@ -852,8 +878,8 @@ block fordsClear:
   ## precisely for this case.
   var w = newWorld(map, 200_000)
   let
-    west = tile2(54, 53)
-    east = tile2(74, 73)
+    west = tile2(map.side div 2 - 10, map.side div 2 - 8)
+    east = tile2(map.side div 2 + 10, map.side div 2 + 8)
     eastward = w.placeSquad(LightPlayer, west, 20)
     westward = w.placeSquad(LightPlayer, east, 20)
   doAssert eastward.len == 20 and westward.len == 20,
@@ -905,21 +931,15 @@ block armiesReachTheEnemy:
 
   var
     arrived = 0
-    crossedRiver = 0
     gaveUp = 0
   for unit in w.units:
     if unit.kind != SoldierUnit:
       continue
-    if int32(unit.tile.x) + int32(unit.tile.y) > GridSide:
-      inc crossedRiver
     if tileDistance(unit.tile, target) <= 12:
       inc arrived
     if unit.orderFailed:
       inc gaveUp
-  echo "  " & $crossedRiver & "/20 crossed the river, " & $arrived &
-    "/20 reached the enemy base, " & $gaveUp & " gave up"
-  doAssert crossedRiver >= 18,
-    "only " & $crossedRiver & " of 20 units got across the river"
+  echo "  ", arrived, "/20 reached the enemy base, ", gaveUp, " gave up"
   doAssert arrived >= 15,
     "only " & $arrived & " of 20 units reached the enemy base"
 
@@ -933,18 +953,18 @@ block replayReproducesTheMatch:
   let setup = Setup(
     mapSeed: DefaultSeed,
     tickRate: uint16(TickRate),
-    gridTiles: uint16(GridSide),
+    gridTiles: uint16(map.side),
     decisionTicks: uint16(DecisionTicks),
     maximumTicks: uint32(Ticks),
     mapHash: map.hash,
     contentHash: contentHash(),
-    players: [
+    players: @[
       ReplayPlayerSetup(id: 0,
-        startX: uint8(map.hallOrigin[LightPlayer].x),
-        startY: uint8(map.hallOrigin[LightPlayer].y)),
+        startX: int32(map.hallOrigin[LightPlayer].x),
+        startY: int32(map.hallOrigin[LightPlayer].y)),
       ReplayPlayerSetup(id: 1,
-        startX: uint8(map.hallOrigin[DarkPlayer].x),
-        startY: uint8(map.hallOrigin[DarkPlayer].y))
+        startX: int32(map.hallOrigin[DarkPlayer].x),
+        startY: int32(map.hallOrigin[DarkPlayer].y))
     ]
   )
   let recorder = initReplayRecorder(setup)
@@ -965,15 +985,15 @@ wend
   var
     failureQueries = 0
     blockedTree = -1'i32
-  for index in 0 ..< GridCells:
+  for index in 0 ..< (map.side * map.side):
     if liveGame.world.treeWood[index] == 0:
       continue
     var enclosed = true
     for dy in -1'i32 .. 1'i32:
       for dx in -1'i32 .. 1'i32:
         if liveGame.world.tileOpen(
-          int32(index) mod GridSide + dx,
-          int32(index) div GridSide + dy
+          int32(index) mod map.side + dx,
+          int32(index) div map.side + dy
         ):
           enclosed = false
     if enclosed:
@@ -991,7 +1011,7 @@ wend
     runBotDecisions(liveGame)
     doAssert liveGame.stateHash() == before,
       "BASIC failure queries must not change replay state"
-    let player = (w.tick div DecisionTicks) mod PlayerCount
+    let player = (w.tick div DecisionTicks) mod DefaultPlayerCount
     var
       hall = NoEntity
       mine = NoEntity
@@ -1086,6 +1106,7 @@ block:
 echo "Testing credited kills and deterministic statistics checkpoints"
 block:
   let game = newGame(map, MatchTicks)
+  game.world.wartime()
   let initial = game.stateHash()
   game.world.stats.add(0, KillsMetric)
   doAssert game.stateHash() != initial
@@ -1120,7 +1141,9 @@ block:
   loadBots(game, ["accepted = moveUnit(" & $unit.id & ", " &
     $unit.tile.x & " + 0.25, " & $unit.tile.y & " - 0.25)\n", ""])
   game.world.tick = DecisionTicks
-  game.recorder = initReplayRecorder(Setup())
+  game.recorder = initReplayRecorder(Setup(
+    players: @[ReplayPlayerSetup(id: 0), ReplayPlayerSetup(id: 1)]
+  ))
   runBotDecisions(game)
   doAssert not game.brains[0].failed
   doAssert unit.goalOffset == offset

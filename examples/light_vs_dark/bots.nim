@@ -12,9 +12,10 @@
 
 import
   polyworld/neural,
+  std/algorithm,
   bassy,
   polyworld/[llms, mailboxes, bodies, metrics, profiles],
-  content,
+  content, maps,
   sim
 
 when defined(coworld):
@@ -46,7 +47,7 @@ type
     kind*: int32
       ## 1 structure, 2 unit, 3 gold mine, 4 tree.
     owner*: int32
-      ## 0 Light, 1 Dark, -1 neutral.
+      ## Zero-based player slot, or -1 for neutral resources.
     sub*: int32
       ## `UnitKind.ord` or `BuildingKind.ord`.
     x*, y*: int32
@@ -69,7 +70,12 @@ type
     DataHomeX,
     DataHomeY,
     DataMapSize,
-    DataDecisionPeriod
+    DataDecisionPeriod,
+    DataPlayerCount,
+    DataEnemyHomeX,
+    DataEnemyHomeY,
+    DataNeighborCount,
+    DataTickRate
 
 const
   OverlordDataNames: array[OverlordDataSlot, string] = [
@@ -86,13 +92,19 @@ const
     "homeX",
     "homeY",
     "mapSize",
-    "decisionPeriod"
+    "decisionPeriod",
+    "playerCount",
+    "enemyHomeX",
+    "enemyHomeY",
+    "neighborCount",
+    "tickRate"
   ]
 
 var
   activeGame: Game
   activePlayer: int32
   snapshot: seq[Observed]
+  neighbors: seq[int32]
   ownUnitCount, ownBuildingCount: int32
   overlordDataIds: array[OverlordDataSlot, int32]
 
@@ -135,7 +147,7 @@ proc observeUnit(w: World, index: int, own: bool): Observed =
     x: int32(unit.tile.x),
     y: int32(unit.tile.y),
     hp: unit.hp,
-    maxHp: UnitTable[unit.owner][unit.kind].hp,
+    maxHp: unitOf(unit.owner, unit.kind).hp,
     state: int32(unit.state.ord),
     flags: unitFlags(unit, own),
     resource: unit.carryGold + unit.carryWood
@@ -156,12 +168,33 @@ proc observeBuilding(structure: Building): Observed =
     resource: structure.goldLeft
   )
 
+proc rankedNeighbors*(w: World, player: int32): seq[int32] =
+  ## Sorts living opponents by starting-base distance, then player ID.
+  let origin = w.map.hallOrigin[player]
+  for other, side in w.players:
+    if other != player and not side.defeated:
+      result.add int32(other)
+  proc distance(other: int32): int64 =
+    ## Uses squared distance without BASIC decimal coercion or hidden intel.
+    let
+      tile = w.map.hallOrigin[other]
+      dx = int64(tile.x) - int64(origin.x)
+      dy = int64(tile.y) - int64(origin.y)
+    dx * dx + dy * dy
+  result.sort(proc(first, second: int32): int =
+    ## Makes equal-distance neighbors deterministic.
+    result = cmp(distance(first), distance(second))
+    if result == 0:
+      result = cmp(first, second)
+  )
+
 proc buildSnapshot(w: World, player: int32) =
   ## Rebuilds this decision's view of the world in a canonical order: own
   ## structures, own units, then whatever of the enemy's is visible, then
   ## neutral mines and the nearest trees. Everything is identifier-ascending
   ## within its group, so the same world always produces the same snapshot.
   snapshot.setLen(0)
+  neighbors = w.rankedNeighbors(player)
   ownBuildingCount = 0
   ownUnitCount = 0
 
@@ -175,14 +208,14 @@ proc buildSnapshot(w: World, player: int32) =
       snapshot.add w.observeUnit(i, true)
       inc ownUnitCount
 
-  let enemy = 1 - player
   for structure in w.buildings:
-    if structure.owner == enemy and structure.state != BuildingDying and
-        w.buildingVisible(player, structure):
-      snapshot.add observeBuilding(structure)
+    if structure.owner >= 0 and structure.owner != player and
+      structure.state != BuildingDying and
+      w.buildingVisible(player, structure):
+        snapshot.add observeBuilding(structure)
   for i in 0 ..< w.units.len:
     let unit = w.units[i]
-    if unit.owner == enemy and w.unitVisible(player, i):
+    if unit.owner != player and w.unitVisible(player, i):
       snapshot.add w.observeUnit(i, false)
 
   ## Neutral gold mines and trees are terrain, not intelligence, so they are
@@ -195,41 +228,42 @@ proc buildSnapshot(w: World, player: int32) =
 
   ## Nearest trees to the player's home, capped. Ties break on tile index so
   ## two identical worlds always list the same ones.
-  var home = tile2(GridSide div 2, GridSide div 2)
+  var home = tile2(w.map.side div 2, w.map.side div 2)
   for structure in w.buildings:
     if structure.owner == player and structure.kind == TownHallBuilding:
       home = structure.origin
       break
   var
     treeIndices: array[MaxObservedTrees, int32]
-    treeRanges: array[MaxObservedTrees, int32]
     treeCount = 0
-  for index in 0 ..< GridCells:
-    if w.treeWood[index] <= 0:
-      continue
-    let
-      tile = tile2(int32(index) mod GridSide, int32(index) div GridSide)
-      distance = chebyshev(tile, home)
-    if treeCount == MaxObservedTrees and
-        distance >= treeRanges[MaxObservedTrees - 1]:
-      continue
-    var slot = min(treeCount, MaxObservedTrees - 1)
-    while slot > 0 and treeRanges[slot - 1] > distance:
-      treeRanges[slot] = treeRanges[slot - 1]
-      treeIndices[slot] = treeIndices[slot - 1]
-      dec slot
-    treeRanges[slot] = distance
-    treeIndices[slot] = int32(index)
-    if treeCount < MaxObservedTrees:
+  proc observeTree(x, y: int32) =
+    ## Keeps the first trees in distance order, then row-major tile order.
+    if treeCount == MaxObservedTrees or not w.map.inGrid(x, y):
+      return
+    let index = w.map.tileIndex(x, y)
+    if w.treeWood[index] > 0:
+      treeIndices[treeCount] = index
       inc treeCount
+  for radius in 0'i32 ..< w.map.side:
+    for y in max(0'i32, int32(home.y) - radius) ..
+      min(w.map.side - 1, int32(home.y) + radius):
+        if abs(y - int32(home.y)) == radius:
+          for x in max(0'i32, int32(home.x) - radius) ..
+            min(w.map.side - 1, int32(home.x) + radius):
+              observeTree(x, y)
+        else:
+          observeTree(int32(home.x) - radius, y)
+          observeTree(int32(home.x) + radius, y)
+    if treeCount == MaxObservedTrees:
+      break
   for slot in 0 ..< treeCount:
     let index = treeIndices[slot]
     snapshot.add Observed(
       id: index,
       kind: ObservedTree,
       owner: -1,
-      x: index mod GridSide,
-      y: index div GridSide,
+      x: index mod w.map.side,
+      y: index div w.map.side,
       resource: int32(w.treeWood[index])
     )
 
@@ -341,6 +375,47 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
   for name in OverlordDataNames:
     discard result.addData(name)
 
+  let neighborProc: HostProc = proc(args: openArray[int32]): int32 =
+    ## Reads this decision's nearest-to-farthest living opponent list.
+    if args[0] >= 0 and args[0] < neighbors.len:
+      neighbors[args[0]]
+    else:
+      -1
+  discard result.addFunction("neighbor", 1, neighborProc, 3)
+
+  template relationReader(name: string, value: untyped) =
+    ## Binds a cheap reader of one authoritative relationship record.
+    let callback: HostProc = proc(args: openArray[int32]): int32 =
+      ## Reads the current relationship without consuming an offer.
+      let pair {.inject.} = game.diplomacy.relation(playerId, args[0])
+      value
+    discard result.addFunction(name, 1, callback, 3)
+  relationReader("relation", int32(pair.state.ord))
+  relationReader("relationTicks", max(0'i32, pair.deadline - game.tick))
+  relationReader("relationInitiator", pair.initiator)
+  relationReader("sharesVision", int32(pair.state in {Allied, AllianceEnding}))
+  relationReader("offerKind", int32(pair.offer.ord))
+  relationReader("offerSender", pair.sender)
+  relationReader("offerId", pair.offerId)
+  relationReader("offerTicks", max(0'i32, pair.offerDeadline - game.tick))
+
+  template diplomacyCommand(name: string, command: DiplomacyCommand,
+      withOffer: static bool = false) =
+    ## Uses the same validation and recording wrapper as human commands.
+    let callback: HostProc = proc(args: openArray[int32]): int32 =
+      ## Submits one explicit diplomacy intent.
+      let id = when withOffer: args[1] else: 0'i32
+      int32(activeGame.applyDiplomacy(playerId, args[0], command, id))
+    discard result.addFunction(name, (if withOffer: 2 else: 1), callback, 40)
+  diplomacyCommand("declareWar", DeclareWar)
+  diplomacyCommand("withdrawWar", WithdrawWar)
+  diplomacyCommand("offerPeace", OfferPeace)
+  diplomacyCommand("offerAlliance", OfferAlliance)
+  diplomacyCommand("acceptOffer", AcceptOffer, true)
+  diplomacyCommand("declineOffer", DeclineOffer, true)
+  diplomacyCommand("withdrawOffer", WithdrawOffer, true)
+  diplomacyCommand("endAlliance", EndAlliance)
+
   ## Observation readers: one bounds-checked array read each.
   template reader(readerName: string, field: untyped) =
     let callback: HostProc = proc(arguments: openArray[int32]): int32 =
@@ -394,7 +469,7 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
     let origin = unit.tile
     var best = int32.high
     for entry in snapshot:
-      if entry.owner != 1 - playerId:
+      if not game.atWar(playerId, entry.owner):
         continue
       let distance = max(abs(entry.x - int32(origin.x)),
         abs(entry.y - int32(origin.y)))
@@ -438,7 +513,7 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
     ## Rings are scanned outward and ties inside a ring go to the lowest
     ## index, so the same question always gets the same answer.
     result = -1
-    for radius in 0'i32 ..< GridSide:
+    for radius in 0'i32 ..< game.map.side:
       for dy in -radius .. radius:
         for dx in -radius .. radius:
           if max(abs(dx), abs(dy)) != radius:
@@ -446,9 +521,9 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
           let
             x = arguments[0] + dx
             y = arguments[1] + dy
-          if not inGrid(x, y):
+          if not game.map.inGrid(x, y):
             continue
-          let index = tileIndex(x, y)
+          let index = game.map.tileIndex(x, y)
           if game.treeWood[index] > 0 and (result < 0 or index < result):
             result = index
       if result >= 0:
@@ -477,8 +552,8 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
     if arguments[0] < 0 or arguments[0] > int32(BuildableHigh.ord):
       return 0
     let size = BuildingTable[BuildingKind(arguments[0])].footprint
-    if not inGrid(arguments[1], arguments[2]) or
-        not inGrid(arguments[1] + size.width - 1,
+    if not game.map.inGrid(arguments[1], arguments[2]) or
+        not game.map.inGrid(arguments[1] + size.width - 1,
           arguments[2] + size.depth - 1):
       return 0
     int32(game.canPlace(BuildingKind(arguments[0]), arguments[1],
@@ -490,7 +565,7 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
   template unitStat(statName: string, field: untyped) =
     let callback: HostProc = proc(arguments: openArray[int32]): int32 =
       if arguments[0] < 0 or arguments[0] > int32(UnitKind.high.ord): 0
-      else: UnitTable[playerId][UnitKind(arguments[0])].field
+      else: unitOf(playerId, UnitKind(arguments[0])).field
     discard result.addFunction(statName, 1, callback, 2)
 
   template buildingStat(statName: string, field: untyped) =
@@ -600,15 +675,16 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
 ## Lifecycle
 
 proc loadBots*(
-  game: Game, sources: array[PlayerCount, string]
+  game: Game, sources: openArray[string]
 ) =
   ## Compiles one script per player and gives each its own runtime.
+  doAssert sources.len == game.world.players.len
   let limits = overlordLimits()
   let schema = buildOverlordHost(0)
   for inbox in game.inboxes.mitems:
     inbox = newMailbox()
   var bound = false
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(game.world.players.len):
     when not defined(coworld):
       if sources[player].len == 0:
         continue
@@ -643,7 +719,7 @@ proc runDecision(game: Game, player: int32) =
   buildSnapshot(game.world, player)
   activePlayer = player
 
-  var home = tile2(GridSide div 2, GridSide div 2)
+  var home = tile2(game.world.map.side div 2, game.world.map.side div 2)
   for structure in game.world.buildings:
     if structure.owner == player and structure.kind == TownHallBuilding:
       home = structure.origin
@@ -657,8 +733,31 @@ proc runDecision(game: Game, player: int32) =
       economy = addr game.world.players[player]
       ids = overlordDataIds
     game.brains[player].runtime.setData(ids[DataSelfPlayer], player)
-    game.brains[player].runtime.setData(ids[DataEnemyPlayer], 1 - player)
+    var
+      enemy = -1'i32
+      nearest = int32.high
+    for other, side in game.world.players:
+      if not game.world.atWar(player, int32(other)) or side.defeated:
+        continue
+      let distance = chebyshev(home, game.world.map.hallOrigin[other])
+      if distance < nearest:
+        nearest = distance
+        enemy = int32(other)
+    let enemyHome =
+      if enemy >= 0: game.world.map.hallOrigin[enemy]
+      else: home
+    game.brains[player].runtime.setData(ids[DataEnemyPlayer], enemy)
+    game.brains[player].runtime.setData(
+      ids[DataPlayerCount], int32(game.world.players.len)
+    )
+    game.brains[player].runtime.setData(ids[DataEnemyHomeX], int32(enemyHome.x))
+    game.brains[player].runtime.setData(ids[DataEnemyHomeY], int32(enemyHome.y))
     game.brains[player].runtime.setData(ids[DataWorldTick], game.world.tick)
+    game.brains[player].runtime.setData(
+      ids[DataNeighborCount],
+      neighbors.len.int32
+    )
+    game.brains[player].runtime.setData(ids[DataTickRate], TickRate)
     game.brains[player].runtime.setData(ids[DataGold], economy.gold)
     game.brains[player].runtime.setData(ids[DataWood], economy.wood)
     game.brains[player].runtime.setData(ids[DataFoodUsed], economy.foodUsed)
@@ -671,7 +770,7 @@ proc runDecision(game: Game, player: int32) =
     )
     game.brains[player].runtime.setData(ids[DataHomeX], int32(home.x))
     game.brains[player].runtime.setData(ids[DataHomeY], int32(home.y))
-    game.brains[player].runtime.setData(ids[DataMapSize], GridSide)
+    game.brains[player].runtime.setData(ids[DataMapSize], game.world.map.side)
     game.brains[player].runtime.setData(
       ids[DataDecisionPeriod],
       DecisionTicks
@@ -696,10 +795,12 @@ proc runDecision(game: Game, player: int32) =
 proc runBotDecisions*(game: Game) {.measure.} =
   ## Runs every player's script for this decision tick.
   ##
-  ## The starting player alternates, so neither side permanently acts first
+  ## The starting player rotates, so no player permanently acts first
   ## and gets to react to a world the other has not yet touched.
   activeGame = game
-  let first = (game.world.tick div DecisionTicks) mod PlayerCount
-  for offset in 0'i32 ..< PlayerCount:
-    game.runDecision((first + offset) mod PlayerCount)
+  let
+    count = int32(game.world.players.len)
+    first = (game.world.tick div DecisionTicks) mod count
+  for offset in 0'i32 ..< count:
+    game.runDecision((first + offset) mod count)
   activeGame = nil

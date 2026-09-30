@@ -11,11 +11,17 @@ uniform float normalStrength;
 uniform float slopeBroad;
 uniform float scaleBroad;
 uniform float lampIntensity;
+uniform int playerCount;
+uniform float arenaRadius;
+uniform float balconyLampRadius;
+uniform float balconyLampHalfAngle;
 uniform bool normalsOnly;
 uniform mat4 normalView;
 uniform vec3 cameraEye;
 uniform float cameraSide;
 uniform float time;
+// The balconies' turn relative to this surface: lamps ride on the balconies.
+uniform float stageYaw;
 out vec4 outputColor;
 
 vec2 stoneSlope(vec2 uv) {
@@ -88,6 +94,8 @@ void main() {
         base *= 1.0 - pore * 0.06;
         float edge = max(smoothstep(8.4, 10.2, abs(p.x)),
                          smoothstep(5.6, 8.5, abs(p.z)));
+        if (playerCount > 2)
+            edge = smoothstep(arenaRadius - 1.6, arenaRadius + 0.1, length(p.xz));
         float moss = smoothstep(0.55, 0.76, broad) * edge *
             (0.35 + 0.45 * max(n.y, 0.0));
         base = mix(base, vec3(0.20, 0.235, 0.105), moss * 0.50);
@@ -126,8 +134,31 @@ void main() {
     vec3 ambient = mix(vec3(0.33, 0.35, 0.39), vec3(0.62, 0.64, 0.68),
                        max(0.0, n.y));
     vec3 lighting = ambient + vec3(0.67, 0.53, 0.36) * diffuse * sun;
-    lighting += lamp(p, n, vec3(-6.75, 1.25, -6.32 * cameraSide), 0.0);
-    lighting += lamp(p, n, vec3(6.75, 1.25, -6.32 * cameraSide), 2.0);
+    if (playerCount > 2) {
+        // Six nearest lamps keep cost fixed as more islands are added. Their
+        // radial positions exactly match the reused lantern meshes, without
+        // imposing a uniform-array limit on the number of player balconies.
+        // Lamps are placed in the balconies' frame, turned by stageYaw.
+        float c = cos(stageYaw), s = sin(stageYaw);
+        vec3 lp = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+        vec3 ln = vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
+        float count = float(playerCount);
+        float stepAngle = 6.28318530718 / count;
+        float nearest = floor(atan(-lp.x, lp.z + 0.00001) / stepAngle + 0.5);
+        for (int offset = -1; offset <= 1; offset++) {
+            float seat = mod(nearest + float(offset), count);
+            float yaw = seat * stepAngle;
+            for (int end = -1; end <= 1; end += 2) {
+                float angle = float(end) * balconyLampHalfAngle - yaw;
+                vec3 source = vec3(sin(angle) * balconyLampRadius, 1.25,
+                                   cos(angle) * balconyLampRadius);
+                lighting += lamp(lp, ln, source, seat * 2.0 + float(end));
+            }
+        }
+    } else {
+        lighting += lamp(p, n, vec3(-6.75, 1.25, -6.32 * cameraSide), 0.0);
+        lighting += lamp(p, n, vec3(6.75, 1.25, -6.32 * cameraSide), 2.0);
+    }
     vec3 result = base * lighting;
     if (material > 0.5 && material < 1.5) {
         vec3 halfVector = normalize(light + normalize(cameraEye - p));
@@ -135,12 +166,13 @@ void main() {
     }
     if (material > 3.5 && material < 4.5)
         result = vec3(1.0, 0.68, 0.25) * (0.95 + 0.04 * sin(time * 6.0));
-    float depth = max(0.0, -p.z * cameraSide - 8.0);
+    float sceneScale = playerCount > 2 ? 11.5 / max(arenaRadius, 11.5) : 1.0;
+    float depth = max(0.0, -p.z * cameraSide * sceneScale - 8.0);
     float fog = 1.0 - exp(-depth * 0.055);
     vec3 mist = vec3(0.035, 0.055, 0.10);
     result = mix(result, mist, fog);
     // Keep the floor quiet and the perimeter shaded around the original HUD.
-    float edgeShade = 1.0 - smoothstep(6.8, 14.0, length(p.xz)) * 0.18;
+    float edgeShade = 1.0 - smoothstep(6.8, 14.0, length(p.xz) * sceneScale) * 0.18;
     result *= edgeShade;
     outputColor = vec4(result, 1.0);
 }

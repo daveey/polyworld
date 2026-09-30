@@ -267,7 +267,7 @@ proc serve(address: ServerAddress) {.thread.} =
   ## Runs the contract server independently of deterministic simulation ticks.
   address.server.serve(address.port, address.host)
 
-proc coworldOptions*(slotCount: int): GameOptions =
+proc coworldOptions*(requiredSlots: int): GameOptions =
   ## Loads the file handoff, opens logs, and starts the optional host wrapper.
   var tokens: CoworldTokens
   try:
@@ -278,7 +278,9 @@ proc coworldOptions*(slotCount: int): GameOptions =
   except JsonError as error:
     raise newException(CoworldError,
       "Invalid Coworld configuration: " & error.msg)
-  if seats.schema != "coworld-player-seats/1" or
+  let slotCount =
+    if requiredSlots > 0: requiredSlots else: config.players.len
+  if slotCount < 1 or seats.schema != "coworld-player-seats/1" or
     seats.seats.len != slotCount or tokens.tokens.len != slotCount or
     config.players.len != slotCount:
       raise newException(CoworldError, "Coworld roster does not match the game")

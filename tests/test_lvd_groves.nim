@@ -4,6 +4,10 @@ import
   ../examples/light_vs_dark/[assets, groves, maps]
 
 echo "Checking generated scenery placement, harvesting, and restoration"
+doAssert sceneryGroup(0, 100) == sceneryGroup(31, 100)
+doAssert sceneryGroup(0, 100) != sceneryGroup(32, 100)
+doAssert sceneryGroup(0, 100) != sceneryGroup(32 * 100, 100)
+doAssert sceneryGroup(99 * 100 + 99, 100) < 0
 for seed in [2026, 42, 73]:
   let
     map = generateMap(seed.int32)
@@ -42,7 +46,7 @@ for seed in [2026, 42, 73]:
   doAssert rockTiles.len > map.forestRocks.len
   doAssert rockTiles.len <= map.forestRocks.len + 80
   doAssert map.forestRocks.len ==
-    ((treeTiles.len + map.forestRocks.len) div 2 div 10) * 2
+    (treeTiles.len + map.forestRocks.len) div 10
   doAssert wood == map.treeWood
   echo seed, ": ", treeTiles.len, " trees, ", rockTiles.len, " rocks"
 

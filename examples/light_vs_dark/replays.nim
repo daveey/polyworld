@@ -7,16 +7,16 @@ import
   std/os,
   fixxy,
   polyworld/[bodies, tapes, metrics],
-  content
+  content, maps, diplomacies
 
 export fixxy
 
 const
   ReplayGame* = "light_vs_dark"
-  ReplayFormatVersion* = 4'u16
+  ReplayFormatVersion* = 5'u16
   ## This client supports only this gameplay version. Bump it when rules change.
   ## Older replays use their archived client; never add compatibility branches.
-  ReplayGameVersion* = 18'u16
+  ReplayGameVersion* = 23'u16
 
   ActionMove* = 1'u8
   ActionAttack* = 2'u8
@@ -26,7 +26,8 @@ const
   ActionSetRally* = 6'u8
   ActionCancel* = 7'u8
   ActionAttackMove* = 8'u8
-  ActionKindHigh* = ActionAttackMove
+  ActionDiplomacy* = 9'u8
+  ActionKindHigh* = ActionDiplomacy
 
   MaxReplayBytes* = 64 * 1024 * 1024
   MaxReplayActions* = 4_000_000
@@ -36,9 +37,9 @@ const
 
 type
   ReplayPlayerSetup* = object
-    id*: uint8
-      ## Zero is Light and one is Dark.
-    startX*, startY*: uint8
+    id*: int32
+      ## Zero-based player slot, independent of its faction.
+    startX*, startY*: int32
       ## North-west corner tile of the opening town hall.
 
   Setup* = object
@@ -52,16 +53,18 @@ type
       ## generation at load so a generator change fails by name.
     contentHash*: uint64
       ## Fingerprint of every tuning table, checked the same way.
-    players*: array[PlayerCount, ReplayPlayerSetup]
+    players*: seq[ReplayPlayerSetup]
+    mapSettings*: MapSettings
+    diplomacySettings*: DiplomacySettings
 
   ReplayAction* = object
     tick*: uint32
-    playerId*: uint8
+    playerId*: int32
     kind*: uint8
     offset*: FixedVec2
       ## Movement and ground aim offsets from the named tile center.
     entityId*: int32
-      ## The acting unit or structure, always owned by `playerId`.
+      ## The owned acting entity, or zero for diplomacy commands.
     first*, second*, third*: int32
       ## Payload interpreted per kind:
       ##   Move      x, y, unused
@@ -71,6 +74,7 @@ type
       ##   Train     unit kind, unused, unused
       ##   SetRally  x, y, unused
       ##   Cancel    unused, unused, unused
+      ##   Diplomacy target player, command kind, offer ID
 
   ReplayHeader* = TapeHeader[Setup]
   ReplayData* = ActionTape[Setup, ReplayAction, ReplayMetrics]
@@ -91,7 +95,7 @@ proc initReplayData*(setup: Setup): ReplayData =
   result.config = GameConfig(
     seed: setup.mapSeed,
     maxTicks: int32(setup.maximumTicks),
-    players: unnamedPlayers(PlayerCount)
+    players: unnamedPlayers(setup.players.len)
   )
 
 proc initReplayRecorder*(setup: Setup): ReplayRecorder =
@@ -106,8 +110,9 @@ proc record*(recorder: ReplayRecorder, action: ReplayAction) =
     fail("replay point offset is outside its tile")
   if action.kind == 0 or action.kind > ActionKindHigh:
     fail("replay action kind is invalid")
-  if int(action.playerId) >= PlayerCount:
-    fail("replay action names an unknown player")
+  if action.playerId < 0 or
+    int(action.playerId) >= recorder.data.header.setup.players.len:
+      fail("replay action names an unknown player")
   recorder.data.actions.appendAction(action, MaxReplayActions)
 
 proc recordAction*(
@@ -124,7 +129,7 @@ proc recordAction*(
   ## Records one accepted command without any bot implementation detail.
   recorder.record ReplayAction(
     tick: tick,
-    playerId: uint8(playerId),
+    playerId: playerId,
     kind: kind,
     entityId: entityId,
     first: first,
@@ -141,7 +146,7 @@ proc validateSetup(setup: Setup) =
   ## Validates the immutable match description.
   if setup.tickRate != uint16(TickRate):
     fail("replay setup has an unsupported tick rate")
-  if setup.gridTiles != uint16(GridSide):
+  if setup.gridTiles < 32 or int32(setup.gridTiles) > MaximumMapSide:
     fail("replay setup has an unsupported map size")
   if setup.decisionTicks != uint16(DecisionTicks):
     fail("replay setup has an unsupported decision interval")
@@ -155,14 +160,22 @@ proc validateSetup(setup: Setup) =
     fail("replay setup has no deterministic map fingerprint")
   if setup.contentHash == 0:
     fail("replay setup has no deterministic content fingerprint")
+  try:
+    setup.mapSettings.validate(setup.players.len)
+    setup.diplomacySettings.validate()
+  except LvdError as error:
+    fail(error.msg)
   for index, player in setup.players:
     if int(player.id) != index:
       fail("replay setup players are out of canonical order")
-    if int32(player.startX) >= GridSide or int32(player.startY) >= GridSide:
-      fail("replay setup places a player outside the map")
-  if setup.players[0].startX == setup.players[1].startX and
-      setup.players[0].startY == setup.players[1].startY:
-    fail("replay setup starts both players on one tile")
+    if player.startX < 0 or player.startY < 0 or
+      player.startX >= int32(setup.gridTiles) or
+      player.startY >= int32(setup.gridTiles):
+        fail("replay setup places a player outside the map")
+    for other in 0 ..< index:
+      if player.startX == setup.players[other].startX and
+        player.startY == setup.players[other].startY:
+          fail("replay setup starts multiple players on one tile")
 
 proc validateAction(action: ReplayAction, setup: Setup) =
   ## Validates one command's kind, ownership range, and payload bounds.
@@ -170,7 +183,7 @@ proc validateAction(action: ReplayAction, setup: Setup) =
     fail("replay point offset is outside its tile")
   if action.kind == 0 or action.kind > ActionKindHigh:
     fail("replay action kind is invalid")
-  if int(action.playerId) >= PlayerCount:
+  if action.playerId < 0 or int(action.playerId) >= setup.players.len:
     fail("replay action names an unknown player")
   if action.tick > setup.maximumTicks:
     fail("replay action exceeds the configured duration")
@@ -178,10 +191,19 @@ proc validateAction(action: ReplayAction, setup: Setup) =
     fail("replay action did not land on a decision tick")
 
   proc requireTile(x, y: int32) =
-    if x < 0 or x >= GridSide or y < 0 or y >= GridSide:
-      fail("replay action names a tile outside the map")
+    ## Rejects coordinates outside this replay's actual map.
+    if x < 0 or x >= int32(setup.gridTiles) or
+      y < 0 or y >= int32(setup.gridTiles):
+        fail("replay action names a tile outside the map")
 
   case action.kind
+  of ActionDiplomacy:
+    if action.entityId != NoEntity or action.offset != FixedVec2Zero or
+      action.first < 0 or action.first >= int32(setup.players.len) or
+      action.first == action.playerId or
+      action.second notin 0'i32 .. int32(DiplomacyCommand.high.ord) or
+      action.third < 0:
+        fail("replay diplomacy command is invalid")
   of ActionMove, ActionAttackMove:
     if not action.entityId.isUnitId:
       fail("replay move does not name a unit")
@@ -198,7 +220,8 @@ proc validateAction(action: ReplayAction, setup: Setup) =
       if not action.first.isMineId:
         fail("replay harvest does not name a gold mine")
     elif action.second == 1:
-      if action.first < 0 or action.first >= GridCells:
+      let cells = int32(setup.gridTiles) * int32(setup.gridTiles)
+      if action.first < 0 or action.first >= cells:
         fail("replay harvest names a tile outside the map")
     else:
       fail("replay harvest has an invalid resource flag")
@@ -225,7 +248,7 @@ proc validateAction(action: ReplayAction, setup: Setup) =
 
 proc validate*(data: ReplayData) =
   ## Validates versions, setup bounds, command payloads, and hash coverage.
-  data.config.validateConfig(PlayerCount)
+  data.config.validateConfig(data.header.setup.players.len)
   if data.config.seed != data.header.setup.mapSeed or
     data.config.maxTicks != int32(data.header.setup.maximumTicks):
       fail("replay configuration does not match its simulation setup")

@@ -389,6 +389,15 @@ type
   BackgroundUniforms = object
     sky, horizon, ground, horizonHeight: GLint
 
+  ToonMeshPose* = object
+    node*: Node
+    transform*: Mat4
+    normal*: Mat3
+    joints*: seq[Mat4]
+
+  ToonPose* = object
+    meshes*: seq[ToonMeshPose]
+
   ToonContext* = ref object
     shader: GLuint
     uniforms: ToonUniforms
@@ -566,28 +575,61 @@ proc drawBackground*(ctx: ToonContext) =
   glEnable(GL_CULL_FACE)
   glUseProgram(0)
 
+proc prepareToonPose*(pose: var ToonPose, root: Node, transform: Mat4) =
+  ## Captures visible meshes and skin matrices once for all drawing passes.
+  root.updateTransforms(transform)
+  var count = 0
+  proc visit(node: Node, pose: var ToonPose, count: var int) =
+    ## Retains per-mesh joint storage while replacing the current snapshot.
+    if not node.visible:
+      return
+    if node.mesh != nil:
+      if count == pose.meshes.len:
+        pose.meshes.add ToonMeshPose()
+      let index = count
+      inc count
+      pose.meshes[index].node = node
+      pose.meshes[index].transform = node.mat
+      pose.meshes[index].normal = node.mat.normalMatrix
+      root.skinMatricesInto(node, pose.meshes[index].joints)
+    for child in node.nodes:
+      visit(child, pose, count)
+  visit(root, pose, count)
+  pose.meshes.setLen(count)
+
+proc uploadPose(
+  useSkinning, jointMatrices: GLint,
+  joints: openArray[Mat4]
+) =
+  ## Sends a prepared palette to the currently active drawing program.
+  glUniform1i(useSkinning, (joints.len > 0).ord.GLint)
+  if joints.len > 0:
+    glUniformMatrix4fv(
+      jointMatrices, joints.len.GLsizei, GL_FALSE,
+      cast[ptr float32](unsafeAddr joints[0])
+    )
+
 proc drawPrimitive(
-  ctx: ToonContext, root, owner: Node, primitive: Primitive
+  ctx: ToonContext, root, owner: Node, primitive: Primitive,
+  pose: ptr ToonMeshPose = nil
 ) =
   let u = ctx.uniforms
   var
-    modelMat = owner.mat
-    normalMat = owner.mat.normalMatrix
+    modelMat = if pose == nil: owner.mat else: pose.transform
+    normalMat = if pose == nil: owner.mat.normalMatrix else: pose.normal
   glUniformMatrix4fv(u.model, 1, GL_FALSE, cast[ptr float32](modelMat.addr))
   glUniformMatrix3fv(
     u.normalMatrix, 1, GL_FALSE, cast[ptr float32](normalMat.addr))
 
-  root.skinMatricesInto(owner, ctx.jointMatrices)
-  let useSkinning = ctx.jointMatrices.len > 0
-  glUniform1i(u.useSkinning, useSkinning.ord.GLint)
+  if pose == nil:
+    root.skinMatricesInto(owner, ctx.jointMatrices)
+    uploadPose(u.useSkinning, u.jointMatrices, ctx.jointMatrices)
+  else:
+    uploadPose(u.useSkinning, u.jointMatrices, pose.joints)
   glUniform1i(
     u.unlit,
     (primitive.material.unlit or owner.name in ctx.unlitNodes).ord.GLint
   )
-  if useSkinning:
-    glUniformMatrix4fv(
-      u.jointMatrices, ctx.jointMatrices.len.GLsizei, GL_FALSE,
-      cast[ptr float32](ctx.jointMatrices[0].addr))
 
   primitive.uploadToGpu()
   glBindVertexArray(primitive.data.vertexArrayId)
@@ -644,10 +686,15 @@ proc drawPrimitive(
   else:
     glDrawArrays(GL_TRIANGLES, 0, primitive.points.len.cint)
 
-proc draw*(ctx: ToonContext, root: Node) =
+proc draw*(
+  ctx: ToonContext,
+  root: Node,
+  pose: ptr ToonPose = nil
+) =
   ## Draws every visible mesh under root with toon shading. Blended
   ## materials go last so they see the opaque depth.
-  root.updateTransforms(ctx.transform)
+  if pose == nil:
+    root.updateTransforms(ctx.transform)
   glUseProgram(ctx.shader)
   let u = ctx.uniforms
   var
@@ -704,21 +751,29 @@ proc draw*(ctx: ToonContext, root: Node) =
   glDepthFunc(GL_LEQUAL)
   glFrontFace(GL_CCW)
 
-  var blended: seq[(Node, Primitive)]
+  var blended: seq[(Node, Primitive, ptr ToonMeshPose)]
+  proc drawMesh(node: Node, meshPose: ptr ToonMeshPose = nil) =
+    ## Defers transparent primitives without losing their prepared pose.
+    for primitive in node.mesh.primitives:
+      if primitive.material.alphaMode == BlendAlphaMode:
+        blended.add (node, primitive, meshPose)
+      else:
+        ctx.drawPrimitive(root, node, primitive, meshPose)
   proc visit(node: Node) =
+    ## Walks visible nodes for callers without a prepared snapshot.
     if not node.visible:
       return
     if node.mesh != nil:
-      for primitive in node.mesh.primitives:
-        if primitive.material.alphaMode == BlendAlphaMode:
-          blended.add (node, primitive)
-        else:
-          ctx.drawPrimitive(root, node, primitive)
+      drawMesh(node)
     for child in node.nodes:
       visit(child)
-  visit(root)
-  for (node, primitive) in blended:
-    ctx.drawPrimitive(root, node, primitive)
+  if pose == nil:
+    visit(root)
+  else:
+    for meshPose in pose.meshes.mitems:
+      drawMesh(meshPose.node, meshPose.addr)
+  for (node, primitive, meshPose) in blended:
+    ctx.drawPrimitive(root, node, primitive, meshPose)
 
   glDisable(GL_BLEND)
   glDepthMask(GL_TRUE)
@@ -727,18 +782,17 @@ proc draw*(ctx: ToonContext, root: Node) =
   glUseProgram(0)
 
 proc drawSunDepthPrimitive(
-  ctx: ToonContext, root, owner: Node, primitive: Primitive
+  ctx: ToonContext, root, owner: Node, primitive: Primitive,
+  pose: ptr ToonMeshPose = nil
 ) =
   let u = ctx.depthUniforms
-  var modelMat = owner.mat
+  var modelMat = if pose == nil: owner.mat else: pose.transform
   glUniformMatrix4fv(u.model, 1, GL_FALSE, cast[ptr float32](modelMat.addr))
-  root.skinMatricesInto(owner, ctx.jointMatrices)
-  let useSkinning = ctx.jointMatrices.len > 0
-  glUniform1i(u.useSkinning, useSkinning.ord.GLint)
-  if useSkinning:
-    glUniformMatrix4fv(
-      u.jointMatrices, ctx.jointMatrices.len.GLsizei, GL_FALSE,
-      cast[ptr float32](ctx.jointMatrices[0].addr))
+  if pose == nil:
+    root.skinMatricesInto(owner, ctx.jointMatrices)
+    uploadPose(u.useSkinning, u.jointMatrices, ctx.jointMatrices)
+  else:
+    uploadPose(u.useSkinning, u.jointMatrices, pose.joints)
 
   primitive.uploadToGpu()
   glBindVertexArray(primitive.data.vertexArrayId)
@@ -766,12 +820,17 @@ proc drawSunDepthPrimitive(
   else:
     glDrawArrays(GL_TRIANGLES, 0, primitive.points.len.cint)
 
-proc drawSunDepth*(ctx: ToonContext, root: Node) =
+proc drawSunDepth*(
+  ctx: ToonContext,
+  root: Node,
+  pose: ptr ToonPose = nil
+) =
   ## Renders every visible opaque mesh under root into the sun's depth map
   ## (polyworld/shadows), skinning included, so characters cast shadows.
   ## Call between beginSunDepthPass and endSunDepthPass with ctx.transform
   ## already posed; blended materials never cast.
-  root.updateTransforms(ctx.transform)
+  if pose == nil:
+    root.updateTransforms(ctx.transform)
   glUseProgram(ctx.depthShader)
   var lightMatrix = sunDepthPassMvp()
   glUniformMatrix4fv(
@@ -781,14 +840,22 @@ proc drawSunDepth*(ctx: ToonContext, root: Node) =
   glEnable(GL_DEPTH_TEST)
   glDepthMask(GL_TRUE)
 
+  proc drawMesh(node: Node, meshPose: ptr ToonMeshPose = nil) =
+    ## Uses the same prepared joints for either shadow map.
+    for primitive in node.mesh.primitives:
+      if primitive.material.alphaMode != BlendAlphaMode:
+        ctx.drawSunDepthPrimitive(root, node, primitive, meshPose)
   proc visit(node: Node) =
+    ## Walks visible nodes for callers without a prepared snapshot.
     if not node.visible:
       return
     if node.mesh != nil:
-      for primitive in node.mesh.primitives:
-        if primitive.material.alphaMode != BlendAlphaMode:
-          ctx.drawSunDepthPrimitive(root, node, primitive)
+      drawMesh(node)
     for child in node.nodes:
       visit(child)
-  visit(root)
+  if pose == nil:
+    visit(root)
+  else:
+    for meshPose in pose.meshes.mitems:
+      drawMesh(meshPose.node, meshPose.addr)
   glBindVertexArray(0)

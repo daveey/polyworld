@@ -11,7 +11,7 @@ const
   Root = currentSourcePath().parentDir.parentDir.parentDir
   LogLimit = 10 * 1024 * 1024
   SocketTimeout = 5000
-  Games = [("gota", 10), ("lvd", 2), ("cta", 4)]
+  Games = [("gota", 10), ("lvd", 6), ("cta", 4)]
 
 proc fileUri(path: string): string =
   ## Encodes one absolute path for the runner's local file handoff.

@@ -17,14 +17,16 @@ const
 let setup = Setup(
   mapSeed: DefaultSeed,
   tickRate: uint16(TickRate),
-  gridTiles: uint16(GridSide),
+  gridTiles: uint16(DefaultMapSize),
   decisionTicks: uint16(DecisionTicks),
   maximumTicks: MatchTicks,
   mapHash: 0x123456789ABCDEF0'u64,
   contentHash: contentHash(),
-  players: [
+  players: @[
     ReplayPlayerSetup(id: 0, startX: 19, startY: 19),
-    ReplayPlayerSetup(id: 1, startX: 106, startY: 106)
+    ReplayPlayerSetup(
+      id: 1, startX: DefaultMapSize - 22, startY: DefaultMapSize - 22
+    )
   ]
 )
 
@@ -35,14 +37,23 @@ proc filled(recorder: ReplayRecorder) =
 
 echo "Testing Flatty action replay round trip"
 let recorder = initReplayRecorder(setup)
-recorder.recordAction(FirstDecision, LightPlayer, ActionMove, 1_000_000, 64, 42)
-recorder.recordAction(FirstDecision, LightPlayer, ActionBuild, 1_000_001,
-  int32(FarmBuilding.ord), 24, 24)
+recorder.recordAction(
+  FirstDecision, LightPlayer, ActionMove, FirstUnitId, 64, 42
+)
+recorder.recordAction(
+  FirstDecision,
+  LightPlayer,
+  ActionBuild,
+  FirstUnitId + 1,
+  int32(FarmBuilding.ord),
+  24,
+  24
+)
 recorder.recordAction(
   FirstDecision,
   DarkPlayer,
   ActionHarvest,
-  1_000_005,
+  FirstUnitId + 5,
   10,
   0
 )
@@ -50,25 +61,25 @@ recorder.recordAction(
   SecondDecision,
   DarkPlayer,
   ActionTrain,
-  1_000,
+  FirstBuildingId,
   int32(PeonUnit.ord)
 )
 recorder.recordAction(
   ThirdDecision,
   LightPlayer,
   ActionAttack,
-  1_000_000,
-  1_000_005
+  FirstUnitId,
+  FirstUnitId + 5
 )
 recorder.recordAction(
   FourthDecision,
   LightPlayer,
   ActionSetRally,
-  1_001,
+  FirstBuildingId + 1,
   60,
   60
 )
-recorder.recordAction(MatchTicks, DarkPlayer, ActionCancel, 1_000_005)
+recorder.recordAction(MatchTicks, DarkPlayer, ActionCancel, FirstUnitId + 5)
 recorder.filled()
 
 let
@@ -96,11 +107,11 @@ var action: ReplayAction
 doAssert not player.takeActionAt(0, action)
 doAssert not player.takeActionAt(FirstDecision - 1, action)
 doAssert player.takeActionAt(FirstDecision, action)
-doAssert action.entityId == 1_000_000 and action.playerId == uint8(LightPlayer)
+doAssert action.entityId == FirstUnitId and action.playerId == LightPlayer
 doAssert player.takeActionAt(FirstDecision, action)
 doAssert action.kind == ActionBuild
 doAssert player.takeActionAt(FirstDecision, action)
-doAssert action.playerId == uint8(DarkPlayer)
+doAssert action.playerId == DarkPlayer
 doAssert not player.takeActionAt(FirstDecision, action)
 doAssert player.takeActionAt(SecondDecision, action)
 doAssert player.takeActionAt(ThirdDecision, action)
@@ -163,10 +174,10 @@ var invalid = decoded
 invalid.header.gameVersion = high(uint16)
 invalid.rejects("an unsupported game version")
 
-for version in 12'u16 .. 15'u16:
+for version in 12'u16 ..< ReplayGameVersion:
   invalid = decoded
   invalid.header.gameVersion = version
-  invalid.rejects("a replay using read-and-clear failure flags")
+  invalid.rejects("a replay using an outdated gameplay version")
   let old = encodeReplayFile(ReplayGame, version, invalid, MaxReplayBytes)
   try:
     discard decodeReplay(old)
@@ -212,15 +223,15 @@ invalid.actions[0].kind = ActionKindHigh + 1
 invalid.rejects("an unknown command kind")
 
 invalid = decoded
-invalid.actions[0].playerId = uint8(PlayerCount)
+invalid.actions[0].playerId = int32(DefaultPlayerCount)
 invalid.rejects("an unknown player")
 
 invalid = decoded
-invalid.actions[0].first = GridSide
+invalid.actions[0].first = DefaultMapSize
 invalid.rejects("a move off the map")
 
 invalid = decoded
-invalid.actions[0].entityId = 1_000
+invalid.actions[0].entityId = FirstBuildingId
 invalid.rejects("a move naming a structure instead of a unit")
 
 invalid = decoded
@@ -228,7 +239,7 @@ invalid.actions[1].first = int32(BuildableHigh.ord) + 1
 invalid.rejects("building an unbuildable structure")
 
 invalid = decoded
-invalid.actions[2].first = 1_000_000
+invalid.actions[2].first = FirstUnitId
 invalid.rejects("harvesting something that is not a gold mine")
 
 invalid = decoded
@@ -236,7 +247,7 @@ invalid.actions[2].second = 2
 invalid.rejects("an invalid harvest resource flag")
 
 invalid = decoded
-invalid.actions[3].entityId = 1_000_000
+invalid.actions[3].entityId = FirstUnitId
 invalid.rejects("training from a unit instead of a structure")
 
 invalid = decoded
@@ -249,9 +260,9 @@ invalid.rejects("cancelling a neutral gold mine")
 
 echo "Testing recorder ordering and limits"
 let ordered = initReplayRecorder(setup)
-ordered.recordAction(24, LightPlayer, ActionMove, 1_000_000, 1, 1)
+ordered.recordAction(24, LightPlayer, ActionMove, FirstUnitId, 1, 1)
 try:
-  ordered.recordAction(12, LightPlayer, ActionMove, 1_000_000, 1, 1)
+  ordered.recordAction(12, LightPlayer, ActionMove, FirstUnitId, 1, 1)
   doAssert false, "recording backward in time should fail"
 except ReplayError:
   discard

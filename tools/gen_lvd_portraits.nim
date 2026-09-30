@@ -64,7 +64,7 @@ proc main() =
   let scene = newCharacterScene(window)
   scene.useToonShading()
   scene.setToonHour(12)
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< FactionCount:
     for kind in UnitKind:
       let
         model = loadUnitModel(manifest, roster.players[player][kind.ord], kind)

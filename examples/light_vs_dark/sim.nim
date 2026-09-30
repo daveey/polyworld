@@ -10,7 +10,9 @@ import
     visions, mailboxes],
   content,
   maps,
-  replays
+  replays, diplomacies
+
+export diplomacies
 
 const
   QueueSlots* = 5
@@ -115,22 +117,23 @@ type
     over*: bool
     winner*: int32                        # HASH: include, -1 is undecided
     maximumTicks*: int32                  # HASH: include
-    players*: array[PlayerCount, Player]  # HASH: include
+    players*: seq[Player]  # HASH: include
+    diplomacy*: Diplomacy                 # HASH: include
     units*: seq[Unit]                     # HASH: include, id ascending; refs
     buildings*: seq[Building]             # HASH: include, id ascending
     nextUnitId*, nextBuildingId*: int32   # HASH: include
     pathQueue*: seq[PathRequest]          # HASH: include
     terrainEdits*: seq[TileEdit]          # HASH: include
-    exploredCount*: array[PlayerCount, int32]  # HASH: include
+    exploredCount*: seq[int32]  # HASH: include
     map*: MapData                         # HASH: derived, fixed at generation
     blocker*: seq[int32]                  # HASH: derived from buildings/edits
     treeWood*: seq[int16]                 # HASH: derived from edits
     occupancy*: seq[int32]                # HASH: derived from unit tiles
     unitSlot*: seq[int32]                 # HASH: derived index
     buildingSlot*: seq[int32]             # HASH: derived index
-    visibleStamp*: array[PlayerCount, seq[uint32]]   # HASH: derived
-    visionGeneration*: array[PlayerCount, uint32]    # HASH: derived
-    explored*: array[PlayerCount, seq[uint8]]        # HASH: derived
+    visibleStamp*: seq[seq[uint32]]   # HASH: derived
+    visionGeneration*: seq[uint32]    # HASH: derived
+    explored*: seq[seq[uint8]]        # HASH: derived
   OverlordVm* = ref object
     output*: PrintProc
     prepareDecision*: proc(tick: int32) {.closure.}
@@ -154,8 +157,8 @@ type
     hashCheck*: ReplayHashCheck
     historyPlayback*: bool
     replayMode*: bool
-    brains*: array[PlayerCount, OverlordVm]
-    inboxes*: array[PlayerCount, Mailbox]
+    brains*: seq[OverlordVm]
+    inboxes*: seq[Mailbox]
     mapSeed*: int32
     maximumTicks*: int32
 
@@ -180,11 +183,19 @@ proc unitIndex*(w: World, id: int32): int32 =
     return -1
   w.unitSlot[slot]
 
+proc buildingKey(w: World, id: int32): int32 =
+  ## Packs neutral and owned identifier ranges into one dense lookup.
+  if id.isMineId:
+    let slot = id - FirstMineId
+    if slot < w.map.mines.len: slot else: -1
+  else:
+    int32(w.map.mines.len) + id - FirstBuildingId
+
 proc buildingIndex*(w: World, id: int32): int32 =
   ## Returns the index of a standing structure, or -1.
   if not id.isBuildingId:
     return -1
-  let slot = id - FirstMineId
+  let slot = w.buildingKey(id)
   if slot < 0 or slot >= w.buildingSlot.len:
     return -1
   w.buildingSlot[slot]
@@ -205,22 +216,33 @@ proc buildingOwner*(w: World, id: int32): int32 =
   let index = w.buildingIndex(id)
   if index < 0: -1 else: w.buildings[index].owner
 
+proc atWar*(w: World, first, second: int32): bool =
+  ## Applies the same bilateral hostility rule to every combat path.
+  w.diplomacy.atWar(first, second)
+
+proc entityHostile(w: World, player, id: int32): bool =
+  ## Checks the target owner's current relationship before combat.
+  let owner =
+    if id.isUnitId: w.unitOwner(id)
+    else: w.buildingOwner(id)
+  w.atWar(player, owner)
+
 ## Tiles
 
 proc terrainOpen*(w: World, x, y: int32): bool =
   ## Returns whether terrain alone permits standing on a tile.
-  inGrid(x, y) and w.map.passable[tileIndex(x, y)] == 1
+  w.map.inGrid(x, y) and w.map.passable[w.map.tileIndex(x, y)] == 1
 
 proc tileOpen*(w: World, x, y: int32): bool =
   ## Returns whether a tile is free of terrain blocks, trees, and structures.
-  w.terrainOpen(x, y) and w.blocker[tileIndex(x, y)] == 0
+  w.terrainOpen(x, y) and w.blocker[w.map.tileIndex(x, y)] == 0
 
 proc tileOpen*(w: World, tile: Tile2): bool =
   w.tileOpen(int32(tile.x), int32(tile.y))
 
 proc tileFree*(w: World, x, y: int32): bool =
   ## Returns whether a tile is open and unoccupied by any unit.
-  w.tileOpen(x, y) and w.occupancy[tileIndex(x, y)] == 0
+  w.tileOpen(x, y) and w.occupancy[w.map.tileIndex(x, y)] == 0
 
 proc goalClaimed(w: World, tile: Tile2, ignoreId: int32): bool =
   ## Returns whether another living unit is already walking to this tile.
@@ -269,7 +291,7 @@ proc approachTile*(
       let
         tile = tile2(x, y)
         dist =
-          if inGrid(fromTile):
+          if w.map.inGrid(fromTile):
             chebyshev(fromTile, tile)
           else:
             0'i32
@@ -284,9 +306,9 @@ proc approachTile*(
       elif dist < bestOpenDist:
         bestOpenDist = dist
         bestOpen = tile
-  if inGrid(bestFree):
+  if w.map.inGrid(bestFree):
     bestFree
-  elif inGrid(bestClaimed):
+  elif w.map.inGrid(bestClaimed):
     bestClaimed
   else:
     bestOpen
@@ -303,6 +325,8 @@ var
 proc fillVisionKeys(w: World, dest: var seq[int32]) =
   ## Records sources, building footprints, and terrain edits.
   dest.setLen(0)
+  for pair in w.diplomacy.pairs:
+    dest.add int32(pair.state in {Allied, AllianceEnding})
   dest.add int32(w.terrainEdits.len)
   dest.add int32(w.units.len)
   for i in 0 ..< w.units.len:
@@ -333,23 +357,23 @@ proc paintVisible(
     eyeHeight: int16
 ) =
   ## Marks one observer's circle on the current generation stamps.
-  if radius <= 0 or not inGrid(sourceX, sourceZ):
+  if radius <= 0 or not w.map.inGrid(sourceX, sourceZ):
     return
   let
-    sourceIndex = tileIndex(sourceX, sourceZ)
+    sourceIndex = w.map.tileIndex(sourceX, sourceZ)
     sourceY = int64(w.map.heights[sourceIndex]) + int64(eyeHeight)
     generation = w.visionGeneration[player]
   for offset in visionCircleTiles(radius):
     let
       x = sourceX + int32(offset.dx)
       z = sourceZ + int32(offset.dz)
-    if not inGrid(x, z):
+    if not w.map.inGrid(x, z):
       continue
-    let index = tileIndex(x, z)
+    let index = w.map.tileIndex(x, z)
     if w.visibleStamp[player][index] == generation:
       continue
     if offsetVisible(
-      GridSide,
+      w.map.side,
       w.map.heights,
       visionBlockers,
       sourceX,
@@ -363,7 +387,7 @@ proc paintVisible(
         inc w.exploredCount[player]
 
 proc rebuildVision*(w: World) {.measure.} =
-  ## Recomputes range- and occluder-limited visibility for both teams.
+  ## Recomputes range- and occluder-limited visibility for every player.
   ##
   ## A full rebuild rather than an incremental update: incremental vision
   ## needs a matching decrement for every increment across movement, death,
@@ -373,14 +397,14 @@ proc rebuildVision*(w: World) {.measure.} =
   if visionSkipWorld == cast[pointer](w) and
       sameVisionKeys(visionSkipNow, visionSkipKeys):
     return
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< w.players.len:
     if w.visionGeneration[player] == uint32.high:
-      w.visibleStamp[player] = newSeq[uint32](GridCells)
+      w.visibleStamp[player] = newSeq[uint32](w.map.passable.len)
       w.visionGeneration[player] = 1
     else:
       inc w.visionGeneration[player]
-  visionBlockers.setLen(GridCells)
-  for i in 0 ..< GridCells:
+  visionBlockers.setLen(w.map.passable.len)
+  for i in 0 ..< w.map.passable.len:
     visionBlockers[i] = 0
   for index, blocker in w.blocker:
     if blocker == TreeBlocker:
@@ -388,20 +412,23 @@ proc rebuildVision*(w: World) {.measure.} =
     elif blocker != NoEntity:
       visionBlockers[index] = 28
   initVisionKernel()
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(w.players.len):
     for i in 0 ..< w.units.len:
       let unit = w.units[i]
-      if unit.owner == player and
+      if (unit.owner == player or
+          w.diplomacy.sharesVision(player, unit.owner)) and
           unit.state notin {UnitDying, UnitInMine}:
         w.paintVisible(
           player,
           int32(unit.tile.x),
           int32(unit.tile.y),
-          UnitTable[unit.owner][unit.kind].sightTiles,
+          unitOf(unit.owner, unit.kind).sightTiles,
           14
         )
     for structure in w.buildings:
-      if structure.owner != player or structure.state == BuildingDying:
+      if (structure.owner != player and
+          not w.diplomacy.sharesVision(player, structure.owner)) or
+          structure.state == BuildingDying:
         continue
       let radius = BuildingTable[structure.kind].sightTiles
       for y in int32(structure.origin.y) ..<
@@ -414,15 +441,16 @@ proc rebuildVision*(w: World) {.measure.} =
 
 proc visible*(w: World, player, x, y: int32): bool =
   ## Returns whether a player can currently see a tile.
-  inGrid(x, y) and
-    w.visibleStamp[player][tileIndex(x, y)] == w.visionGeneration[player]
+  player >= 0 and player < w.players.len and w.map.inGrid(x, y) and
+    w.visibleStamp[player][w.map.tileIndex(x, y)] == w.visionGeneration[player]
 
 proc visible*(w: World, player: int32, tile: Tile2): bool =
   w.visible(player, int32(tile.x), int32(tile.y))
 
 proc explored*(w: World, player, x, y: int32): bool =
   ## Returns whether a player has ever seen a tile.
-  inGrid(x, y) and w.explored[player][tileIndex(x, y)] == 1
+  player >= 0 and player < w.players.len and
+    w.map.inGrid(x, y) and w.explored[player][w.map.tileIndex(x, y)] == 1
 
 proc unitVisible*(w: World, player: int32, unit: Unit): bool =
   ## Returns whether a player may observe a unit this tick.
@@ -497,8 +525,8 @@ proc standingOccupant(w: World, holder, ignoreId: int32): bool =
 
 proc tileHoldsOther(w: World, x, z, ignoreId: int32): bool =
   ## True when a standing unit occupies this cell.
-  inGrid(x, z) and
-    w.standingOccupant(w.occupancy[tileIndex(x, z)], ignoreId)
+  w.map.inGrid(x, z) and
+    w.standingOccupant(w.occupancy[w.map.tileIndex(x, z)], ignoreId)
 
 proc lvdPathWalkable(layer, x, z: int): bool {.nimcall.} =
   ## Terrain plus idle occupants. Moving traffic is not a wall.
@@ -508,9 +536,9 @@ proc lvdPathWalkable(layer, x, z: int): bool {.nimcall.} =
 
 proc lvdPathEnterCost(layer, x, z: int): int32 {.nimcall.} =
   ## Extra cost for standing on another unit's tile.
-  if layer != 0 or not inGrid(int32(x), int32(z)):
+  if layer != 0 or not pathWorld.map.inGrid(int32(x), int32(z)):
     return 0
-  let holder = pathWorld.occupancy[tileIndex(int32(x), int32(z))]
+  let holder = pathWorld.occupancy[pathWorld.map.tileIndex(int32(x), int32(z))]
   if holder == 0 or holder == pathIgnoreId:
     0
   else:
@@ -634,11 +662,12 @@ proc findPath(
   ## cost extra so searches go around other units when a short detour
   ## exists.
   path.setLen(0)
-  if not inGrid(start) or not inGrid(goal):
+  if not w.map.inGrid(start) or not w.map.inGrid(goal):
     return false
   if start == goal:
     return true
   inc pathSearches
+  installImmutableLayers(w.map.terrain)
   pathWorld = w
   pathIgnoreId = ignoreId
   let found = fillTilePath(PathQuery(
@@ -726,7 +755,7 @@ proc footprintGoal(w: World, index: int32, origin: Tile2,
   let approach = w.approachTile(
     origin, size, w.units[index].tile, w.units[index].id
   )
-  if not inGrid(approach):
+  if not w.map.inGrid(approach):
     w.units[index].clearOrder(true)
     return false
   w.setGoal(index, approach)
@@ -757,7 +786,7 @@ proc nearestTree*(w: World, origin: Tile2): int32 =
   ## are scanned outward and ties inside a ring go to the lowest index, so
   ## two peons asking from the same tile always get the same answer.
   result = -1
-  for radius in 1'i32 ..< GridSide:
+  for radius in 1'i32 ..< w.map.side:
     for dy in -radius .. radius:
       for dx in -radius .. radius:
         if max(abs(dx), abs(dy)) != radius:
@@ -765,9 +794,9 @@ proc nearestTree*(w: World, origin: Tile2): int32 =
         let
           x = int32(origin.x) + dx
           y = int32(origin.y) + dy
-        if not inGrid(x, y):
+        if not w.map.inGrid(x, y):
           continue
-        let index = tileIndex(x, y)
+        let index = w.map.tileIndex(x, y)
         if w.treeWood[index] > 0 and (result < 0 or index < result):
           result = index
     if result >= 0:
@@ -787,15 +816,15 @@ proc occupyFootprint(w: World, origin: Tile2, size: Footprint, id: int32) =
   ## Claims every tile of a footprint for a structure.
   for y in int32(origin.y) ..< int32(origin.y) + size.depth:
     for x in int32(origin.x) ..< int32(origin.x) + size.width:
-      if inGrid(x, y):
-        w.blocker[tileIndex(x, y)] = id
+      if w.map.inGrid(x, y):
+        w.blocker[w.map.tileIndex(x, y)] = id
 
 proc releaseFootprint(w: World, origin: Tile2, size: Footprint) =
   ## Releases every tile of a footprint.
   for y in int32(origin.y) ..< int32(origin.y) + size.depth:
     for x in int32(origin.x) ..< int32(origin.x) + size.width:
-      if inGrid(x, y):
-        w.blocker[tileIndex(x, y)] = 0
+      if w.map.inGrid(x, y):
+        w.blocker[w.map.tileIndex(x, y)] = 0
 
 proc tileCenter(tile: Tile2): FixedVec2 =
   ## Returns the tile-space centre of one cell.
@@ -824,8 +853,8 @@ proc applyBody(unit: Unit) =
 proc place*(w: World, unit: Unit, at: Tile2) =
   ## Teleports a unit and keeps its body on the same cell.
   if unit.state != UnitInMine and unit.state != UnitDying and
-      inGrid(unit.tile):
-    let old = tileIndex(unit.tile)
+      w.map.inGrid(unit.tile):
+    let old = w.map.tileIndex(unit.tile)
     if w.occupancy[old] == unit.id:
       w.occupancy[old] = 0
   unit.tile = at
@@ -833,8 +862,8 @@ proc place*(w: World, unit: Unit, at: Tile2) =
   if unit.body.radius == FixedZero:
     unit.body.radius = UnitBodyRadius
   unit.body.pos = tileCenter(at)
-  if inGrid(at) and unit.state != UnitInMine and unit.state != UnitDying:
-    w.occupancy[tileIndex(at)] = unit.id
+  if w.map.inGrid(at) and unit.state != UnitInMine and unit.state != UnitDying:
+    w.occupancy[w.map.tileIndex(at)] = unit.id
 
 ## Spawning
 
@@ -845,7 +874,7 @@ proc registerUnit(w: World, unit: Unit) =
     w.unitSlot.add(-1)
   w.unitSlot[slot] = int32(w.units.len)
   w.units.add unit
-  w.occupancy[tileIndex(unit.tile)] = unit.id
+  w.occupancy[w.map.tileIndex(unit.tile)] = unit.id
 
 proc spawnUnit*(w: World, owner: int32, kind: UnitKind,
     tile: Tile2): int32 =
@@ -863,7 +892,7 @@ proc spawnUnit*(w: World, owner: int32, kind: UnitKind,
     tile: tile,
     fromTile: tile,
     facingY: 1,
-    hp: UnitTable[owner][kind].hp,
+    hp: unitOf(owner, kind).hp,
     state: UnitIdle,
     targetId: NoEntity,
     sourceId: NoEntity,
@@ -877,7 +906,7 @@ proc spawnUnit*(w: World, owner: int32, kind: UnitKind,
 
 proc registerBuilding(w: World, structure: Building) =
   ## Appends a structure, keeping `buildings` ascending by identifier.
-  let slot = structure.id - FirstMineId
+  let slot = w.buildingKey(structure.id)
   while w.buildingSlot.len <= slot:
     w.buildingSlot.add(-1)
   w.buildingSlot[slot] = int32(w.buildings.len)
@@ -951,7 +980,7 @@ proc killUnit(w: World, index: int32) =
     if mine >= 0 and w.buildings[mine].minersInside > 0:
       dec w.buildings[mine].minersInside
   else:
-    let tile = tileIndex(w.units[index].tile)
+    let tile = w.map.tileIndex(w.units[index].tile)
     if w.occupancy[tile] == w.units[index].id:
       w.occupancy[tile] = 0
   w.units[index].state = UnitDying
@@ -960,7 +989,7 @@ proc killUnit(w: World, index: int32) =
   w.units[index].deathTicks = DeathTicks
   w.units[index].animation = DeathAnimation
   w.units[index].animationTicks = 0
-  w.players[owner].foodUsed -= UnitTable[owner][kind].food
+  w.players[owner].foodUsed -= unitOf(owner, kind).food
   inc w.players[owner].unitsLost
 
 proc razeBuilding(w: World, index: int32) =
@@ -972,7 +1001,7 @@ proc razeBuilding(w: World, index: int32) =
   ## Give back the food a training queue had reserved.
   for slot in 0 ..< w.buildings[index].queueLength:
     let kind = UnitKind(w.buildings[index].queue[slot] - 1)
-    w.players[owner].foodUsed -= UnitTable[owner][kind].food
+    w.players[owner].foodUsed -= unitOf(owner, kind).food
   w.buildings[index].queueLength = 0
   let builder = w.buildings[index].builderId
   if builder != NoEntity:
@@ -986,7 +1015,7 @@ proc razeBuilding(w: World, index: int32) =
         w.units[unitIndex].sourceId == w.buildings[index].id:
       let exit = w.freeTileAround(w.buildings[index].origin,
         w.buildings[index].footprint)
-      if inGrid(exit):
+      if w.map.inGrid(exit):
         w.place(w.units[unitIndex], exit)
         w.units[unitIndex].clearOrder(true)
   w.releaseFootprint(w.buildings[index].origin, w.buildings[index].footprint)
@@ -994,6 +1023,8 @@ proc razeBuilding(w: World, index: int32) =
 
 proc damageEntity*(w: World, id, amount: int32, attacker = -1'i32) =
   ## Applies damage and starts a death when something runs out of health.
+  if attacker >= 0 and not w.entityHostile(attacker, id):
+    return
   if id.isUnitId:
     let index = w.unitIndex(id)
     if index < 0 or w.units[index].state == UnitDying:
@@ -1021,11 +1052,10 @@ proc acquireTarget(w: World, unit: Unit): int32 =
   ## breaking ties by identifier so the choice is reproducible.
   result = NoEntity
   let
-    sight = UnitTable[unit.owner][unit.kind].sightTiles
-    enemy = 1 - unit.owner
+    sight = unitOf(unit.owner, unit.kind).sightTiles
   var best = int32.high
   for other in w.units:
-    if other.owner != enemy or other.state == UnitDying or
+    if not w.atWar(unit.owner, other.owner) or other.state == UnitDying or
         other.state == UnitInMine:
       continue
     let distance = tileDistance(unit.tile, other.tile)
@@ -1037,8 +1067,9 @@ proc acquireTarget(w: World, unit: Unit): int32 =
   if result != NoEntity:
     return
   for structure in w.buildings:
-    if structure.owner != enemy or structure.state == BuildingDying:
-      continue
+    if not w.atWar(unit.owner, structure.owner) or
+      structure.state == BuildingDying:
+        continue
     let distance = w.footprintDistance(unit.tile, structure)
     if distance > sight or not w.buildingVisible(unit.owner, structure):
       continue
@@ -1058,7 +1089,7 @@ proc lvdTilesWalkable(pos: FixedVec2): bool {.nimcall.} =
 
 proc moveSpeed(unit: Unit): Fixed =
   ## Tiles walked in one tick from the unit's step cost.
-  let ticks = UnitTable[unit.owner][unit.kind].stepTicks
+  let ticks = unitOf(unit.owner, unit.kind).stepTicks
   FixedOne / fixed(max(ticks, 1))
 
 proc waypointPosition(unit: Unit, tile: Tile2): FixedVec2 =
@@ -1186,11 +1217,12 @@ proc beginMineTrip(w: World, index, mineId: int32) =
 
 proc beginTreeTrip(w: World, index, treeIndex: int32) =
   ## Sends a peon to a standing tree.
-  if treeIndex < 0 or treeIndex >= GridCells or w.treeWood[treeIndex] <= 0:
-    w.units[index].clearOrder(true)
-    return
+  if treeIndex < 0 or treeIndex >= w.treeWood.len or
+    w.treeWood[treeIndex] <= 0:
+      w.units[index].clearOrder(true)
+      return
   ## A tree fills its own tile, so the goal is the ring around it.
-  let tile = tile2(treeIndex mod GridSide, treeIndex div GridSide)
+  let tile = tile2(treeIndex mod w.map.side, treeIndex div w.map.side)
   if not w.footprintGoal(index, tile, (1'i32, 1'i32)):
     return
   w.units[index].state = UnitToTree
@@ -1221,11 +1253,11 @@ proc beginDropOff(w: World, index: int32, wantWood: bool) =
 proc resumeTreeWork(w: World, index: int32) =
   ## Returns a peon to its tree, or the nearest standing tree in that grove.
   let tile = w.units[index].targetTile
-  if inGrid(tile) and w.treeWood[tileIndex(tile)] > 0:
-    w.beginTreeTrip(index, tileIndex(tile))
+  if w.map.inGrid(tile) and w.treeWood[w.map.tileIndex(tile)] > 0:
+    w.beginTreeTrip(index, w.map.tileIndex(tile))
     return
   let fromTile =
-    if inGrid(tile):
+    if w.map.inGrid(tile):
       tile
     else:
       w.units[index].tile
@@ -1245,7 +1277,7 @@ proc handleInMine(w: World, index: int32) =
     return  # razeBuilding puts stranded miners back on the map
   let exit = w.freeTileAround(w.buildings[mine].origin,
     w.buildings[mine].footprint)
-  if not inGrid(exit):
+  if not w.map.inGrid(exit):
     return  # the ring is full; try again next tick
   let carried = min(GoldPerTrip, w.buildings[mine].goldLeft)
   w.buildings[mine].goldLeft -= carried
@@ -1261,7 +1293,7 @@ proc handleChopping(w: World, index: int32) =
     dec w.units[index].stateTicks
     w.units[index].animation = AttackAnimation
     return
-  let treeIndex = tileIndex(w.units[index].targetTile)
+  let treeIndex = w.map.tileIndex(w.units[index].targetTile)
   if w.treeWood[treeIndex] <= 0:
     w.resumeTreeWork(index)
     return
@@ -1320,7 +1352,7 @@ proc handleMineArrival(w: World, index: int32) =
     return
   if w.buildings[mine].minersInside >= MinersPerMine:
     return
-  w.occupancy[tileIndex(w.units[index].tile)] = 0
+  w.occupancy[w.map.tileIndex(w.units[index].tile)] = 0
   inc w.buildings[mine].minersInside
   w.units[index].state = UnitInMine
   w.units[index].stateTicks = MineTicks
@@ -1358,7 +1390,7 @@ proc finishCombat(w: World, index: int32, failed: bool) =
         fixed(1, 1000)
       else:
         PathArrive
-  if w.units[index].attackMove and inGrid(dest) and
+  if w.units[index].attackMove and w.map.inGrid(dest) and
       length(tileCenter(dest) + w.units[index].attackMoveOffset -
         w.units[index].body.pos) > radius:
     w.units[index].targetId = NoEntity
@@ -1374,7 +1406,7 @@ proc entityArmor(w: World, id: int32): int32 =
     let index = w.unitIndex(id)
     if index >= 0:
       let unit = w.units[index]
-      return UnitTable[unit.owner][unit.kind].armor
+      return unitOf(unit.owner, unit.kind).armor
   0
 
 proc applySplash(w: World, origin: Tile2, amount, skipId, attacker: int32) =
@@ -1397,7 +1429,7 @@ proc applySplash(w: World, origin: Tile2, amount, skipId, attacker: int32) =
 
 proc strikeTarget(w: World, index: int32, target: int32) =
   ## Rolls miss, then applies piercing plus armor-reduced basic, then splash.
-  let stats = UnitTable[w.units[index].owner][w.units[index].kind]
+  let stats = unitOf(w.units[index].owner, w.units[index].kind)
   if stats.missPercent > 0 and w.rng.chance(stats.missPercent):
     return
   w.damageEntity(
@@ -1414,11 +1446,14 @@ proc handleCombat(w: World, index: int32) =
   if not w.entityAlive(target):
     w.finishCombat(index, true)
     return
+  if not w.entityHostile(w.units[index].owner, target):
+    w.finishCombat(index, false)
+    return
   if not w.entityVisible(w.units[index].owner, target):
     w.finishCombat(index, false)
     return
   let
-    stats = UnitTable[w.units[index].owner][w.units[index].kind]
+    stats = unitOf(w.units[index].owner, w.units[index].kind)
     distance = w.rangeToTarget(w.units[index], target)
   if distance <= stats.rangeTiles:
     w.units[index].state = UnitAttacking
@@ -1442,7 +1477,7 @@ proc handleCombat(w: World, index: int32) =
     return
   let targetTile = w.entityTile(target)
   if not w.units[index].hasGoal or
-      not inGrid(w.units[index].pathGoal) or
+      not w.map.inGrid(w.units[index].pathGoal) or
       tileDistance(targetTile, w.units[index].pathGoal) > 4:
     if target.isBuildingId:
       let structure = w.buildingIndex(target)
@@ -1516,7 +1551,7 @@ proc advanceUnit(w: World, index: int32) =
       return
   of UnitToTree:
     if tileDistance(tile, w.units[index].targetTile) <= 1:
-      let treeIndex = tileIndex(w.units[index].targetTile)
+      let treeIndex = w.map.tileIndex(w.units[index].targetTile)
       if w.treeWood[treeIndex] <= 0:
         w.units[index].clearOrder(true)
       else:
@@ -1598,7 +1633,7 @@ proc advanceBuilding(w: World, index: int32) =
         kind = UnitKind(w.buildings[index].queue[0] - 1)
         spawn = w.freeTileAround(w.buildings[index].origin,
           w.buildings[index].footprint)
-      if inGrid(spawn):
+      if w.map.inGrid(spawn):
         let
           owner = w.buildings[index].owner
           id = w.spawnUnit(owner, kind, spawn)
@@ -1609,9 +1644,9 @@ proc advanceBuilding(w: World, index: int32) =
         w.buildings[index].queue[w.buildings[index].queueLength] = 0
         if w.buildings[index].queueLength > 0:
           w.buildings[index].trainTicks =
-            UnitTable[owner][UnitKind(
+            unitOf(owner, UnitKind(
               w.buildings[index].queue[0] - 1
-            )].trainTicks
+            )).trainTicks
         if w.buildings[index].hasRally:
           let unitIndex = w.unitIndex(id)
           w.setGoal(unitIndex, w.buildings[index].rally)
@@ -1625,14 +1660,13 @@ proc advanceBuilding(w: World, index: int32) =
     elif (w.tick + w.buildings[index].id) mod TowerStagger == 0:
       ## Staggered for the same reason units are: a ready tower otherwise
       ## rescans every enemy on the map on every tick it is not firing.
-      let enemy = 1 - w.buildings[index].owner
       var
         target = NoEntity
         best = int32.high
       for other in w.units:
-        if other.owner != enemy or other.state == UnitDying or
-            other.state == UnitInMine:
-          continue
+        if not w.atWar(w.buildings[index].owner, other.owner) or
+          other.state in {UnitDying, UnitInMine}:
+            continue
         let distance = w.footprintDistance(other.tile, w.buildings[index])
         if distance > stats.rangeTiles:
           continue
@@ -1691,7 +1725,7 @@ proc canTrain*(w: World, buildingId: int32, kind: UnitKind): bool =
   let structure = w.buildings[index]
   if structure.owner < 0 or structure.state != BuildingComplete:
     return false
-  let stats = UnitTable[structure.owner][kind]
+  let stats = unitOf(structure.owner, kind)
   if stats.trainedAt != structure.kind:
     return false
   if structure.queueLength >= QueueSlots:
@@ -1727,7 +1761,7 @@ proc applyMove*(w: World, player, unitId, x, y: int32,
     offset = FixedVec2Zero): bool =
   ## Walks a unit to a tile.
   let index = w.ownedUnit(player, unitId)
-  if index < 0 or not inGrid(x, y) or not w.terrainOpen(x, y) or
+  if index < 0 or not w.map.inGrid(x, y) or not w.terrainOpen(x, y) or
       not offset.validTileOffset:
     return false
   if w.units[index].state == UnitInMine:
@@ -1742,7 +1776,7 @@ proc applyAttackMove*(w: World, player, unitId, x, y: int32,
     offset = FixedVec2Zero): bool =
   ## Walks a unit to a tile, stopping to fight whoever enters its sight.
   let index = w.ownedUnit(player, unitId)
-  if index < 0 or not inGrid(x, y) or not w.terrainOpen(x, y) or
+  if index < 0 or not w.map.inGrid(x, y) or not w.terrainOpen(x, y) or
       not offset.validTileOffset:
     return false
   if w.units[index].state == UnitInMine:
@@ -1769,7 +1803,7 @@ proc applyAttack*(w: World, player, unitId, targetId: int32): bool =
   let owner =
     if targetId.isUnitId: w.unitOwner(targetId)
     else: w.buildingOwner(targetId)
-  if owner == player or owner < 0:
+  if not w.atWar(player, owner):
     return false
   w.units[index].orderFailed = false
   w.units[index].clearOrder(false)
@@ -1797,7 +1831,7 @@ proc applyHarvest*(w: World, player, unitId, target, isTree: int32): bool =
         w.buildings[mine].goldLeft <= 0:
       return false
   else:
-    if target < 0 or target >= GridCells or w.treeWood[target] <= 0:
+    if target < 0 or target >= w.treeWood.len or w.treeWood[target] <= 0:
       return false
 
   w.units[index].orderFailed = false
@@ -1813,7 +1847,7 @@ proc applyHarvest*(w: World, player, unitId, target, isTree: int32): bool =
     if carrying:
       w.units[index].sourceId = NoEntity
       w.units[index].targetTile =
-        tile2(target mod GridSide, target div GridSide)
+        tile2(target mod w.map.side, target div w.map.side)
       w.beginDropOff(index, w.units[index].carryWood > 0)
     else:
       w.units[index].clearOrder(false)
@@ -1834,7 +1868,7 @@ proc applyBuild*(w: World, player, peonId, kindValue, x, y: int32): bool =
     kind = BuildingKind(kindValue)
     stats = BuildingTable[kind]
     origin = tile2(x, y)
-  if not inGrid(x, y) or not inGrid(x + stats.footprint.width - 1,
+  if not w.map.inGrid(x, y) or not w.map.inGrid(x + stats.footprint.width - 1,
       y + stats.footprint.depth - 1):
     return false
   if not w.techMet(player, stats.requires):
@@ -1900,7 +1934,7 @@ proc applyTrain*(w: World, player, buildingId, kindValue: int32): bool =
   let kind = UnitKind(kindValue)
   if not w.canTrain(buildingId, kind):
     return false
-  let stats = UnitTable[player][kind]
+  let stats = unitOf(player, kind)
   w.players[player].gold -= stats.gold
   w.players[player].wood -= stats.wood
   w.players[player].foodUsed += stats.food
@@ -1914,7 +1948,7 @@ proc applyTrain*(w: World, player, buildingId, kindValue: int32): bool =
 proc applySetRally*(w: World, player, buildingId, x, y: int32): bool =
   ## Points newly trained units at a tile.
   let index = w.ownedBuilding(player, buildingId)
-  if index < 0 or not inGrid(x, y) or not w.terrainOpen(x, y):
+  if index < 0 or not w.map.inGrid(x, y) or not w.terrainOpen(x, y):
     return false
   w.buildings[index].rally = tile2(x, y)
   w.buildings[index].hasRally = true
@@ -1956,7 +1990,7 @@ proc applyCancel*(w: World, player, entityId: int32): bool =
   let
     slot = w.buildings[index].queueLength - 1
     kind = UnitKind(w.buildings[index].queue[slot] - 1)
-    stats = UnitTable[player][kind]
+    stats = unitOf(player, kind)
   w.players[player].gold += stats.gold
   w.players[player].wood += stats.wood
   w.players[player].foodUsed -= stats.food
@@ -1966,10 +2000,31 @@ proc applyCancel*(w: World, player, entityId: int32): bool =
     w.buildings[index].trainTicks = 0
   true
 
+proc applyDiplomacy*(
+  w: World, player, other: int32, command: DiplomacyCommand, offerId = 0'i32
+): bool =
+  ## Applies diplomacy only for living players and refreshes shared vision.
+  if player < 0 or player >= w.players.len or other < 0 or
+    other >= w.players.len or w.players[player].defeated or
+    w.players[other].defeated:
+      return false
+  let shared = w.diplomacy.sharesVision(player, other)
+  result = w.diplomacy.apply(player, other, w.tick, command, offerId)
+  if result and shared != w.diplomacy.sharesVision(player, other):
+    w.rebuildVision()
+
 proc applyReplayAction*(w: World, action: ReplayAction): bool {.discardable.} =
   ## Re-executes one recorded command through the same validators.
   let player = int32(action.playerId)
+  if player < 0 or player >= w.players.len:
+    return false
   case action.kind
+  of ActionDiplomacy:
+    if action.second notin 0'i32 .. int32(DiplomacyCommand.high.ord):
+      return false
+    w.applyDiplomacy(
+      player, action.first, DiplomacyCommand(action.second), action.third
+    )
   of ActionMove:
     w.applyMove(player, action.entityId, action.first, action.second, action.offset)
   of ActionAttackMove:
@@ -2002,6 +2057,17 @@ proc record(game: Game, kind: uint8, player, entityId: int32,
     return
   game.recorder.recordAction(uint32(game.world.tick), player, kind, entityId,
     first, second, third, offset)
+
+proc applyDiplomacy*(
+  game: Game, player, other: int32, command: DiplomacyCommand,
+  offerId = 0'i32
+): bool =
+  ## Records an accepted diplomacy command through the normal action tape.
+  result = game.world.applyDiplomacy(player, other, command, offerId)
+  if result:
+    game.metrics.command(int(player), game.world.tick)
+    game.record(ActionDiplomacy, player, NoEntity, other, command.ord.int32,
+      offerId)
 
 proc applyMove*(
     game: Game, player, unitId, x, y: int32, offset = FixedVec2Zero
@@ -2089,13 +2155,17 @@ proc mixTile(hash: var uint32, tile: Tile2) =
 proc hashWorld(w: World): uint64 =
   ## Hashes all authoritative state that can affect later simulation ticks.
   var hash = HashySeed
+  hash.addHashy(w.map.hash)
+  hash.addHashy(int32(w.players.len))
+  hash.addHashy(w.maximumTicks)
   hash.addHashy(w.tick)
   hash.addHashy(w.rng)
   hash.addHashy(w.over)
   hash.addHashy(w.winner)
+  hash.addHashy(w.diplomacy)
   hash.addHashy(w.nextUnitId)
   hash.addHashy(w.nextBuildingId)
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< w.players.len:
     let side = w.players[player]
     hash.addHashy(side.gold)
     hash.addHashy(side.wood)
@@ -2214,32 +2284,37 @@ proc score*(w: World, player: int32): int64 =
 
 proc checkVictory(w: World) =
   ## A player is out once it has no structures and no peon left to raise one.
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(w.players.len):
     if w.players[player].defeated:
       continue
     if w.buildingCount(player) == 0 and w.peonCount(player) == 0:
       w.players[player].defeated = true
+      w.diplomacy.eliminate(player)
   if w.over:
     return
-  let
-    lightOut = w.players[LightPlayer].defeated
-    darkOut = w.players[DarkPlayer].defeated
-  if lightOut or darkOut:
+  var
+    survivors = 0
+    survivor = -1'i32
+  for player, side in w.players:
+    if not side.defeated:
+      inc survivors
+      survivor = int32(player)
+  if survivors == 0 or (survivors == 1 and w.players.len > 1):
     w.over = true
-    w.winner =
-      if lightOut and darkOut: -1
-      elif lightOut: DarkPlayer
-      else: LightPlayer
+    w.winner = survivor
     return
   if w.tick >= w.maximumTicks:
     w.over = true
-    let
-      light = w.score(LightPlayer)
-      dark = w.score(DarkPlayer)
-    w.winner =
-      if light > dark: LightPlayer
-      elif dark > light: DarkPlayer
-      else: -1
+    var best = int64.low
+    for player, side in w.players:
+      if side.defeated:
+        continue
+      let score = w.score(int32(player))
+      if score > best:
+        best = score
+        w.winner = int32(player)
+      elif score == best:
+        w.winner = -1
 
 ## The tick
 ##
@@ -2284,13 +2359,14 @@ proc removeDead(w: World) =
     for slot in 0 ..< w.buildingSlot.len:
       w.buildingSlot[slot] = -1
     for index, structure in w.buildings:
-      w.buildingSlot[structure.id - FirstMineId] = int32(index)
+      w.buildingSlot[w.buildingKey(structure.id)] = int32(index)
 
 proc tickWorld*(w: World, decide: proc(w: World) {.closure.}) {.measure.} =
   ## Advances the simulation by exactly one tick.
   if w.over:
     return
   inc w.tick
+  w.diplomacy.advance(w.tick)
 
   if w.tick mod VisionTicks == 0:
     profileBlock "vision":
@@ -2323,8 +2399,8 @@ proc tickWorld*(w: World, decide: proc(w: World) {.closure.}) {.measure.} =
       if unit.state == UnitDying or unit.state == UnitInMine:
         continue
       unit.applyBody()
-      if inGrid(unit.tile):
-        let index = tileIndex(unit.tile)
+      if w.map.inGrid(unit.tile):
+        let index = w.map.tileIndex(unit.tile)
         if w.occupancy[index] == 0:
           w.occupancy[index] = unit.id
   profileBlock "buildings":
@@ -2356,27 +2432,36 @@ proc restore*(world: World, snapshot: World) =
   world.stats = snapshot.stats.clone()
   world.units = cloneUnits(snapshot.units)
 
-proc newWorld*(map: MapData, maximumTicks: int32): World =
+proc newWorld*(
+  map: MapData, maximumTicks: int32, settings = DiplomacySettings()
+): World =
   ## Builds the opening position for one match.
   visionSkipWorld = nil
+  installImmutableLayers(map.terrain)
   result = World(
+    players: newSeq[Player](map.hallOrigin.len),
+    diplomacy: initDiplomacy(map.hallOrigin.len, settings),
+    exploredCount: newSeq[int32](map.hallOrigin.len),
+    visibleStamp: newSeq[seq[uint32]](map.hallOrigin.len),
+    visionGeneration: newSeq[uint32](map.hallOrigin.len),
+    explored: newSeq[seq[uint8]](map.hallOrigin.len),
     tick: 0,
     winner: -1,
-    stats: newCombatStats(PlayerCount),
+    stats: newCombatStats(map.hallOrigin.len),
     maximumTicks: maximumTicks,
     map: map,
-    blocker: newSeq[int32](GridCells),
+    blocker: newSeq[int32](map.passable.len),
     treeWood: map.treeWood,
-    occupancy: newSeq[int32](GridCells),
+    occupancy: newSeq[int32](map.passable.len),
     nextUnitId: FirstUnitId,
     nextBuildingId: FirstBuildingId
   )
   result.rng = initRng(map.seed)
-  for player in 0 ..< PlayerCount:
-    result.visibleStamp[player] = newSeq[uint32](GridCells)
-    result.explored[player] = newSeq[uint8](GridCells)
+  for player in 0 ..< map.hallOrigin.len:
+    result.visibleStamp[player] = newSeq[uint32](map.passable.len)
+    result.explored[player] = newSeq[uint8](map.passable.len)
     result.visionGeneration[player] = 0
-  for index in 0 ..< GridCells:
+  for index in 0 ..< map.passable.len:
     if result.treeWood[index] > 0:
       result.blocker[index] = TreeBlocker
 
@@ -2395,7 +2480,7 @@ proc newWorld*(map: MapData, maximumTicks: int32): World =
       goldLeft: mine.gold
     )
 
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(map.hallOrigin.len):
     let stats = BuildingTable[TownHallBuilding]
     result.registerBuilding Building(
       id: result.nextBuildingId,
@@ -2413,24 +2498,15 @@ proc newWorld*(map: MapData, maximumTicks: int32): World =
     result.players[player].gold = StartingGold
     result.players[player].wood = StartingWood
 
-  var lightSpawns: seq[Tile2]
-  for _ in 0 ..< StartingPeons:
-    let spawn = result.freeTileAround(map.hallOrigin[LightPlayer],
-      BuildingTable[TownHallBuilding].footprint)
-    doAssert inGrid(spawn),
-      "seed " & $map.seed & ": no room to spawn the opening peons"
-    lightSpawns.add spawn
-    discard result.spawnUnit(LightPlayer, PeonUnit, spawn)
-    result.players[LightPlayer].foodUsed +=
-      UnitTable[LightPlayer][PeonUnit].food
-  for spawn in lightSpawns:
-    let (mx, my) = mirrorTile(int32(spawn.x), int32(spawn.y))
-    doAssert result.tileFree(mx, my),
-      "seed " & $map.seed & ": Dark opening tile is not free"
-    discard result.spawnUnit(DarkPlayer, PeonUnit, tile2(mx, my))
-    result.players[DarkPlayer].foodUsed +=
-      UnitTable[DarkPlayer][PeonUnit].food
-  for player in 0'i32 ..< PlayerCount:
+  for player in 0'i32 ..< int32(map.hallOrigin.len):
+    for _ in 0 ..< StartingPeons:
+      let spawn = result.freeTileAround(
+        map.hallOrigin[player], BuildingTable[TownHallBuilding].footprint
+      )
+      if not map.inGrid(spawn):
+        raise newException(LvdError, "No room for the opening peons.")
+      discard result.spawnUnit(player, PeonUnit, spawn)
+      result.players[player].foodUsed += unitOf(player, PeonUnit).food
     result.recomputeFoodCap(player)
 
   result.rebuildVision()
@@ -2448,15 +2524,19 @@ proc sampleMetrics*(game: Game, force = false) =
     for unit in game.world.units:
       if unit.owner == slot and unit.kind != PeonUnit and
         unit.state != UnitDying and unit.hp > 0:
-          army += UnitTable[unit.owner][unit.kind].gold
+          army += unitOf(unit.owner, unit.kind).gold
     game.metrics.set(slot, ArmyMetric, army)
   game.history.capture(game.metrics, game.world.tick, force)
 
-proc newGame*(map: MapData, maximumTicks: int32): Game =
+proc newGame*(
+  map: MapData, maximumTicks: int32, settings = DiplomacySettings()
+): Game =
   ## Builds one match session around a fresh world.
   result = Game(
-    metrics: newMetrics(PlayerCount, TickRate),
-    world: newWorld(map, maximumTicks),
+    brains: newSeq[OverlordVm](map.hallOrigin.len),
+    inboxes: newSeq[Mailbox](map.hallOrigin.len),
+    metrics: newMetrics(map.hallOrigin.len, TickRate),
+    world: newWorld(map, maximumTicks, settings),
     mapSeed: map.seed,
     maximumTicks: maximumTicks
   )
@@ -2464,6 +2544,6 @@ proc newGame*(map: MapData, maximumTicks: int32): Game =
 
 proc scores*(world: World): seq[int] =
   ## Converts the existing winner into binary scores in platform slot order.
-  result.setLen(PlayerCount)
+  result.setLen(world.players.len)
   if world.winner >= 0:
     result[world.winner] = 1

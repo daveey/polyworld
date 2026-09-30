@@ -61,7 +61,7 @@ let
   manifest = readManifest(ChargenLibrary)
   roster = readCharacterRoster([Emerald, WetAsphalt])
 
-for player in 0 ..< PlayerCount:
+for player in 0 ..< FactionCount:
   for kind in UnitKind:
     let entry = roster.players[player][kind.ord]
     doAssert entry.preset.selected("Hair") == "None"

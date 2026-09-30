@@ -511,7 +511,7 @@ proc baseCard(name: string, energyCost: int): Card =
 suite "AWM target kinds":
   test "kinds and relations read as rules text":
     check target({Hero}).text() == "a hero"
-    check target({Hero}, Enemy).text() == "the enemy hero"
+    check target({Hero}, Enemy).text() == "an enemy hero"
     check target({Minion}).text() == "a minion"
     check target({Minion}, Friendly).text() == "a friendly minion"
     check target({Minion, Hero}).text() == "any target"
@@ -820,7 +820,7 @@ suite "AWM Swords":
     check printed(rules(addPowerToughness(0, 2,
       game.board.choose(kind: Minion)))) == "Give all minions +0/+2."
     check printed(rules(addPowerToughness(-1, 0,
-      game.board.choose(kind: Minion, owner: Opponent)))) ==
+      game.board.choose(kind: Minion, owner: AllOpponents)))) ==
       "Give all enemy minions -1/+0."
 
   test "Swords buffs every friendly minion and nothing else":
@@ -909,7 +909,7 @@ suite "AWM Swords":
       bear = Warrior.classCard()
       wither = Card(name: "Wither", energyCost: 0, kind: Spell,
         rules: rules(addPowerToughness(-5, -2,
-          game.board.choose(kind: Minion, owner: Opponent))))
+          game.board.choose(kind: Minion, owner: AllOpponents))))
     game.players[enemy].board = @[readyMinion(enemy, 1, bear)]
     game.nextMinionId = 2
     var sturdy = readyMinion(enemy, 2, bear)
@@ -1081,8 +1081,8 @@ suite "AWM Tactician, Footsoldier, Commander and Rally":
     check not rally.needsChoice()
     check rally.ruleText() ==
       "Summon 2 Footsoldiers.\nGive all friendly minions +1/+0."
-    check printed(rules(summon(1, "Footsoldier", Opponent))) ==
-      "Summon a Footsoldier for your opponent."
+    check printed(rules(summon(1, "Footsoldier", AllOpponents))) ==
+      "Summon a Footsoldier for each opponent."
     check baseCardNamed("Footsoldier") == footsoldier
     expect ValueError:
       discard baseCardNamed("Nobody")
@@ -1183,7 +1183,7 @@ suite "AWM Tactician, Footsoldier, Commander and Rally":
       enemy = 1 - me
     game.nextMinionId = 7
     game.players[me].hand = @[Card(name: "Gift", energyCost: 0, kind: Spell,
-      rules: rules(summon(1, "Footsoldier", Opponent)))]
+      rules: rules(summon(1, "Footsoldier", AllOpponents)))]
     check game.playCard(0)
     check game.players[me].board.len == 0
     check game.players[enemy].board.len == 1
@@ -1224,8 +1224,8 @@ suite "AWM Oozification":
     check oozification.targetCount() == 1
     check oozification.ruleText() == "Destroy a minion.\n" &
       "Summon Oozes equal to the target's toughness for the target's owner."
-    check printed(rules(summon(1, "Ooze", Opponent))) ==
-      "Summon an Ooze for your opponent."
+    check printed(rules(summon(1, "Ooze", AllOpponents))) ==
+      "Summon an Ooze for each opponent."
     check printed(rules(summon(2, "Ooze", You))) == "Summon 2 Oozes."
     # With several targets, getTarget says which one.
     check printed(rules(destroy(target({Minion})), destroy(target({Minion})),
@@ -1457,14 +1457,14 @@ suite "AWM Plan, draws and triggers":
 
   test "draw and on read naturally":
     check printed(rules(draw(2))) == "Draw 2 cards."
-    check printed(rules(draw(1, Opponent))) == "Your opponent draws 1 card."
+    check printed(rules(draw(1, AllOpponents))) == "Each opponent draws 1 card."
     check printed(rules(destroy(target({Minion})),
       draw(getTarget().toughness, getTarget().owner))) ==
       "Destroy a minion.\n" &
       "The target's owner draws cards equal to the target's toughness."
-    check printed(rules(on(nextTurn(Opponent),
+    check printed(rules(on(nextTurn(AnyOpponent),
       draw(1), draw(2), destroy(self())))) ==
-      "At the start of your opponent's next turn, " &
+      "At the start of an opponent's next turn, " &
       "draw 1 card, draw 2 cards and destroy this card."
 
   test "Plan draws now, stays in play, and draws again next turn":
@@ -1523,7 +1523,7 @@ suite "AWM Plan, draws and triggers":
 
   test "a trigger on the opponent's next turn fires one turn later, once":
     let omen = Card(name: "Omen", energyCost: 0, kind: Trinket,
-      rules: rules(on(nextTurn(Opponent), draw(1, Opponent))))
+      rules: rules(on(nextTurn(AnyOpponent), draw(1, AllOpponents))))
     var game = newGame(Mage, Warrior, 1009)
     let
       me = game.currentPlayer
@@ -1632,7 +1632,7 @@ suite "AWM triggers that choose targets":
 
   test "a trigger on the opponent's turn waits for its owner, not them":
     let trap = Card(name: "Trap", energyCost: 0, kind: Trinket,
-      rules: rules(on(nextTurn(Opponent), damage(1, target({Minion})))))
+      rules: rules(on(nextTurn(AnyOpponent), damage(1, target({Minion})))))
     var game = newGame(Mage, Warrior, 1107)
     let
       me = game.currentPlayer
@@ -1724,7 +1724,7 @@ suite "AWM Study and discards":
     check study.class == some(Mage)
     check not study.needsChoice()
     check study.ruleText() == "Draw 2 cards.\nDiscard 1 card."
-    check printed(rules(toss(2, Opponent))) == "Your opponent discards 2 cards."
+    check printed(rules(toss(2, AllOpponents))) == "Each opponent discards 2 cards."
     check printed(rules(destroy(target({Minion})),
       toss(getTarget().toughness, getTarget().owner))) ==
       "Destroy a minion.\n" &
@@ -1812,7 +1812,7 @@ suite "AWM Study and discards":
       me = game.currentPlayer
       enemy = 1 - me
     game.players[me].hand = @[Card(name: "Rot", energyCost: 0, kind: Spell,
-      rules: rules(toss(1, Opponent)))]
+      rules: rules(toss(1, AllOpponents)))]
     check game.playCard(0)
     check game.waitingToss
     check game.currentPlayer == me
@@ -1844,15 +1844,15 @@ suite "AWM selections and Primordial":
     check printed(rules(bounce(target({Minion})))) ==
       "Return a minion to its owner's hand."
     check printed(rules(bounce(
-      game.board.choose(kind: Minion, owner: Opponent)))) ==
+      game.board.choose(kind: Minion, owner: AllOpponents)))) ==
       "Return all enemy minions to their owners' hands."
     check printed(rules(destroy(game.board.choose(kind: Minion)))) ==
       "Destroy all minions."
     check printed(rules(lose(ranged(),
-      game.board.choose(kind: Minion, owner: Opponent)))) ==
+      game.board.choose(kind: Minion, owner: AllOpponents)))) ==
       "All enemy minions lose Ranged."
     check printed(rules(removePowerToughness(1, 0,
-      game.board.choose(kind: Minion, owner: Opponent)))) ==
+      game.board.choose(kind: Minion, owner: AllOpponents)))) ==
       "Give all enemy minions -1/-0."
     check printed(rules(addPowerToughness(1, 1, target({Minion})))) ==
       "Give a minion +1/+1."
@@ -1911,9 +1911,9 @@ suite "AWM selections and Primordial":
 
   test "query forms act on every match, and a spell has no self to skip":
     let sweep = Card(name: "Sweep", energyCost: 0, kind: Spell, rules: rules(
-      lose(ranged(), game.board.choose(kind: Minion, owner: Opponent)),
+      lose(ranged(), game.board.choose(kind: Minion, owner: AllOpponents)),
       removePowerToughness(1, 0,
-        game.board.choose(kind: Minion, owner: Opponent)),
+        game.board.choose(kind: Minion, owner: AllOpponents)),
       destroy(game.board.choose({self: false, owner: You}))))
     var game = newGame(Mage, Archer, 1403)
     let
@@ -1961,8 +1961,8 @@ suite "AWM attack triggers and Bubble Shield":
       "return the attacker to its owner's hand and destroy this card."
     check shield.kind == Spell
     check shield.ruleText() == "Summon 2 Bubbles."
-    check printed(rules(on(attacked(Opponent), draw(1)))) ==
-      "When your opponent's hero is attacked, draw 1 card."
+    check printed(rules(on(attacked(AnyOpponent), draw(1)))) ==
+      "When an opponent's hero is attacked, draw 1 card."
     check printed(rules(on(attacked(self()), damage(1, getAttacker())))) ==
       "When this card is attacked, deal 1 damage to the attacker."
 

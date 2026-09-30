@@ -8,7 +8,7 @@ import
 ## Every stat that would break the simulation if it were zero or negative.
 
 block positiveUnitStats:
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< FactionCount:
     for kind in UnitKind:
       let stats = UnitTable[player][kind]
       doAssert stats.gold > 0, &"{player} {kind} costs no gold"
@@ -121,7 +121,7 @@ block techIsAcyclic:
     resolve(kind, seen)
 
 block unitTechIsReachable:
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< FactionCount:
     for kind in UnitKind:
       let stats = UnitTable[player][kind]
       doAssert stats.trainedAt <= BuildableHigh,
@@ -173,7 +173,7 @@ block wc1SideDifferences:
 ## Diagonal steps must cost more than orthogonal ones but less than two.
 
 block diagonalCostIsSane:
-  for player in 0 ..< PlayerCount:
+  for player in 0 ..< FactionCount:
     for kind in UnitKind:
       let
         straight = UnitTable[player][kind].stepTicks

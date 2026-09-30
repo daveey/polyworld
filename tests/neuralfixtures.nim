@@ -1,7 +1,7 @@
 import
   std/strutils,
   zippy, zippy/crc,
-  ../examples/gods_of_the_arena/neural/common
+  ../examples/gods_of_the_arena/neural/[common, fly]
 
 proc word16(bytes: var string, value: int) =
   ## Writes a synthetic ZIP header field.
@@ -106,3 +106,33 @@ proc andreFixture*(hidden = 12, layers = 1, wrapped = true): string =
       i == decoder + 11 * hidden or
       (i >= recurrent and (i - recurrent) mod stride == 0)
     result.addWord(cast[uint32](if active: 1.0'f else: 0.0'f))
+
+proc addSingle(bytes: var string, value: float32) =
+  ## Appends one little-endian FP32 word.
+  bytes.addWord(cast[uint32](value))
+
+proc flyFixture*(
+    leak = 1.0'f,
+    source = 0'u32,
+    offsets = [0'u32, 0, 1],
+    valueBias = 0.25'f
+): string =
+  ## Two neurons: input drives neuron 0, and 0 -> 1 with weight 2.
+  result = FlyMagic
+  for value in [2'u32, 1, 45, 1, 1, 1]:
+    result.addWord(value)
+  result.addSingle(leak)
+  for offset in offsets:
+    result.addWord(offset)
+  result.addWord(source)
+  result.addSingle(2.0)
+  result.addSingle(0.0)
+  result.addSingle(0.0)
+  result.addWord(0)
+  for i in 0 ..< 45:
+    result.addSingle(if i == 0: 1.0'f else: 0.0'f)
+  result.addWord(1)
+  for i in 0 ..< 12:
+    result.addSingle(1.0)
+  for i in 0 ..< 12:
+    result.addSingle(if i == 11: valueBias else: 0.0'f)

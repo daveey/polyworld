@@ -4,6 +4,7 @@
 ## seat only, so the spectator's reverse camera never looks through a wall.
 import std/[math, random]
 import vmath
+import awmmultiplayer
 
 type
   CourtyardVertex* = object
@@ -14,6 +15,9 @@ type
   CourtyardMesh* = object
     vertices*: seq[CourtyardVertex]
     commonCount*, backdropCount*, pavingCount*: int
+    centerCount*: int
+      ## Multiplayer: the static center island, at the start of the common
+      ## range; the balconies after it can turn (see stageRotation).
 
 const
   Stone = 0.0'f32
@@ -398,6 +402,220 @@ proc buildCourtyardMesh*(): CourtyardMesh =
     vertex.normal.z = -vertex.normal.z
     result.vertices.add vertex
 
+proc arcSlab(m: var CourtyardMesh, inner, outer, startAngle, endAngle,
+    bottom, top: float32, color: Vec3, bevel = 0.025'f32,
+    material = Stone) =
+  ## One reusable curved masonry module, centered on the arena's origin.
+  var footprint: seq[Vec2]
+  for step in 0 .. 3:
+    let angle = startAngle + (endAngle - startAngle) * step.float32 / 3
+    footprint.add vec2(sin(angle), cos(angle)) * inner
+  for step in countdown(3, 0):
+    let angle = startAngle + (endAngle - startAngle) * step.float32 / 3
+    footprint.add vec2(sin(angle), cos(angle)) * outer
+  m.stoneSlab(footprint, bottom, top, color, bevel, material)
+
+proc arcCourse(m: var CourtyardMesh, rng: var Rand, inner, outer,
+    halfAngle, bottom, top: float32, color: Vec3,
+    stagger = 0.0'f32, width = 1.15'f32, bevel = 0.025'f32) =
+  let
+    segments = max(2, int(ceil(halfAngle * (inner + outer) / width)))
+    step = halfAngle * 2 / segments.float32
+    seam = 0.014'f32 / max(inner, 1.0'f32)
+  for index in -1 .. segments:
+    let
+      a = max(-halfAngle, -halfAngle + (index.float32 + stagger) * step) + seam
+      b = min(halfAngle, -halfAngle + (index.float32 + stagger + 1) * step) - seam
+    if b - a < seam: continue
+    m.arcSlab(inner, outer, a, b, bottom, top,
+      color * rng.rand(0.87 .. 1.09).float32, bevel)
+
+proc appendTurned(m: var CourtyardMesh, piece: CourtyardMesh, yaw: float32) =
+  for source in piece.vertices:
+    var vertex = source
+    vertex.position = turn(vertex.position, yaw)
+    vertex.normal = turn(vertex.normal, yaw)
+    m.vertices.add vertex
+
+proc buildMultiplayerCourtyardMesh*(layout: MultiplayerLayout): CourtyardMesh =
+  ## Floating stone islands share the existing sandstone, brass, cloth, ivy
+  ## and lantern primitives. No walls span the gaps between player balconies.
+  var rng = initRand(20260923)
+  let
+    centerRadius = layout.centerRadius
+    inner = layout.innerRadius
+    outer = layout.outerRadius
+    halfAngle = layout.balconyHalfAngle
+    middle = (inner + outer) * 0.5'f32
+
+  # Small circular dais: separate concentric paving courses and a worn compass.
+  for course in 0 ..< 4:
+    let
+      r0 = max(0.045'f32, course.float32 * centerRadius / 4)
+      r1 = (course + 1).float32 * centerRadius / 4 - 0.025'f32
+      segments = max(8, int(ceil((r0 + r1) * PI.float32 / 0.92'f32)))
+    for index in 0 ..< segments:
+      let
+        offset = (course mod 2).float32 * 0.5'f32
+        a = Tau * (index.float32 + offset) / segments.float32 + 0.004'f32
+        b = Tau * (index.float32 + offset + 1) / segments.float32 - 0.004'f32
+      result.arcSlab(r0, r1, a, b, -0.20, 0.006,
+        Sandstone * rng.rand(0.87 .. 1.10).float32, bevel = 0.016)
+  for course in 0 ..< 3:
+    for index in 0 ..< 24:
+      let
+        stagger = (course mod 2).float32 * 0.5'f32
+        a = Tau * (index.float32 + stagger) / 24 + 0.004'f32
+        b = Tau * (index.float32 + stagger + 1) / 24 - 0.004'f32
+      result.arcSlab(centerRadius - 0.40'f32, centerRadius + 0.05'f32,
+        a, b, -1.36'f32 + course.float32 * 0.41'f32,
+        -0.98'f32 + course.float32 * 0.41'f32,
+        Sandstone * rng.rand(0.78 .. 1.0).float32, bevel = 0.035)
+  for index in 0 ..< 28:
+    let
+      a = Tau * index.float32 / 28 + 0.003'f32
+      b = Tau * (index + 1).float32 / 28 - 0.003'f32
+    result.arcSlab(centerRadius - 0.17'f32, centerRadius + 0.12'f32,
+      a, b, -0.21, 0.055, Sandstone * 1.08'f32, bevel = 0.035)
+  result.ring(2.18, 2.208, 0.013, Brass * 0.83'f32)
+  result.ring(2.78, 2.815, 0.015, Brass)
+  result.ring(0.77, 0.803, 0.014, Brass * 0.8'f32)
+  for ray in 0 ..< 8:
+    let
+      angle = Tau * ray.float32 / 8
+      direction = vec3(sin(angle), 0, cos(angle))
+      across = vec3(cos(angle), 0, -sin(angle))
+      reach = if ray mod 2 == 0: 1.55'f32 else: 0.94'f32
+      center = vec3(0, 0.016, 0)
+    result.triangle(center - across * 0.16'f32,
+      center + direction * reach, center, Brass * 0.82'f32, Metal)
+    result.triangle(center, center + direction * reach,
+      center + across * 0.16'f32, Brass * 1.08'f32, Metal)
+  result.centerCount = result.vertices.len
+
+  for balcony in layout.balconies:
+    var piece: CourtyardMesh
+    # Five independently tessellated floor courses expand with the ring.
+    # Staggered joints continue over the fascia below the playable surface.
+    for course in 0 ..< 5:
+      let
+        r0 = inner + course.float32 * BalconyDepth / 5
+        r1 = inner + (course + 1).float32 * BalconyDepth / 5 - 0.025'f32
+      piece.arcCourse(rng, r0, r1, halfAngle, -0.20, 0.006,
+        Sandstone, stagger = (course mod 2).float32 * 0.5'f32,
+        bevel = 0.016)
+    for row in 0 ..< 4:
+      let
+        bottom = -1.86'f32 + row.float32 * 0.43'f32
+        top = bottom + 0.405'f32
+        stepIn = if row == 0: 0.13'f32 else: 0.0'f32
+        stagger = (row mod 2).float32 * 0.5'f32
+      piece.arcCourse(rng, inner + stepIn, inner + 0.62'f32,
+        halfAngle, bottom, top, Sandstone * 0.91'f32, stagger)
+      piece.arcCourse(rng, outer - 0.64'f32, outer - stepIn,
+        halfAngle, bottom, top, Sandstone * 0.86'f32, stagger)
+      for side in [-1.0'f32, 1.0'f32]:
+        for course in 0 ..< 6:
+          let
+            radial = inner + 0.55'f32 + course.float32 * 1.07'f32
+            angle = side * (halfAngle - 0.025'f32)
+            p = vec3(sin(angle) * radial, (bottom + top) * 0.5'f32,
+              cos(angle) * radial)
+          piece.addBlock(p, vec3(0.42, top - bottom, 1.04),
+            Sandstone * rng.rand(0.8 .. 1.04).float32, -angle, bevel = 0.04)
+    # Quiet brass front seam and proud edging frame the exposed island edge.
+    for index in 0 ..< 30:
+      let
+        a = -halfAngle + 2 * halfAngle * index.float32 / 30
+        b = -halfAngle + 2 * halfAngle * (index + 1).float32 / 30
+      piece.arcSlab(inner + 0.16'f32, inner + 0.19'f32,
+        a, b, 0.008, 0.014, Brass * 0.8'f32, bevel = 0.002, material = Metal)
+    piece.arcCourse(rng, inner - 0.08'f32, inner + 0.16'f32,
+      halfAngle, -0.22, 0.06, Sandstone * 1.06'f32, width = 1.4,
+      bevel = 0.035)
+
+    # A low rear parapet leaves heroes and the elevated hand visible from
+    # every seat. Its cap is one more reusable course of curved masonry.
+    for row in 0 .. 1:
+      piece.arcCourse(rng, outer - 0.34'f32, outer + 0.01'f32,
+        halfAngle, row.float32 * 0.27'f32,
+        row.float32 * 0.27'f32 + 0.25'f32,
+        Sandstone, stagger = (row mod 2).float32 * 0.5'f32)
+    piece.arcCourse(rng, outer - 0.42'f32, outer + 0.10'f32,
+      halfAngle, 0.52, 0.68, Sandstone * 1.06'f32,
+      width = 1.4, bevel = 0.04)
+
+    # The pile pads are part of the balcony; their top matches zone.y.
+    for anchor in [balcony.deckZone, balcony.discardZone]:
+      let p = vec3(anchor.x, 0.025, middle + anchor.z)
+      piece.addBlock(p, vec3(1.99, 0.25, 2.57),
+        Sandstone * 0.96'f32, bevel = 0.07)
+      piece.addBlock(p + vec3(0, 0.125, 0), vec3(1.71, 0.01, 2.30),
+        vec3(0.20, 0.215, 0.205), bevel = 0.02)
+      for side in [-1.0'f32, 1.0'f32]:
+        piece.addBlock(p + vec3(side * 0.90'f32, 0.130, 0),
+          vec3(0.025, 0.01, 2.30), Brass, bevel = 0.003, material = Metal)
+
+    # Small lantern towers mark each outside end, clear of all card zones.
+    for side in [-1.0'f32, 1.0'f32]:
+      let
+        angle = side * layout.lampHalfAngle
+        lamp = vec3(sin(angle) * layout.lampRadius, BalconyLampHeight,
+          cos(angle) * layout.lampRadius)
+      for row in 0 .. 1:
+        piece.addBlock(vec3(lamp.x, 0.16'f32 + row.float32 * 0.32'f32, lamp.z),
+          vec3(0.88, 0.30, 0.79),
+          Sandstone * rng.rand(0.88 .. 1.06).float32, -angle)
+      piece.lantern(lamp)
+      # Ivy trails over the low railing and down the outer masonry face.
+      for strand in 0 ..< 5:
+        let
+          ivyAngle = angle + (strand.float32 - 2) * 0.017'f32
+          radial = outer + 0.10'f32 + rng.rand(0.0 .. 0.07).float32
+        var vine: CourtyardMesh
+        vine.ivy(rng, vec3(0, -1.3'f32 + rng.rand(-0.22 .. 0.18).float32,
+          radial), rng.rand(1.40 .. 1.95).float32)
+        piece.appendTurned(vine, -ivyAngle)
+      # A few shoots crawl over the cap, so the same ivy remains visible
+      # from the high overview instead of disappearing behind the fascia.
+      var previous = vec3(0)
+      for shoot in 0 .. 10:
+        let
+          t = shoot.float32 / 10
+          vineAngle = clamp(angle + (t - 0.5'f32) * 1.45'f32 / outer,
+            -halfAngle * 0.96'f32, halfAngle * 0.96'f32)
+          radial = outer - 0.19'f32 + sin(t * 9) * 0.06'f32
+          outward = vec3(sin(vineAngle), 0, cos(vineAngle))
+          tangent = vec3(cos(vineAngle), 0, -sin(vineAngle))
+          p = outward * radial + vec3(0, 0.71'f32 + sin(t * PI.float32) * 0.035'f32, 0)
+        if shoot > 0:
+          piece.beam(previous, p, 0.025, vec3(0.18, 0.16, 0.08), Leaf)
+        previous = p
+        for direction in [-1.0'f32, 1.0'f32]:
+          let
+            span = rng.rand(0.13 .. 0.23).float32
+            leafCenter = p + outward * direction * span * 0.55'f32
+            color = vec3(0.22, 0.255, 0.095) * rng.rand(0.85 .. 1.25).float32
+          piece.leaf(leafCenter, outward * direction * span,
+            tangent * span * 0.66'f32, color)
+    # Hanging cloth is outside and below the floor, never across a play zone.
+    for angle in [-halfAngle * 0.40'f32, halfAngle * 0.40'f32]:
+      var cloth: CourtyardMesh
+      cloth.banner(vec3(0, -0.24, outer + 0.13'f32))
+      piece.appendTurned(cloth, -angle)
+    # Inward-facing cloth reads clearly across the central gap. Its rail and
+    # fabric are below the playing surface, leaving the front card row clear.
+    var innerBanner: CourtyardMesh
+    innerBanner.banner(vec3(0, -0.15, -inner + 0.17'f32))
+    piece.appendTurned(innerBanner, PI.float32)
+    result.appendTurned(piece, balcony.yaw)
+  result.pavingCount = 0
+  result.commonCount = result.vertices.len
+  result.backdropCount = 0
+
+proc buildMultiplayerCourtyardMesh*(playerCount: int): CourtyardMesh =
+  buildMultiplayerCourtyardMesh(buildMultiplayerLayout(playerCount))
+
 when not defined(headless):
   import std/os
   import opengl, pixie
@@ -407,7 +625,7 @@ when not defined(headless):
     CourtyardMaterial* = object
       ## Live stone material controls (the tuning panel edits these).
       normalStrength*: float32  ## 0 leaves the flat geometric normals.
-      lampIntensity*: float32   ## Brightness of the two courtyard lanterns.
+      lampIntensity*: float32   ## Brightness of the courtyard lanterns.
       slopeBroad*: float32      ## Weight of the fractured rock-face map.
       scaleBroad*: float32      ## World units one tile covers.
 
@@ -419,11 +637,15 @@ when not defined(headless):
       skyViewLocation, skyEyeLocation, skyTimeLocation: GLint
       shadows: array[2, GLuint]
       lightMatrices: array[2, Mat4]
-      commonCount, backdropCount: int
+      commonCount, backdropCount, centerCount: int
+      playerCount: int
+      arenaRadius, balconyLampRadius, balconyLampHalfAngle: float32
       viewLocation, lightLocation, eyeLocation, timeLocation, sideLocation,
         shadowLocation, normalLocation,
         normalStrengthLocation, normalsOnlyLocation, normalViewLocation,
-        slopeBroadLocation, scaleBroadLocation, lampLocation: GLint
+        slopeBroadLocation, scaleBroadLocation, lampLocation,
+        playerCountLocation, arenaRadiusLocation, lampRadiusLocation,
+        lampAngleLocation, stageYawLocation: GLint
 
   const
     ShadowSize = 2048
@@ -498,10 +720,20 @@ when not defined(headless):
       scaleBroad: 6.0
     )
 
-  proc initCourtyardRenderer*(): CourtyardRenderer =
-    let mesh = buildCourtyardMesh()
+  proc initCourtyardRenderer*(playerCount = 2): CourtyardRenderer =
+    var mesh: CourtyardMesh
+    result.playerCount = playerCount
+    if playerCount > 2:
+      let layout = buildMultiplayerLayout(playerCount)
+      mesh = buildMultiplayerCourtyardMesh(layout)
+      result.arenaRadius = layout.outerRadius
+      result.balconyLampRadius = layout.lampRadius
+      result.balconyLampHalfAngle = layout.lampHalfAngle
+    else:
+      mesh = buildCourtyardMesh()
     result.commonCount = mesh.commonCount
     result.backdropCount = mesh.backdropCount
+    result.centerCount = mesh.centerCount
     result.program = program(VertexSource, FragmentSource)
     let textureRoot = artworkRoot() / "battlefield/textures"
     result.normalMap = loadNormalTexture(textureRoot / "stone-slab-normal.png")
@@ -536,10 +768,15 @@ when not defined(headless):
         ("stoneNormalMap", result.normalLocation.addr),
         ("normalStrength", result.normalStrengthLocation.addr),
         ("lampIntensity", result.lampLocation.addr),
+        ("playerCount", result.playerCountLocation.addr),
+        ("arenaRadius", result.arenaRadiusLocation.addr),
+        ("balconyLampRadius", result.lampRadiusLocation.addr),
+        ("balconyLampHalfAngle", result.lampAngleLocation.addr),
         ("slopeBroad", result.slopeBroadLocation.addr),
         ("scaleBroad", result.scaleBroadLocation.addr),
         ("normalsOnly", result.normalsOnlyLocation.addr),
-        ("normalView", result.normalViewLocation.addr)]:
+        ("normalView", result.normalViewLocation.addr),
+        ("stageYaw", result.stageYawLocation.addr)]:
       destination[] = glGetUniformLocation(result.program, name.cstring)
 
     # Bake the static sun shadows for both camera directions once. No scene
@@ -565,9 +802,13 @@ void main() {}
     for seat in 0 .. 1:
       let side = if seat == 0: 1.0'f32 else: -1.0'f32
       let light = normalize(vec3(-0.48'f32 * side, 0.85, 0.35'f32 * side))
-      result.lightMatrices[seat] = ortho(-18.0'f32, 18.0'f32, -18.0'f32,
-        18.0'f32, 1.0'f32, 70.0'f32) *
-        lookAt(light * 35.0'f32, vec3(0), vec3(0, 1, 0))
+      let
+        extent = max(18.0'f32, result.arenaRadius + 3.0'f32)
+        distance = if playerCount > 2: extent * 2 else: 35.0'f32
+        farPlane = if playerCount > 2: max(70.0'f32, extent * 4) else: 70.0'f32
+      result.lightMatrices[seat] = ortho(-extent, extent, -extent,
+        extent, 1.0'f32, farPlane) *
+        lookAt(light * distance, vec3(0), vec3(0, 1, 0))
       glGenTextures(1, result.shadows[seat].addr)
       glBindTexture(GL_TEXTURE_2D, result.shadows[seat])
       glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24.GLint,
@@ -625,7 +866,10 @@ void main() {}
 
   proc draw*(renderer: CourtyardRenderer, viewProjection: Mat4,
       cameraEye: Vec3, time, cameraSide: float32,
-      normalsOnly = false, normalView = mat4()) =
+      normalsOnly = false, normalView = mat4(), stageYaw = 0'f32) =
+    ## stageYaw turns the multiplayer balconies (see stageRotation) while
+    ## the center island stays put. Lighting and baked shadows live in the
+    ## balconies' own frame, so their lamps and key light turn with them.
     let seat = if cameraSide > 0: 0 else: 1
     glEnable(GL_DEPTH_TEST)
     glDepthMask(if normalsOnly: GL_FALSE else: GL_TRUE)
@@ -641,6 +885,10 @@ void main() {}
     glUniform1f(renderer.normalStrengthLocation,
       renderer.material.normalStrength)
     glUniform1f(renderer.lampLocation, renderer.material.lampIntensity)
+    glUniform1i(renderer.playerCountLocation, renderer.playerCount.GLint)
+    glUniform1f(renderer.arenaRadiusLocation, renderer.arenaRadius)
+    glUniform1f(renderer.lampRadiusLocation, renderer.balconyLampRadius)
+    glUniform1f(renderer.lampAngleLocation, renderer.balconyLampHalfAngle)
     glUniform1f(renderer.slopeBroadLocation, renderer.material.slopeBroad)
     glUniform1f(renderer.scaleBroadLocation, renderer.material.scaleBroad)
     glUniform1i(renderer.normalsOnlyLocation, if normalsOnly: 1 else: 0)
@@ -652,7 +900,21 @@ void main() {}
     glBindTexture(GL_TEXTURE_2D, renderer.normalMap)
     glUniform1i(renderer.normalLocation, 1)
     glBindVertexArray(renderer.vao)
-    glDrawArrays(GL_TRIANGLES, 0, renderer.commonCount.GLsizei)
+    # The center island, in the world frame: its lamp light comes from the
+    # turned balconies.
+    glUniform1f(renderer.stageYawLocation, stageYaw)
+    glDrawArrays(GL_TRIANGLES, 0, renderer.centerCount.GLsizei)
+    # Everything else, drawn through the stage turn in its own frame.
+    let
+      stage = stageRotation(stageYaw)
+      stageEye = (stage.inverse * vec4(cameraEye.x, cameraEye.y,
+        cameraEye.z, 1)).xyz
+    matrix(renderer.viewLocation, viewProjection * stage)
+    matrix(renderer.normalViewLocation, normalView * stage)
+    glUniform3f(renderer.eyeLocation, stageEye.x, stageEye.y, stageEye.z)
+    glUniform1f(renderer.stageYawLocation, 0)
+    glDrawArrays(GL_TRIANGLES, renderer.centerCount.GLint,
+      (renderer.commonCount - renderer.centerCount).GLsizei)
     glDrawArrays(GL_TRIANGLES,
       (renderer.commonCount + seat * renderer.backdropCount).GLint,
       renderer.backdropCount.GLsizei)

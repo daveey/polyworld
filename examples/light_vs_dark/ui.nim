@@ -5,7 +5,7 @@ import
   chroma, pixie, silky, vmath, windy,
   polyworld/[stats, metrics, actioncam, chrome, configs, gameuis, inputs, pathing, player, rtscameras,
     stackpanels],
-  assets, content, sim, game, controls, layouts, symbols
+  assets, content, sim, game, controls, layouts, symbols, maps, factions
 
 const
   ResourceColors = [
@@ -22,10 +22,9 @@ const
   IconTint = rgbx(245, 230, 190, 255)
   ScoreIcons = ["tower", "kills", "deaths"]
   CommandTabs = ["BUILD", "UNITS", "UPGRADES"]
-  ViewLabels = ["A", "L", "D"]
+  ViewIcons = ["previous_frame", "next_frame"]
   ResourceIcons = ["gold", "wood", "food"]
   CommandTabIcons = ["build", "units", "research"]
-  ViewButtonSize = 32.0'f32
   SelectionIcon = 48.0'f32
   GridBarH = 12.0'f32
   NeutralHealthColor = rgbx(180, 185, 192, 255)
@@ -45,9 +44,9 @@ type
     build: GameUiPanel
 
 var
-  buildingPortraitKeys: array[PlayerCount, array[BuildingKind, string]]
+  buildingPortraitKeys: array[FactionFiles.len, array[BuildingKind, string]]
 
-for player in 0 ..< PlayerCount:
+for player in 0 ..< FactionFiles.len:
   for kind in BuildingKind:
     if kind == GoldMineBuilding:
       buildingPortraitKeys[player][kind] = "lvd_b_mine"
@@ -57,7 +56,7 @@ for player in 0 ..< PlayerCount:
 
 proc buildingPortraitKey*(player: int32, kind: BuildingKind): string =
   ## Returns the atlas name packed from one building's profile PNG.
-  buildingPortraitKeys[max(player, 0)][kind]
+  buildingPortraitKeys[max(player, 0) mod FactionFiles.len][kind]
 
 proc drawPortrait(
     sk: Silky,
@@ -138,19 +137,23 @@ proc currentMetrics(slot: int, complete: bool): MetricRow =
     )
 
 proc currentStats(
-  teamColors = default(array[PlayerCount, ColorRGBX])
+  teamColors: openArray[ColorRGBX] = []
 ): StatsTable =
   ## Adapts the actual roster and outcome to the shared table.
   run.sampleMetrics()
   result = StatsTable(kind: RtsStats, tick: run.world.tick,
     complete: run.world.over, winner: int(run.world.winner))
-  for slot in 0 ..< PlayerCount:
+  for slot in 0 ..< run.world.players.len:
     result.rows.add StatsRow(
       slot: slot,
       name: run.config.players[slot].displayName(slot),
-      subtitle: if slot == 0: "LIGHT COMMANDER" else: "DARK COMMANDER",
+      subtitle:
+        if slot mod FactionCount == 0: "LIGHT COMMANDER"
+        else: "DARK COMMANDER",
       portrait: unitSymbolKey(PeonUnit),
-      portraitTint: teamColors[slot],
+      portraitTint:
+        if slot < teamColors.len: teamColors[slot]
+        else: rgbx(255, 255, 255, 255),
       team: slot,
       selected: not run.replayMode and options.playerSlot == slot + 1,
       metrics: currentMetrics(slot, result.complete)
@@ -214,9 +217,9 @@ proc buildingName(kind: BuildingKind, owner = -1'i32): string =
   of LumberMillBuilding: "Lumber Mill"
   of TowerBuilding: "Tower"
   of StablesBuilding:
-    if owner == DarkPlayer: "Kennels" else: "Stables"
+    if owner mod FactionCount == DarkPlayer: "Kennels" else: "Stables"
   of ChurchBuilding:
-    if owner == DarkPlayer: "Temple" else: "Church"
+    if owner mod FactionCount == DarkPlayer: "Temple" else: "Church"
   of BlacksmithBuilding: "Blacksmith"
   of GoldMineBuilding: "Gold Mine"
 
@@ -309,8 +312,8 @@ proc minimapMap(panel: GameUiPanel): GameUiPanel =
 proc minimapPoint(tile: Tile2, area: GameUiPanel): Vec2 =
   ## Converts one map tile into a point on the minimap.
   area.origin + vec2(
-    float32(tile.x) / float32(GridSide) * area.size.x,
-    float32(tile.y) / float32(GridSide) * area.size.y
+    float32(tile.x) / float32(run.world.map.side) * area.size.x,
+    float32(tile.y) / float32(run.world.map.side) * area.size.y
   )
 
 proc minimapCell(
@@ -319,8 +322,8 @@ proc minimapCell(
   ## Returns origin and size of one sampled terrain cell, spanning to the
   ## next sample so cells tessellate with no gap or overlap.
   let
-    x1 = min(x + stride, GridSide)
-    y1 = min(y + stride, GridSide)
+    x1 = min(x + stride, run.world.map.side)
+    y1 = min(y + stride, run.world.map.side)
     origin = minimapPoint(tile2(x, y), area)
     far = minimapPoint(tile2(x1, y1), area)
   (origin, far - origin)
@@ -349,7 +352,7 @@ proc updateMinimapCamera*(
       mouse,
       area.origin,
       area.size,
-      HalfGrid
+      (run.world.map.side.float32 / 2)
     )
     cameraTarget.x = point.x
     cameraTarget.z = point.y
@@ -371,7 +374,7 @@ proc drawMinimapCamera(
       aspect,
       area.origin,
       area.size,
-      HalfGrid
+      (run.world.map.side.float32 / 2)
     )
   )
 
@@ -384,14 +387,13 @@ proc drawScoreRow(
 ) =
   ## Draws one side's towers, kills, and deaths.
   let
-    enemy = 1'i32 - player
     values = [
       towerCount(player),
-      int(run.world.players[enemy].unitsLost),
+      int(run.world.stats.values[player][KillsMetric]),
       int(run.world.players[player].unitsLost)
     ]
   sk.drawSprite(
-    if player == LightPlayer: "alliance" else: "hostile",
+    if player mod FactionCount == LightPlayer: "alliance" else: "hostile",
     panels.sides[row].origin,
     vec2(IconTiny),
     color
@@ -449,7 +451,7 @@ proc drawUi*(
     selectedIds: var seq[int32],
     followSelection: var bool,
     actionCam: var ActionCam,
-    teamColors: array[PlayerCount, ColorRGBX]
+    teamColors: openArray[ColorRGBX]
 ) =
   ## Draws every Silky HUD panel for the current frame.
   let table = currentStats(teamColors)
@@ -462,7 +464,7 @@ proc drawUi*(
     minimapPanel = sk.beginFrame(chrome.minimap)
     selectionPanel = sk.beginFrame(chrome.selection)
     buildPanel = sk.beginFrame(chrome.build)
-    light = run.world.players[LightPlayer]
+    light = run.world.players[commandPlayer(viewMode)]
     resources = resourcePanel.resourcePanels()
     minimap = minimapPanel.minimapPanels()
     selection = selectionPanel.selectionPanels()
@@ -480,13 +482,15 @@ proc drawUi*(
       rgbx(166, 174, 190, 255),
       "Hud"
     )
-  sk.drawScoreRow(scoreSlots, LightPlayer, 0, teamColors[LightPlayer])
-  sk.drawScoreRow(scoreSlots, DarkPlayer, 1, teamColors[DarkPlayer])
-  for owner in 0 ..< min(PlayerCount, run.config.players.len):
-    let side = if owner == LightPlayer: "LIGHT: " else: "DARK: "
+  let first = int(commandPlayer(viewMode))
+  for row in 0 ..< min(2, run.world.players.len):
+    let owner = (first + row) mod run.world.players.len
+    sk.drawScoreRow(scoreSlots, int32(owner), row, teamColors[owner])
+    let label = "P" & $(owner + 1) & ": " &
+      run.config.players[owner].displayName(owner)
     sk.drawLabel(
-      sk.fittedLabel(side & run.config.players[owner].displayName(owner), 262),
-      scorePanel.origin + vec2(18, 100 + owner.float32 * 22),
+      sk.fittedLabel(label, 262),
+      scorePanel.origin + vec2(18, 100 + row.float32 * 22),
       vec2(262, 22),
       teamColors[owner]
     )
@@ -535,7 +539,7 @@ proc drawUi*(
   sk.drawSprite(
     if hudTime.hour < 6 or hudTime.hour >= 18: "night" else: "day",
     minimap.sun.origin + vec2(0, 2),
-    vec2(ViewButtonSize)
+    minimap.sun.size
   )
   writeClock(hudScratch, hudTime.hour, hudTime.minute)
   sk.drawLabel(
@@ -547,11 +551,11 @@ proc drawUi*(
   )
   let area = minimapPanel.minimapMap()
   const MapSampleStride = 2'i32
-  let cell = area.size.x / float32(GridSide)
+  let cell = area.size.x / float32(run.world.map.side)
   sk.drawFrame(area)
-  for y in countup(0'i32, GridSide - 1, MapSampleStride):
-    for x in countup(0'i32, GridSide - 1, MapSampleStride):
-      let index = tileIndex(x, y)
+  for y in countup(0'i32, run.world.map.side - 1, MapSampleStride):
+    for x in countup(0'i32, run.world.map.side - 1, MapSampleStride):
+      let index = run.world.map.tileIndex(x, y)
       var shade =
         if run.world.map.passable[index] == 0: rgbx(42, 68, 112, 255)
         else:
@@ -593,21 +597,21 @@ proc drawUi*(
       teamColors[unit.owner]
     )
   sk.drawMinimapCamera(window, area, cameraTarget, cameraDistance)
-  for index, button in minimap.views:
-    let
-      hot = viewMode == int32(index)
-    sk.drawSlot(button, selected = hot)
-    sk.drawLabel(
-      ViewLabels[index],
-      button.origin,
-      button.size,
-      rgbx(226, 230, 239, 255),
-      "Small",
-      CenterAlign
+  let canSwitchView = options.playerSlot == 0 or run.replayMode
+  for i, button in minimap.views:
+    sk.drawWellImage(
+      button,
+      ViewIcons[i],
+      if canSwitchView: IconTint else: rgbx(110, 115, 125, 160),
+      selected = canSwitchView and sk.hovered(button),
+      iconSize = 32
     )
-    if window.hudClicked(sk, button):
-      if options.playerSlot == 0:
-        viewMode = int32(index)
+    if canSwitchView and window.hudClicked(sk, button):
+      let count = int32(run.world.players.len)
+      if i == 0:
+        viewMode = if viewMode == 0: count else: viewMode - 1
+      else:
+        viewMode = (viewMode + 1) mod (count + 1)
 
   if primaryId == NoEntity or
       (not run.world.hasUnit(primaryId) and
@@ -635,7 +639,7 @@ proc drawUi*(
     portraitKey = unitSymbolKey(unit.kind)
     portraitTint = teamColors[unit.owner]
     portraitHp = unit.hp
-    portraitMax = UnitTable[unit.owner][unit.kind].hp
+    portraitMax = unitOf(unit.owner, unit.kind).hp
     portraitName = unit.kind.unitName()
     portraitOwner = unit.owner
   elif portraitId != NoEntity and run.world.hasBuilding(portraitId):
@@ -659,7 +663,7 @@ proc drawUi*(
     selectBar = selection.hp
     selectName = selection.name
     healthColor =
-      if portraitOwner >= 0 and portraitOwner < PlayerCount:
+      if portraitOwner >= 0 and portraitOwner < run.world.players.len:
         teamColors[portraitOwner]
       else:
         NeutralHealthColor
@@ -701,7 +705,7 @@ proc drawUi*(
       slot.origin + vec2(WellPad, slot.size.y - GridBarH),
       vec2(SelectionIcon, GridBarH),
       unit.hp.float32,
-      UnitTable[unit.owner][unit.kind].hp.float32,
+      unitOf(unit.owner, unit.kind).hp.float32,
       teamColors[unit.owner]
     )
     if window.hudClicked(sk, slot):
@@ -812,8 +816,8 @@ proc drawUi*(
     for kind in UnitKind:
       let
         slot = build.slots[kind.ord]
-        stats = UnitTable[LightPlayer][kind]
         player = commandPlayer(viewMode)
+        stats = unitOf(player, kind)
       sk.drawPortrait(
         slot,
         unitSymbolKey(kind),
@@ -872,7 +876,7 @@ proc drawUi*(
 proc drawStatsOverlay*(
   sk: Silky,
   window: Window,
-  teamColors: array[PlayerCount, ColorRGBX]
+  teamColors: openArray[ColorRGBX]
 ) =
   ## Presents readable statistics above the HUD at every window width.
   sk.drawStatsOverlay(

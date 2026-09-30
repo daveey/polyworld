@@ -29,6 +29,8 @@ else:
 let bassyPath = getEnv("BASSY_PATH")
 if bassyPath.len > 0:
   switch("path", bassyPath)
+# Compile BASIC policies to machine code on supported native targets.
+--define:bassyNative
 
 when defined(coworld):
   when defined(emscripten):

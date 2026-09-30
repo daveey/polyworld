@@ -34,7 +34,7 @@ let archer = [
     rules: rules(
       damage(
         1,
-        game.board.choose(kind: Minion, owner: Opponent),
+        game.board.choose(kind: Minion, owner: AllOpponents),
         vfx = ManyArrowsVfx
       )
     )
@@ -155,7 +155,7 @@ let mage = [
     class: some(Mage), kind: Trinket,
     rules: rules(
       on(attacked(You),
-        bounce(getAttacker()),
+        bounce(getAttacker(), vfx = BubbleVfx),
         destroy(self())
       )
     )

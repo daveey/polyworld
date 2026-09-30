@@ -6,7 +6,7 @@
   ],
   "game": {
     "name": "Light vs Dark",
-    "description": "Two BASIC overlords gather resources, build armies, and fight. The simulation winner scores one win, including its existing time-limit resolution.",
+    "description": "BASIC overlords gather resources, build armies, and fight on maps that grow with the roster. The winner scores one win.",
     "owner": "treeform",
     "player_runtime": "game-hosted",
     "runnable": {
@@ -26,17 +26,16 @@
       "properties": {
         "tokens": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
+          "minItems": 1,
           "items": {
             "type": "string",
             "minLength": 1
-          }
+          },
+          "maxItems": 4096
         },
         "players": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
+          "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -49,7 +48,8 @@
                 "minLength": 1
               }
             }
-          }
+          },
+          "maxItems": 4096
         },
         "seed": {
           "type": "integer",
@@ -60,6 +60,44 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 28800
+        },
+        "map_layout": {
+          "type": "string",
+          "enum": [
+            "spoke",
+            "random"
+          ],
+          "default": "spoke"
+        },
+        "map_size": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 4096,
+          "default": 90,
+          "description": "Baseline side length for two players. The map grows with the roster and minimum spacing."
+        },
+        "expansions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "min_distance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096,
+          "default": 45
+        },
+        "war_grace_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 10
+        },
+        "diplomacy_offer_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 60
         }
       }
     },
@@ -75,8 +113,7 @@
       "properties": {
         "scores": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
+          "minItems": 1,
           "items": {
             "type": "integer",
             "enum": [
@@ -118,7 +155,7 @@
     "protocols": {
       "player": {
         "type": "text",
-        "value": "Slot 0 commands Light. Slot 1 commands Dark. Supply a raw BASIC file. The existing Polyworld BASIC host API runs with bounded source, memory, work, and instruction limits. PRINT is private. See the game guide and bundled base.bas for a complete working player."
+        "value": "Each zero-based slot commands an independent player. Even slots use Light stats and odd slots use Dark stats. Supply a raw BASIC file. The existing Polyworld BASIC host API runs with bounded source, memory, work, and instruction limits. PRINT is private. See the game guide and bundled base.bas for a complete working player."
       },
       "global": {
         "type": "text",
@@ -128,7 +165,7 @@
     "docs": {
       "readme": {
         "type": "text",
-        "value": "# Light vs Dark\n\nTwo BASIC overlords gather resources, build armies, and fight. The simulation winner scores one win, including its existing time-limit resolution.\n\nSlot 0 commands Light. Slot 1 commands Dark. Platform slots are zero-based. Upload a `.bas` file containing BASIC source. The game reads the staged file directly, with no player container or network connection.\n\nStart with the bundled `players/base.bas`. The [game documentation](https://github.com/Metta-AI/polyworld/blob/main/examples/light_vs_dark/docs/index.html) describes observations and available BASIC commands. The same source is available under `examples/light_vs_dark/bots.nim` and `content.nim`.\n\nBASIC `PRINT` output, compiler diagnostics, runtime errors, and VM lifecycle messages go to the owning player's private log. Each log is limited to 10 MiB. Runtime limit errors disable that VM; other seats continue. Invalid BASIC syntax fails the episode with a player failure diagnostic. Public game logs and action replays contain no BASIC source or private print output.\n\nMatches run up to 28,800 deterministic ticks (20 simulated minutes), without real-time pacing. Replays run entirely in the browser with playback, seeking, speed, and loop controls. The server exposes `/healthz`; legacy clients are static stubs.\n\nThe Competition league schedules recurring rounds using its current league settings. Separate baseline filler policies complete short rosters. Fillers are not ranked entrants. Standings use binary win scores and platform Elo.\n\n## BASIC numbers and coordinates\n\nBASIC uses [Bassy](https://github.com/treeform/bassy) with [Fixxy](https://github.com/treeform/fixxy) Q16.16 decimals enabled. Globals and arrays retain fractional values across decisions. `/` performs decimal division; `\\` performs integer division. Decimal operands must fit -32768 through 32767.99998. Integer-only calculations retain the full signed 32-bit range. When converting large world-unit observations, divide them as integers first, for example `(selfAttackRange \\ 100) / (worldScale \\ 100)` in GotA.\n\n`and`, `or`, `xor`, and `not` are bitwise. Comparisons produce -1 for true and 0 for false; conditions accept any nonzero number. Host flags and action results remain 1 or 0, so use `flag = 0` instead of `not flag` to negate a host flag.\n\n`moveUnit(id, x, y)` and `attackMove(id, x, y)` accept fractional tile coordinates. Integers continue to name tile centers. Building placement and rally tiles remain whole tiles. IDs, slots, indices, and terrain queries require exact integers. Passing a fractional value to an integer argument raises a BASIC error instead of truncating it. Accepted fractional destinations are preserved in action replays.\n\n## Buildings and resources\n\nBuilding footprints are rectangular. Use `buildWidth(kind)` and\n`buildDepth(kind)` when planning placement. Building positions are the minimum\nX/Y corner; `buildFootprint(kind)` returns the larger dimension for compatibility.\nThe bundled baseline leaves a walking lane around each building.\n\nStarting gold mines contain 45,000 gold. Expansion mines contain 25,000 gold.\nUnits, buildings, terrain, trees, rocks, and faction symbols use the cleared\nPolyworld art library. Faction colors and building trims vary between matches\nand remain consistent when replaying a match.\n"
+        "value": "# Light vs Dark\n\nBASIC overlords gather resources, build armies, and fight. The simulation winner scores one win, including its existing time-limit resolution.\n\nEach slot commands an independent player. Even slots use Light stats and odd slots use Dark stats. Platform slots are zero-based. Upload a `.bas` file containing BASIC source. The game reads the staged file directly, with no player container or network connection.\n\nStart with the bundled `players/base.bas`. The [game documentation](https://github.com/Metta-AI/polyworld/blob/main/examples/light_vs_dark/docs/index.html) describes observations and available BASIC commands. The same source is available under `examples/light_vs_dark/bots.nim` and `content.nim`.\n\nBASIC `PRINT` output, compiler diagnostics, runtime errors, and VM lifecycle messages go to the owning player's private log. Each log is limited to 10 MiB. Runtime limit errors disable that VM; other seats continue. Invalid BASIC syntax fails the episode with a player failure diagnostic. Public game logs and action replays contain no BASIC source or private print output.\n\nMatches run up to 28,800 deterministic ticks (20 simulated minutes), without real-time pacing. Replays run entirely in the browser with playback, seeking, speed, and loop controls. The server exposes `/healthz`; legacy clients are static stubs.\n\nThe Competition league runs six-player free-for-all matches. Each player starts neutral and can form alliances, request peace, or declare war. Separate baseline filler policies complete short rosters. Fillers are not ranked entrants. Standings use binary win scores and platform Elo.\n\n## BASIC numbers and coordinates\n\nBASIC uses [Bassy](https://github.com/treeform/bassy) with [Fixxy](https://github.com/treeform/fixxy) Q16.16 decimals enabled. Globals and arrays retain fractional values across decisions. `/` performs decimal division; `\\` performs integer division. Decimal operands must fit -32768 through 32767.99998. Integer-only calculations retain the full signed 32-bit range. When converting large world-unit observations, divide them as integers first, for example `(selfAttackRange \\ 100) / (worldScale \\ 100)` in GotA.\n\n`and`, `or`, `xor`, and `not` are bitwise. Comparisons produce -1 for true and 0 for false; conditions accept any nonzero number. Host flags and action results remain 1 or 0, so use `flag = 0` instead of `not flag` to negate a host flag.\n\n`moveUnit(id, x, y)` and `attackMove(id, x, y)` accept fractional tile coordinates. Integers continue to name tile centers. Building placement and rally tiles remain whole tiles. IDs, slots, indices, and terrain queries require exact integers. Passing a fractional value to an integer argument raises a BASIC error instead of truncating it. Accepted fractional destinations are preserved in action replays.\n\n## Buildings and resources\n\nBuilding footprints are rectangular. Use `buildWidth(kind)` and\n`buildDepth(kind)` when planning placement. Building positions are the minimum\nX/Y corner; `buildFootprint(kind)` returns the larger dimension for compatibility.\nThe bundled baseline leaves a walking lane around each building.\n\nStarting gold mines contain 45,000 gold. Expansion mines contain 25,000 gold.\nUnits, buildings, terrain, trees, rocks, and faction symbols use the cleared\nPolyworld art library. Faction colors and building trims vary between matches\nand remain consistent when replaying a match.\n\n## Rosters and maps\n\nEvery supplied bot gets a player slot. Local `--bot PATH:N` adds N copies;\nrepeat `--bot` to mix programs. `--player:N` inserts a human at slot N.\nA solo game runs until its time limit. Multiplayer ends when one player\nremains, or ranks surviving players by score at the time limit. Equal top\nscores draw.\n\nEach player starts at a spawn node with a town hall, main mine, nearby wood,\nand N nearby expansion nodes. N defaults to 2. Clear paths join expansions\nto their town and towns to the central clearing. Spokes vary in angle and\nlength, and home bases can sit near map edges. Expansions choose random nearby\npositions with room for their mines and paths, avoiding edges and buildings.\nRoads have gentle random bends that smooth out at each node. The same seed\nand settings reproduce the same map. Use these local settings:\n\n- `--map-layout spoke|random` selects ring spokes or seeded random starts.\n- `--map-size N` sets the baseline side length for two players (default 90).\n- `--expansions N` sets nearby expansion mines per player, including zero.\n- `--min-distance N` sets minimum spawn separation in tiles (default 45).\n\nMap size grows with the roster and grows further when spacing or expansion\nclusters need more room. The current tile and memory limit is 4096 per side;\nimpossible settings fail with a descriptive error. Hosted configurations\naccept `map_layout`, `map_size`, `expansions`, and `min_distance`.\n\nBASIC exposes `playerCount`, `enemyHomeX`, and `enemyHomeY`. `enemyPlayer` is\nthe nearest living player at war with you, or -1 when none exists.\n`nearestEnemy` also considers only players at war. Visible neutral and allied\nplayers still appear in observations. Query `mapSize` for the actual tile stride.\nUse the minimap's arrow buttons or press V to cycle through every player's\nfog view and the all-map view. Tab shows the full roster. Replays store map\nsettings, actual size, and every player slot.\nGameplay version 23 requires its matching replay client.\n\n## Diplomacy and the base policy\n\nEveryone starts neutral. Only players at war can damage each other. A war\ndeclaration starts a warning before either side can attack. Peace and alliance\noffers require the other player's agreement. Peace stops combat immediately;\nalliances share live vision between direct allies. Ending an alliance takes\ntwice the war warning, with vision shared until that deadline. A separate war\ndeclaration must then complete its full warning. Explored terrain stays known.\n\n`--war-grace-seconds N` controls the warning (default 10), and\n`--diplomacy-offer-seconds N` controls offer expiry (default 60). Both accept\n1 through 3600 seconds. Hosted configuration uses `war_grace_seconds` and\n`diplomacy_offer_seconds`. Timers use simulation ticks and settings are replayed.\n\nThe base policy ranks living opponents by distance between starting bases,\nbreaking ties by player ID. With M opponents, it wants `min(M, floor(M / 2) + 1)`\nfarther opponents at war and the remaining nearer opponents allied. Eight\nliving players means four preferred enemies and three preferred allies each.\nActual wars can exceed this target because declarations affect both players.\n\nThe policy reconsiders once per simulated second and after eliminations. It\noffers peace to new preferred allies, accepts their peace and alliance offers,\nand ends alliances with new preferred enemies. With two or three players left,\nevery opponent becomes a war target. An allied roster does not win together;\nthe existing last-player and time-limit victory rules still apply.\n\nThe BASIC interface exposes these values and calls:\n\n- `neighborCount`, `neighbor(rank)`: living opponents, closest first, from rank 0.\n- `tickRate`: simulation ticks per second.\n- `relation(player)`: 0 neutral, 1 war warning, 2 at war, 3 allied,\n  4 alliance ending.\n- `relationTicks(player)`, `relationInitiator(player)`, `sharesVision(player)`.\n- `offerKind(player)`: 0 none, 1 peace, 2 alliance.\n- `offerSender(player)`, `offerId(player)`, `offerTicks(player)`.\n- `declareWar(player)`, `withdrawWar(player)`, `endAlliance(player)`.\n- `offerPeace(player)`, `offerAlliance(player)`.\n- `acceptOffer(player, id)`, `declineOffer(player, id)`,\n  `withdrawOffer(player, id)`: replies require the current offer ID.\n\nCommands return 1 when accepted and 0 when refused. Uploads must explicitly\ndeclare war before fighting; attack orders never declare war automatically.\n"
       }
     }
   },
@@ -138,7 +175,7 @@
       "name": "Baseline",
       "type": "player",
       "file": "players/base.bas",
-      "description": "Light vs Dark BASIC baseline with rectangular building placement."
+      "description": "Light vs Dark BASIC baseline with nearby alliances, distant wars, and rectangular building placement."
     }
   ],
   "variants": [
@@ -152,12 +189,24 @@
           },
           {
             "name": "Baseline 1"
+          },
+          {
+            "name": "Baseline 2"
+          },
+          {
+            "name": "Baseline 3"
+          },
+          {
+            "name": "Baseline 4"
+          },
+          {
+            "name": "Baseline 5"
           }
         ],
         "seed": 2026,
         "max_ticks": 28800
       },
-      "description": "Full-length deterministic competition match."
+      "description": "Full-length deterministic six-player free-for-all match."
     }
   ],
   "certification": {
@@ -168,12 +217,36 @@
         },
         {
           "name": "Baseline 1"
+        },
+        {
+          "name": "Baseline 2"
+        },
+        {
+          "name": "Baseline 3"
+        },
+        {
+          "name": "Baseline 4"
+        },
+        {
+          "name": "Baseline 5"
         }
       ],
       "seed": 2026,
       "max_ticks": 28800
     },
     "players": [
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      },
       {
         "player_id": "baseline"
       },

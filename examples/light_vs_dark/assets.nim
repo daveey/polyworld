@@ -66,13 +66,15 @@ proc readCharacterRoster*(
     raise newException(
       ChargenError, "Cannot read LvD roster: " & getCurrentExceptionMsg()
     )
-  if result.players.len != PlayerCount:
+  if result.players.len != FactionCount:
     raise newException(ChargenError, "LvD roster needs two player looks.")
-  if result.factions.len != PlayerCount:
+  if result.factions.len != FactionCount:
     raise newException(ChargenError, "LvD roster needs a faction per player.")
   if factions.len > 0:
-    if factions.len != PlayerCount:
-      raise newException(ChargenError, "LvD needs one color per player.")
+    let looks = result.players
+    result.players = newSeq[seq[UnitPreset]](factions.len)
+    for player in 0 ..< factions.len:
+      result.players[player] = looks[player mod FactionCount]
     result.factions = @factions
   for player, units in result.players.mpairs:
     if units.len != UnitKind.high.ord + 1:

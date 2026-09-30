@@ -5,7 +5,7 @@ const
   Games* = [
     (name: "gota", directory: "gods_of_the_arena", seats: 10,
       recording: "recordGota"),
-    (name: "lvd", directory: "light_vs_dark", seats: 2,
+    (name: "lvd", directory: "light_vs_dark", seats: 6,
       recording: "recordLvd"),
     (name: "cta", directory: "call_to_adventure", seats: 4,
       recording: "recordCta")

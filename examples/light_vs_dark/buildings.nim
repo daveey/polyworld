@@ -63,15 +63,14 @@ proc loadBuildingArt*(
   result.factions = @factions
   for faction in factions:
     if result.factionPacks[faction] == nil:
-      result.factionPacks[faction] = loadPropPack(
-        buildingModelPaths(),
-        unitHeight = false,
-        textured = textured,
-        textureSize = 512,
-        mergeNodes = true,
-        materialColors = true,
-        textureOverride = readImage(factionTexturePath(faction))
-      )
+      result.factionPacks[faction] =
+        if textured:
+          result.pack.retexturePropPack(
+            readImage(factionTexturePath(faction)),
+            whiteLayer = 0
+          )
+        else:
+          result.pack
   result.rocks = grove.rocks
   for kind in BuildingKind:
     result.heights[kind] =

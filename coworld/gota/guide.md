@@ -53,10 +53,21 @@ The bundled `players/rusher.bas` sends all five heroes down mid together. It reg
 
 ## Drafting
 
-Every live match starts with a shared pool of ten heroes. A seeded random
-team picks first. Teams alternate, and each team's players pick in spawn
-order. Each hero can be selected once across both teams. Combat, waves,
-and the battle clock wait until all ten players have drafted.
+Every live match starts with a draft. A seeded random team picks first.
+Teams alternate, and each team's players pick in spawn order. Combat,
+waves, and the battle clock wait until all ten players have drafted.
+
+The match setting `draft_mode` selects the hero availability rules:
+
+| Mode | Setting | Picks allowed |
+| --- | --- | --- |
+| Unique Draft (default) | `unique` | Each hero class once across both teams. |
+| Team Draft | `team` | Each hero class once per team. Enemy teams may mirror picks. |
+| Open Draft | `open` | Any duplicates, including ten players using the same hero. |
+
+Local games accept `--draft-mode team` or `--draft-mode open`. The web
+player accepts `?draft-mode=team` or `?draft-mode=open`. JSON configs use
+`"draftMode": "team"` (or `draft_mode`). The replay saves this setting.
 
 Only the active player's BASIC script runs during drafting, once every
 half second. Every player, including humans, has ten simulation seconds to
@@ -68,13 +79,14 @@ Their normal movement and combat logic runs after drafting.
 
 | Data or command | Meaning |
 | --- | --- |
+| `draftMode` | Unique Draft 0, Team Draft 1, Open Draft 2. |
 | `drafting` | 1 during drafting, 0 during battle. |
 | `draftTurnId` | ID of the player picking now, or 0 after drafting. |
 | `draftPlayerCount()` | Number of players in the public roster. |
 | `draftPlayerId(i)` | Player ID at zero-based spawn index `i`, or 0 if invalid. |
 | `draftPlayerTeam(i)` | Team at spawn index `i`: Red 0, Blue 1, invalid -1. |
 | `draftedClass(id)` | Hero class picked by player ID, or -1 if unpicked or invalid. Both teams' picks are public. |
-| `heroAvailable(class)` | 1 if the class is valid and unpicked, otherwise 0. |
+| `heroAvailable(class)` | 1 if the caller's team may pick this class under the current draft mode, otherwise 0. This checks availability, not whose turn it is. |
 | `heroRole(class)` | Frontline 0, carry 1, mage 2, support 3, fighter 4, invalid -1. |
 | `draftHero(class)` | Selects a hero on your turn. Returns 1 on success, 0 on rejection. |
 

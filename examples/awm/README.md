@@ -9,6 +9,7 @@ nim c -o:awm awm.nim
 ./awm                                        # bot vs bot, random classes
 ./awm --human --class warrior --opponent mage # play against a bot
 ./awm --seed 42                              # fixed deal
+./awm --players=4                            # multiplayer battlefield preview
 ```
 
 | Flag | Default |
@@ -17,16 +18,30 @@ nim c -o:awm awm.nim
 | `--class CLASS` | `archer` |
 | `--opponent CLASS` | `mage` |
 | `--seed INTEGER` | `20260910` |
+| `--players INTEGER` | `2` |
 | `--bot PATH` | `players/base.bas` |
 
 Bot vs bot ignores `--class`/`--opponent` and picks randomly.
 
-Build with `-d:awmLayoutTuning` to tune the camera and opponent hand live:
-Q/A raise/lower the opponent hand, S/W push it away/pull it closer, Y/H raise/lower
-your hand, U/J push it away/pull it closer, I/K turn cards in hand about their
-long axis, E/D raise/lower
-the camera, R/F move it in/out, T/G pitch it down/up, and Enter prints the values
-to paste into `awm.nim`.
+`--players=3` (or `--players 3`) and larger counts open the multiplayer scene
+harness: a small circular center surrounded by one modular balcony per player.
+Each balcony has its own hero, deck, cards in play, discard pile and hand. The
+camera fits all balconies in the view. This is a visual preview; multiplayer
+turns and card interaction are not implemented yet. Omitting `--players`, or
+using `--players=2`, keeps the existing two-player game. Counts below two and
+invalid counts are rejected. F8 toggles the same screen effects as the game.
+
+Balcony zones and the camera fit live in `awmmultiplayer.nim`. The stone floor,
+fascia, parapet and end pieces are built in separate curved courses; the ring
+expands with player count while preserving card sizes and usable balcony depth.
+Lanterns, ivy and hanging banners use the original courtyard materials and props.
+
+Build with `-d:awmLayoutTuning` to tune the camera and the hands live, in the
+duel and in the multiplayer preview. Z/X pick what moves — your hand, the
+opponent's hand, the camera, or (in the duel) the spot a played spell floats
+in, printed to the console — WASD move it forward,
+left, back and right, Q/E raise and lower it, T/G pitch it down and up, F/H yaw
+it left and right, and Enter prints the values to paste back as defaults.
 
 ### Screen effects
 
@@ -117,6 +132,7 @@ AWM_SKIP_WEB_BUILD=1 ./tools/serve.sh       # serve existing build
 ```sh
 nim r -d:headless --out:build/test_awm tests/test_awm.nim
 nim r -d:headless --out:build/test_sessions tests/test_sessions.nim
+nim r -d:headless --out:build/test_multiplayer tests/test_multiplayer.nim
 python3 tests/test_server.py
 ```
 

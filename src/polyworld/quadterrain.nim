@@ -9,8 +9,8 @@
 import
   std/[os, random, strformat, strutils, tables],
   chroma, gltf, opengl, pixie, pixie/internal, shady, vmath,
-  assets, common, pathing, shadows, terrainblends, terrainmaps, terrainreliefs,
-  terrainsurfaces, textures, toon
+  assets, common, pathing, profiles, shadows, terrainblends, terrainmaps,
+  terrainreliefs, terrainsurfaces, textures, toon
 
 ## Shaders
 ##
@@ -1020,14 +1020,17 @@ type
     textureArray: GLuint    # set when the pack was loaded textured
 
   TexturedBatch = object
-    ## Every baked placement of one textured pack, drawn like the trees
-    ## with a per-instance tint.
+    ## Retains one texture and caller-selected group between scene updates.
     textureArray: GLuint
+    group: int32
+    placements, pending: seq[PropPlacement]
+    dirty: bool
     mesh: seq[float32]      # x y z u v layer nx ny nz r g b
     vertexArray, vertexBuffer, depthVertexArray: GLuint
 
   PropPlacement = object
     model: PropModel
+    group: int32
     position: Vec3
     rotation: float32
     scale: float32
@@ -1566,6 +1569,55 @@ proc createPropPack*(
   for i, model in result.models:
     result.names[model.name] = i
 
+proc retexturePropPack*(
+  source: PropPack,
+  image: Image,
+  textureSize = 512,
+  whiteLayer = -1
+): PropPack =
+  ## Reuses flattened geometry with a new atlas and optional unpainted layer.
+  if source == nil or source.textureArray == 0 or image == nil:
+    raise newException(QuadTerrainError, "Retexturing needs a textured pack.")
+  for model in source.models:
+    if not model.materialColors:
+      raise newException(
+        QuadTerrainError, "Retexturing needs material colors, not baked paint."
+      )
+  var size = max(image.width, image.height)
+  if textureSize > 0:
+    size = min(size, textureSize)
+  var chains: seq[seq[Image]]
+  if whiteLayer >= 0:
+    let white = newImage(size, size)
+    white.fill(rgbx(255, 255, 255, 255))
+    chains.add mipChain(white)
+  let square =
+    if image.width == size and image.height == size:
+      image
+    else:
+      image.resize(size, size)
+  chains.add mipChain(square)
+  result = PropPack(
+    textureArray: buildTextureArray(chains, GL_CLAMP_TO_EDGE.GLint)
+  )
+  for original in source.models:
+    let model = PropModel(
+      name: original.name,
+      height: original.height,
+      vertices: original.vertices,
+      uvs: original.uvs,
+      materialColors: true,
+      textureArray: result.textureArray
+    )
+    for i in countup(2, model.uvs.high, 3):
+      model.uvs[i] =
+        if whiteLayer >= 0 and model.uvs[i] != whiteLayer.float32:
+          1
+        else:
+          0
+    result.names[model.name] = result.models.len
+    result.models.add model
+
 proc hasProp*(pack: PropPack, name: string): bool =
   ## Returns whether a pack contains a model with the requested node name.
   pack != nil and name in pack.names
@@ -1633,12 +1685,11 @@ proc placeProp*(
     rotation = 0.0'f32,
     scale = 1.0'f32,
     tint = vec3(1, 1, 1),
-    stretch = vec3(1, 1, 1)
+    stretch = vec3(1, 1, 1),
+    group = 0'i32
 ) =
-  ## Adds one named prop to the next baked terrain mesh. The tint multiplies
-  ## both textured paint and baked vertex colours.
-  ## Stretch scales each model axis on its own, before the turn, for pieces
-  ## that must fit an opening the kit did not size them for.
+  ## Places a prop; stable groups keep independent textured batches reusable.
+  ## Tint multiplies paint or vertex colors; stretch scales before rotation.
   if not pack.hasProp(name):
     raise newException(
       QuadTerrainError,
@@ -1646,6 +1697,7 @@ proc placeProp*(
     )
   propPlacements.add PropPlacement(
     model: pack.models[pack.names[name]],
+    group: group,
     position: position,
     rotation: rotation,
     scale: scale,
@@ -2122,7 +2174,7 @@ proc uploadTerrainData(texture: var GLuint, values: seq[float32]): Vec2 =
   glBindTexture(GL_TEXTURE_2D, 0)
   vec2(width.float32, height.float32)
 
-proc rebuildTerrainData() =
+proc rebuildTerrainData() {.measure.} =
   ## Refreshes visual sidecars without altering terrain or simulation flags.
   if not generatedTerrain:
     return
@@ -2855,56 +2907,96 @@ proc initTexturedVertexArrays(batch: var TexturedBatch) =
       cast[pointer](attribute.offset))
   glBindVertexArray(0)
 
-proc bakeTexturedPlacement(placement: PropPlacement) =
-  ## Adds one painted prop to the batch for its material textures.
+proc queueTexturedPlacement(
+  placement: PropPlacement,
+  slots: var Table[(GLuint, int32), int]
+) =
+  ## Collects placements without discarding previously baked meshes.
   let textureArray = placement.model.textureArray
   if textureArray == 0:
     return
-  var found = -1
-  for i in 0 ..< texturedBatches.len:
-    if texturedBatches[i].textureArray == textureArray:
-      found = i
-      break
-  if found < 0:
-    texturedBatches.add TexturedBatch(textureArray: textureArray)
-    found = texturedBatches.high
-  bakeTexturedInstance(
-    placement.model,
-    placement.position,
-    placement.rotation,
-    placement.scale,
-    placement.tint,
-    placement.stretch,
-    texturedBatches[found].mesh
-  )
+  let key = (textureArray, placement.group)
+  if key notin slots:
+    slots[key] = texturedBatches.len
+    texturedBatches.add TexturedBatch(
+      textureArray: textureArray, group: placement.group
+    )
+  texturedBatches[slots[key]].pending.add placement
 
-proc rebuildTexturedBatches() =
-  ## Bakes every textured placement into its pack's batch and uploads it.
-  for batch in texturedBatches.mitems:
-    batch.mesh.setLen(0)
+proc prepareTexturedBatches() =
+  ## Compares complete placement records and rebuilds only changed groups.
+  var slots: Table[(GLuint, int32), int]
+  for i, batch in texturedBatches.mpairs:
+    batch.pending.setLen(0)
+    slots[(batch.textureArray, batch.group)] = i
   for placement in rockPlacements:
-    bakeTexturedPlacement(PropPlacement(
+    queueTexturedPlacement(PropPlacement(
       model: rockModels[placement.model],
       position: placement.position,
       rotation: placement.rotation,
       scale: placement.scale,
       tint: vec3(1),
       stretch: vec3(1)
-    ))
+    ), slots)
   for placement in propPlacements:
-    bakeTexturedPlacement(placement)
-  for batch in texturedBatches.mitems:
-    if batch.mesh.len == 0:
+    queueTexturedPlacement(placement, slots)
+  profileBlock "textured geometry":
+    for batch in texturedBatches.mitems:
+      batch.dirty = batch.pending != batch.placements
+      if not batch.dirty:
+        continue
+      swap(batch.placements, batch.pending)
+      batch.mesh.setLen(0)
+      for placement in batch.placements:
+        bakeTexturedInstance(
+          placement.model,
+          placement.position,
+          placement.rotation,
+          placement.scale,
+          placement.tint,
+          placement.stretch,
+          batch.mesh
+        )
+
+proc releaseTexturedBatch(batch: var TexturedBatch) =
+  ## Releases an empty group's GPU resources without deleting shared textures.
+  if batch.vertexBuffer != 0:
+    glDeleteBuffers(1, batch.vertexBuffer.addr)
+  if batch.vertexArray != 0:
+    glDeleteVertexArrays(1, batch.vertexArray.addr)
+  if batch.depthVertexArray != 0:
+    glDeleteVertexArrays(1, batch.depthVertexArray.addr)
+  batch = TexturedBatch()
+
+proc rebuildTexturedBatches() {.measure.} =
+  ## Preserves clean buffers and uploads only changed textured groups.
+  prepareTexturedBatches()
+  profileBlock "textured upload":
+    for batch in texturedBatches.mitems:
+      if not batch.dirty:
+        continue
+      if batch.placements.len == 0:
+        releaseTexturedBatch(batch)
+        continue
+      if batch.mesh.len == 0:
+        continue
+      if batch.vertexBuffer == 0:
+        initTexturedVertexArrays(batch)
+      glBindBuffer(GL_ARRAY_BUFFER, batch.vertexBuffer)
+      glBufferData(
+        GL_ARRAY_BUFFER,
+        batch.mesh.len * sizeof(float32),
+        batch.mesh[0].addr,
+        GL_STATIC_DRAW
+      )
+  var kept = 0
+  for i in 0 ..< texturedBatches.len:
+    if texturedBatches[i].placements.len == 0:
       continue
-    if batch.vertexBuffer == 0:
-      initTexturedVertexArrays(batch)
-    glBindBuffer(GL_ARRAY_BUFFER, batch.vertexBuffer)
-    glBufferData(
-      GL_ARRAY_BUFFER,
-      batch.mesh.len * sizeof(float32),
-      batch.mesh[0].addr,
-      GL_STATIC_DRAW
-    )
+    if i != kept:
+      swap(texturedBatches[kept], texturedBatches[i])
+    inc kept
+  texturedBatches.setLen(kept)
 
 proc bakeTreeTiles(writeIndex: var int) =
   ## Plants tile trees using optional visual replacements and brightness.
@@ -2938,7 +3030,7 @@ proc bakeTreeTiles(writeIndex: var int) =
         writeIndex
       )
 
-proc rebuildTreeMesh() =
+proc rebuildTreeMesh() {.measure.} =
   ## Bakes trees, grass, rocks, and props into their colored or textured lists.
   if treeVertexBuffer == 0:
     return  # initTerrain hasn't created the buffers yet
@@ -2982,6 +3074,10 @@ proc rebuildTreeMesh() =
       propMesh[0].addr,
       GL_STATIC_DRAW
     )
+
+proc bakeProps*() {.measure.} =
+  ## Refreshes scenery without touching ground geometry, materials, or water.
+  rebuildTreeMesh()
 
 proc addTriangle(
     a,
@@ -4005,7 +4101,7 @@ proc initTerrain*(
 proc bakeTerrain*(
     rebuildWalkability = true,
     blockers: openArray[seq[int32]] = []
-) =
+) {.measure.} =
   ## Rebuilds and uploads terrain and props, with optional tile edge blockers.
   ## Nonzero per-layer blockers affect the overlay only. Omitted grids are open.
   ## Skip walkability rebuilding only after computing the final terrain edits.
@@ -4023,13 +4119,14 @@ proc bakeTerrain*(
   if rebuildWalkability:
     computeWalkable()
   rebuildTerrainData()
-  for i in 0 ..< layers.len:
-    let first = mesh.len div TerrainVertexSize
-    if layers[i].water:
-      emitWaterLayer(layers[i])
-    else:
-      emitLayer(i, layers[i], floorY, blockers)
-    layerVertexRanges.add first ..< (mesh.len div TerrainVertexSize)
+  profileBlock "terrain geometry":
+    for i in 0 ..< layers.len:
+      let first = mesh.len div TerrainVertexSize
+      if layers[i].water:
+        emitWaterLayer(layers[i])
+      else:
+        emitLayer(i, layers[i], floorY, blockers)
+      layerVertexRanges.add first ..< (mesh.len div TerrainVertexSize)
   rebuildTreeMesh()
   if waterVertexBuffer != 0 and waterMesh.len > 0:
     glBindBuffer(GL_ARRAY_BUFFER, waterVertexBuffer)
@@ -4173,7 +4270,7 @@ proc drawTexturedBatch(batch: TexturedBatch, mvp: Mat4) =
   glBindVertexArray(0)
 
 proc drawTerrain*(viewProjection: Mat4, showEdges = false,
-    drawGround = true) =
+    drawGround = true) {.measure.} =
   ## Opaque terrain and prop passes. Disables back-face culling itself (the
   ## gltf PBR renderer's beginFrame leaves culling on and the terrain mesh
   ## is not consistently wound) and enables the depth test.
@@ -4282,7 +4379,7 @@ proc drawWater*(
   glActiveTexture(GL_TEXTURE0)
   glUseProgram(0)
 
-proc drawTerrainSunDepth*(firstVertex = 0, vertexCount = -1) =
+proc drawTerrainSunDepth*(firstVertex = 0, vertexCount = -1) {.measure.} =
   ## Renders every baked caster — terrain, props, trees — into the sun's
   ## depth map. Call between beginSunDepthPass and endSunDepthPass, with the
   ## same vertex range the main pass will draw (a cutaway view should not

@@ -13,6 +13,7 @@ type
     seed*: int64
     seedGiven*: bool  ## --seed was passed; otherwise games may pick their own.
     playerClass*, opponentClass*: HeroClass
+    playerCount*: int  ## Above two selects the multiplayer scene preview.
     human*: bool
     botPaths*: seq[string]
 
@@ -46,12 +47,13 @@ proc parseSessionOptions*(args: openArray[string]): SessionOptions =
   ## Accept both --key=value and --key value, including negative numeric seeds.
   ## --human is a flag: --human, --human=true, --human true all work.
   result = SessionOptions(seed: DefaultSessionSeed,
-    playerClass: Archer, opponentClass: Mage, human: false)
+    playerClass: Archer, opponentClass: Mage, playerCount: PlayerCount,
+    human: false)
   var index = 0
   while index < args.len:
     let separator = args[index].find('=')
     let key = if separator >= 0: args[index][0 ..< separator] else: args[index]
-    if key notin ["--seed", "--class", "--opponent", "--bot", "--human"]:
+    if key notin ["--seed", "--class", "--opponent", "--players", "--bot", "--human"]:
       raise newException(ValueError, "Unknown session option: " & key)
     if key == "--human":
       if separator >= 0:
@@ -83,6 +85,14 @@ proc parseSessionOptions*(args: openArray[string]): SessionOptions =
       result.seedGiven = true
     of "--class": result.playerClass = parseHeroClass(value)
     of "--opponent": result.opponentClass = parseHeroClass(value)
+    of "--players":
+      try:
+        result.playerCount = parseInt(value)
+      except ValueError:
+        raise newException(ValueError, "Invalid integer player count: " & value)
+      if result.playerCount < PlayerCount:
+        raise newException(ValueError, "Player count must be at least " &
+          $PlayerCount)
     of "--bot":
       if result.botPaths.len >= PlayerCount:
         raise newException(ValueError, "Too many --bot arguments (max " &
@@ -91,11 +101,13 @@ proc parseSessionOptions*(args: openArray[string]): SessionOptions =
     else: discard
     inc index
 
-proc botPick(choices: seq[Choice], player: int, helps: bool): Choice =
+proc botPick(game: GameState, choices: seq[Choice], player: int,
+    helps: bool): Choice =
   ## A rule that helps its target goes on the bot's own minion. Others
-  ## prefer the enemy hero, then the first enemy minion. Either falls back
-  ## to no target, else nothing (Canceled).
-  let enemy = (player + 1) mod PlayerCount
+  ## prefer the enemy hero, then the first enemy minion; the enemy is the
+  ## next living player. Either falls back to no target, else nothing
+  ## (Canceled).
+  let enemy = game.nextPlayer(player)
   if helps:
     for choice in choices:
       if choice.kind == CreatureChoice and choice.owner == player:
@@ -133,7 +145,7 @@ proc nextBotAction*(game: GameState, playsThisTurn = 0,
     let rules = game.waitingTriggerRules().rules
     var picks: seq[Choice]
     for step in 0 ..< rules.targetCount():
-      var pick = botPick(game.triggerChoices(picks), owner,
+      var pick = game.botPick(game.triggerChoices(picks), owner,
         rules.helpsTarget(step))
       if pick.isCanceled:
         pick = NoTarget
@@ -148,7 +160,7 @@ proc nextBotAction*(game: GameState, playsThisTurn = 0,
     if card.needsChoice():
       picks.setLen(0)
       for step in 0 ..< card.targetCount():
-        let pick = botPick(game.availableChoices(handIndex, picks),
+        let pick = game.botPick(game.availableChoices(handIndex, picks),
           game.currentPlayer, card.helpsTarget(step))
         if pick.isCanceled:
           break
@@ -245,6 +257,16 @@ proc keywordsFromJson(node: JsonNode): set[Keyword] =
   node.requireKind(JArray, "keywords")
   for entry in node:
     result.incl parseEnum[Keyword](entry.stringValue("keyword"))
+
+proc firedToJson(fired: set[uint8]): JsonNode =
+  result = newJArray()
+  for index in fired:
+    result.add %index.int
+
+proc firedFromJson(node: JsonNode): set[uint8] =
+  node.requireKind(JArray, "fired triggers")
+  for entry in node:
+    result.incl entry.integer("fired trigger", 0, 255).uint8
 
 proc effectToJson(effect: Effect): JsonNode =
   result = %*{"kind": $effect.kind, "beat": effect.beat}
@@ -343,13 +365,15 @@ proc gameToJson*(game: GameState): JsonNode =
         "bonusPower": minion.bonusPower,
         "lostKeywords": keywordsToJson(minion.lostKeywords),
         "enteredTurn": minion.enteredTurn,
+        "firedTurnTriggers": firedToJson(minion.firedTurnTriggers),
         "canAttack": minion.canAttack,
         "hasAttacked": minion.hasAttacked}
     players.add %*{"heroClass": player.heroClass.classId(),
       "life": player.life, "totalEnergy": player.totalEnergy,
       "energy": player.energy, "deck": cardsToJson(player.deck),
       "hand": cardsToJson(player.hand),
-      "discardPile": cardsToJson(player.discardPile), "board": board}
+      "discardPile": cardsToJson(player.discardPile), "board": board,
+      "dead": player.dead}
   var visualEvents = newJArray()
   for event in game.visualEvents:
     var entry = %*{"kind": ord(event.kind),
@@ -394,6 +418,7 @@ proc gameFromJson*(node: JsonNode): GameState =
   result.turnNumber = node.field("turnNumber").integer("turn number", 1)
   result.nextMinionId = node.field("nextMinionId").integer("next minion ID", 1)
   var minionIds = initHashSet[int]()
+  result.players.setLen(PlayerCount)
   for owner in 0 ..< PlayerCount:
     let source = players[owner]
     var player = PlayerState(
@@ -403,7 +428,9 @@ proc gameFromJson*(node: JsonNode): GameState =
       energy: source.field("energy").integer("energy", 0),
       deck: cardsFromJson(source.field("deck")),
       hand: cardsFromJson(source.field("hand")),
-      discardPile: cardsFromJson(source.field("discardPile")))
+      discardPile: cardsFromJson(source.field("discardPile")),
+      dead: if source.hasKey("dead"): source["dead"].getBool(false)
+        else: false)
     if player.energy > player.totalEnergy:
       raise newException(ValueError, "Snapshot energy exceeds total energy")
     let board = source.field("board")
@@ -416,6 +443,8 @@ proc gameFromJson*(node: JsonNode): GameState =
         currentToughness: entry.field("currentToughness").integer("toughness", 0),
         enteredTurn: if entry.hasKey("enteredTurn"):
           entry["enteredTurn"].integer("entered turn", 0) else: 0,
+        firedTurnTriggers: if entry.hasKey("firedTurnTriggers"):
+          firedFromJson(entry["firedTurnTriggers"]) else: {},
         bonusPower: if entry.hasKey("bonusPower"):
           entry["bonusPower"].integer("power bonus") else: 0,
         lostKeywords: if entry.hasKey("lostKeywords"):

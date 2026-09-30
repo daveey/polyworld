@@ -5,7 +5,9 @@ import
 
 export groves
 
-const DecorativeRocks = 80
+const
+  DecorativeRocks = 80
+  SceneryChunkSize = 32
 
 type GrovePlacement* = object
   kind*: BrushKind
@@ -85,12 +87,20 @@ proc visible*(placement: GrovePlacement, treeWood: openArray[int16]): bool =
   ## Follows authoritative wood state for harvesting and replay restoration.
   placement.kind == LightRock or treeWood[placement.tile] > 0
 
+proc sceneryGroup*(tile, width: int): int32 =
+  ## Uses negative chunk IDs so scenery never shares a building's batch.
+  let columns = (width + SceneryChunkSize - 1) div SceneryChunkSize
+  -1'i32 - int32(
+    (tile div width div SceneryChunkSize) * columns +
+    tile mod width div SceneryChunkSize
+  )
+
 proc plantGrove*(
   grove: Grove,
   placements: openArray[GrovePlacement],
   treeWood: openArray[int16]
 ) =
-  ## Restores generated scenery after the building prop list is cleared.
+  ## Groups generated scenery by location for independent cached updates.
   for placement in placements:
     if not placement.visible(treeWood):
       continue
@@ -103,5 +113,6 @@ proc plantGrove*(
       modelName(placement.kind, placement.variant),
       placement.position,
       placement.rotation,
-      placement.scale
+      placement.scale,
+      group = sceneryGroup(placement.tile, layers[0].width)
     )

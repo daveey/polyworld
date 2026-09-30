@@ -6,7 +6,7 @@ import
   bassy, fixxy,
   polyworld/[llms, mailboxes, metrics, bodies, cli, controllers,
     pathing, profiles, tapes],
-  neural/[common, richard, david, andre],
+  neural/[common, richard, david, andre, fly],
   content,
   maps,
   motions,
@@ -50,7 +50,8 @@ type
     DataSelfDeaths,
     DataSelfRespawnTicks,
     DataDrafting,
-    DataDraftTurnId
+    DataDraftTurnId,
+    DataDraftMode
   ObjectField = enum
     ObjectLevel, ObjectMana, ObjectItemId, ObjectItemCount,
     ObjectFacingX, ObjectFacingY, ObjectTarget, ObjectVelX, ObjectVelY,
@@ -92,7 +93,8 @@ const
     "selfDeaths",
     "selfRespawnTicks",
     "drafting",
-    "draftTurnId"
+    "draftTurnId",
+    "draftMode"
   ]
 
 var
@@ -186,8 +188,9 @@ proc objectProc(heroId: int32, field: ObjectField): HostProc =
   result = proc(arguments: openArray[int32]): int32 =
     ## Reads a visible object's field without exposing hidden targets.
     let world = activeGame.world
-    var value: WorldObject
-    if not world.worldObjectAt(heroId, int(arguments[0]), value):
+    var team: Team
+    let value = world.scriptObject(heroId, int(arguments[0]), team)
+    if value == nil:
       return (if field == ObjectCamp: -1 else: 0)
     case field
     of ObjectCamp: int32(value.camp - 1)
@@ -218,13 +221,13 @@ proc objectProc(heroId: int32, field: ObjectField): HostProc =
         WorldScale
       )
     of ObjectTarget:
-      if value.targetId == 0:
+      let targetId = value.targetId
+      if targetId == 0:
         return 0
-      var target: WorldObject
       for i in 0 ..< world.worldObjectCount(heroId):
-        if world.worldObjectAt(heroId, i, target) and
-          target.id == value.targetId:
-            return target.id
+        let target = world.scriptObject(heroId, i, team)
+        if target != nil and target.id == targetId:
+          return target.id
       0
     of ObjectVelX:
       value.velocity.x
@@ -418,8 +421,10 @@ proc infoFunctions(host: var Host, heroId: int32) =
     else: toValue(0)
   let objectInfo: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Reads only objects in the same visibility-filtered decision snapshot.
-    var value: WorldObject
-    if not activeGame.world.worldObjectAt(heroId, int(args[0].asInt), value):
+    var team: Team
+    let value =
+      activeGame.world.scriptObject(heroId, int(args[0].asInt), team)
+    if value == nil:
       return toValue(0)
     case args[1].asInt
     of 0: toValue(worldToTiles(value.position.x, WorldScale))
@@ -612,8 +617,8 @@ proc initHeroHost(
     ## Reads any player's public selection, including the opposing team.
     activeGame.world.draftedClass(arguments[0])
   let heroAvailableProc: HostProc = proc(arguments: openArray[int32]): int32 =
-    ## Reports whether a valid class remains in the shared draft pool.
-    int32(activeGame.world.heroAvailable(arguments[0]))
+    ## Reports whether the caller may pick this class under the draft rules.
+    int32(activeGame.world.heroAvailable(arguments[0], heroId))
   let heroRoleProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads the class role, or minus one for an invalid class.
     if arguments[0] < 0 or arguments[0] > HeroClass.high.ord:
@@ -653,67 +658,51 @@ proc initHeroHost(
   let objectIdProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.id
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: value.id
   let objectKindProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.kind
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: value.kind
   let objectTeamProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.faction
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: value[].faction
   let objectClassProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.class
-    else:
-      -1
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: -1 else: value.class
   let objectXProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      mapCoordinate(value.position.x, activeGame.world.heroById(heroId).team)
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: mapCoordinate(value.position.x, team)
   let objectYProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      mapCoordinate(value.position.z, activeGame.world.heroById(heroId).team)
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: mapCoordinate(value.position.z, team)
   let objectHpProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      max(value.hp, 0'i32)
-    else:
-      0
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    if value == nil: 0 else: max(value.hp, 0'i32)
   let objectAliveProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    int32(
-      worldObjectAt(activeGame.world, heroId, int(arguments[0]), value) and
-        value.alive
-    )
+    var team: Team
+    let value = scriptObject(activeGame.world, heroId, int(arguments[0]), team)
+    int32(value != nil and value.alive)
   let walkToProc: NumericHostProc = proc(
       arguments: openArray[Value]
   ): Value =
@@ -940,7 +929,7 @@ proc initHeroHost(
   ]:
     let arity =
       if field in {ObjectItemId, ObjectItemCount}: 2 else: 1
-    discard result.addFunction(name, arity, objectProc(heroId, field), 16)
+    discard result.addQuery(name, arity, objectProc(heroId, field), 16)
   let spellCountProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Counts warnings and projectiles visible to this hero's team.
     int32(activeGame.world.visibleSpellCount(heroId))
@@ -954,8 +943,8 @@ proc initHeroHost(
   ]:
     discard result.addFunction(name, 1, spellProc(heroId, field), 16)
 
-  discard result.addFunction("objectCount", 0, objectCountProc, 2)
-  discard result.addFunction("objectId", 1, objectIdProc, 4)
+  discard result.addQuery("objectCount", 0, objectCountProc, 2)
+  discard result.addQuery("objectId", 1, objectIdProc, 4)
   let campCountProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Counts generated camp clearings regardless of fog or spawn state.
     int32(activeGame.world.camps.len)
@@ -963,13 +952,13 @@ proc initHeroHost(
   for (field, name) in [(CampX, "campX"), (CampY, "campY"),
     (CampTier, "campTier")]:
       discard result.addFunction(name, 1, campProc(heroId, field), 4)
-  discard result.addFunction("objectKind", 1, objectKindProc, 4)
-  discard result.addFunction("objectTeam", 1, objectTeamProc, 4)
-  discard result.addFunction("objectClass", 1, objectClassProc, 4)
-  discard result.addFunction("objectX", 1, objectXProc, 4)
-  discard result.addFunction("objectY", 1, objectYProc, 4)
-  discard result.addFunction("objectHp", 1, objectHpProc, 4)
-  discard result.addFunction("objectAlive", 1, objectAliveProc, 4)
+  discard result.addQuery("objectKind", 1, objectKindProc, 4)
+  discard result.addQuery("objectTeam", 1, objectTeamProc, 4)
+  discard result.addQuery("objectClass", 1, objectClassProc, 4)
+  discard result.addQuery("objectX", 1, objectXProc, 4)
+  discard result.addQuery("objectY", 1, objectYProc, 4)
+  discard result.addQuery("objectHp", 1, objectHpProc, 4)
+  discard result.addQuery("objectAlive", 1, objectAliveProc, 4)
   discard result.addFunction("walkTo", 2, walkToProc, 800)
   discard result.addFunction("attackMove", 2, attackMoveProc, 800)
   discard result.addFunction("attackTarget", 1, attackTargetProc, 20)
@@ -1000,7 +989,8 @@ proc initHeroHost(
   result.infoFunctions(heroId)
   let context = NeuralContext(policy: policy)
   result.addNeuralFunctions(
-    richardRunner(context), davidRunner(context), andreRunner(context)
+    richardRunner(context), davidRunner(context), andreRunner(context),
+    flyRunner(context)
   )
 
 proc neuralLimits(): Limits =
@@ -1127,6 +1117,9 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
     )
     vm.runtime.setData(
       heroDataIds[DataDrafting], int32(game.world.phase == Drafting)
+    )
+    vm.runtime.setData(
+      heroDataIds[DataDraftMode], int32(game.world.draftMode.ord)
     )
     vm.runtime.setData(
       heroDataIds[DataDraftTurnId], game.world.draftHeroId()

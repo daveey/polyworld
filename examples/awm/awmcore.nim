@@ -45,6 +45,9 @@ type
     ## reads like rules text.
     Hero
     Minion
+    Opponent
+      ## A player, not a card: `target({Opponent})` picks one living
+      ## opponent, as in `draw(1, target({Opponent}))`.
 
   VfxKind* = enum
     NoVfx
@@ -82,15 +85,23 @@ type
     BounceVfx
     # Presentation cue, not a card VFX: a card was discarded from a hand.
     TossVfx
+    # Presentation cue, not a card VFX: a hero died. The UI plays its death
+    # animation while its hand is discarded, one card at a time.
+    HeroDeathVfx
 
   Keyword* = enum
     ## Printed minion keywords. Each prints as its own line of rules text.
     Ranged
 
   Owner* = enum
-    ## Whose cards a query selects, relative to the player who plays the card.
+    ## Players, relative to the one the rules run for.
     You
-    Opponent
+    AnyOpponent
+      ## Any one opponent, for triggers: `on(attacked(AnyOpponent), ...)`.
+      ## An effect on one chosen opponent uses `target({Opponent})`.
+    AllOpponents
+      ## Every opponent, everywhere else: `draw(1, AllOpponents)`,
+      ## `game.board.choose(owner: AllOpponents)`.
 
   Zone* = enum
     ## Game zones rules can query. Hand, deck and discard will join the board.
@@ -253,7 +264,8 @@ type
     sourceId*: int  ## The card in play these rules belong to; 0 for a spell.
     attacker*: Choice  ## The attacker, for rules an attack triggered.
     allowNoTarget*: bool
-    heroes*: seq[Choice]
+    heroes*: seq[Choice]  ## Every living player's hero.
+    seats*: int  ## Every player, living or dead.
     creatures*: seq[Choice]
     game*: GameView
     selector*: ChoiceSelector
@@ -427,12 +439,14 @@ method candidates*(
   discard (target, context)
 
 method text*(target: ObjectTarget): string =
-  if target.kinds == {Hero}:
+  if target.kinds == {Opponent}:
+    "an opponent"
+  elif target.kinds == {Hero}:
     case target.relation
     of Friendly:
       "your hero"
     of Enemy:
-      "the enemy hero"
+      "an enemy hero"
     of Any:
       "a hero"
   elif target.kinds == {TargetKind.Minion}:
@@ -460,6 +474,12 @@ method candidates*(
     for choice in context.heroes:
       if choice.kind == HeroChoice and
           target.relation.relationAllows(context.sourcePlayer, choice.owner):
+        result.add choice
+  if Opponent in target.kinds:
+    # A player is picked by their hero; only the living have one.
+    for choice in context.heroes:
+      if choice.kind == HeroChoice and choice.owner != context.sourcePlayer and
+          choice notin result:
         result.add choice
   if TargetKind.Minion in target.kinds:
     for choice in context.creatures:
@@ -585,8 +605,12 @@ proc toughness*(target: Target): RuleValue[int] =
   RuleValue[int](kind: ToughnessOf, target: target)
 
 proc owner*(target: Target): RuleValue[Owner] =
-  ## `getTarget().owner`: You when the caster controls what the target
-  ## chose, else Opponent. With nothing chosen, You.
+  ## `getTarget().owner`: the player who controls what the target chose
+  ## (You when that is the caster). With nothing chosen, You.
+  RuleValue[Owner](kind: OwnerOf, target: target)
+
+converter toOwner*(target: Target): RuleValue[Owner] =
+  ## `draw(1, target({Opponent}))`: the player the target picks.
   RuleValue[Owner](kind: OwnerOf, target: target)
 
 proc self*(): RuleValue[Card] =
@@ -613,6 +637,7 @@ proc `-`*(a, b: RuleValue[int]): RuleValue[int] =
 # Reads resolve through targets and queries defined further down.
 proc value*(number: RuleValue[int], context: var RuleContext): int {.gcsafe.}
 proc value*(owner: RuleValue[Owner], context: var RuleContext): Owner {.gcsafe.}
+proc players*(owner: RuleValue[Owner], context: var RuleContext): seq[int] {.gcsafe.}
 proc value*(named: RuleValue[Card], context: var RuleContext): Card {.gcsafe.}
 proc text*(number: RuleValue[int], card: Card): string {.gcsafe.}
 proc text*(owner: RuleValue[Owner], card: Card): string {.gcsafe.}
@@ -728,18 +753,23 @@ proc text*(query: CardQuery, card: Card): string =
 
 proc matches*(query: CardQuery, context: var RuleContext): seq[Choice] =
   ## The query's cards in the live game, in board order.
-  let wanted = if query.anyOwner: You else: query.owner.value(context)
+  # A dead player's cards stay in play, and stay their opponents' enemies.
+  let
+    fixedOpponents = not query.anyOwner and query.owner.kind == FixedValue and
+      query.owner.fixed != You
+    wanted =
+      if query.anyOwner or fixedOpponents: newSeq[int]()
+      else: query.owner.players(context)
   case query.zone
   of BoardZone:
     for entry in context.game.board:
-      let owner =
-        if entry.choice.owner == context.sourcePlayer: You else: Opponent
       if not query.includeSelf and context.sourceId != 0 and
           entry.choice.kind == CreatureChoice and
           entry.choice.creatureId == context.sourceId:
         continue
       if entry.card.kind in query.kinds and
-          (query.anyOwner or owner == wanted):
+          (query.anyOwner or entry.choice.owner in wanted or
+            (fixedOpponents and entry.choice.owner != context.sourcePlayer)):
         result.add entry.choice
 
 proc chosenEntry(
@@ -780,11 +810,59 @@ proc value*(owner: RuleValue[Owner], context: var RuleContext): Owner =
     let choice = owner.target.choose(context)
     if choice.kind in {HeroChoice, CreatureChoice} and
         choice.owner != context.sourcePlayer:
-      Opponent
+      AllOpponents
     else:
       You
   else:
     raiseAssert "not an owner: " & $owner.kind
+
+proc resolvePlayers(owner: RuleValue[Owner], context: var RuleContext):
+    tuple[ok: bool, players: seq[int]] =
+  ## The players an owner names, seen from the player the rules run for:
+  ## You is that player; the opponents are every other living player (the
+  ## dead take no part); a target's owner is exactly the player controlling
+  ## what it chose. `ok` is false when a player had to be picked and the
+  ## pick was canceled; picking nobody names no one.
+  result.ok = true
+  case owner.kind
+  of FixedValue:
+    if owner.fixed == You:
+      result.players.add context.sourcePlayer
+    else:
+      for hero in context.heroes:
+        if hero.owner != context.sourcePlayer:
+          result.players.add hero.owner
+  of OwnerOf:
+    let choice = owner.target.choose(context)
+    if choice.kind in {HeroChoice, CreatureChoice}:
+      result.players.add choice.owner
+    elif owner.target.makesChoice():
+      result.ok = choice.kind != CanceledChoice
+    else:
+      # A reference to an earlier target that chose nothing: you.
+      result.players.add context.sourcePlayer
+  else:
+    raiseAssert "not an owner: " & $owner.kind
+
+proc players*(owner: RuleValue[Owner], context: var RuleContext): seq[int] =
+  owner.resolvePlayers(context).players
+
+proc picks(owner: RuleValue[Owner]): seq[Target] =
+  ## The target a player-valued parameter asks its card to pick.
+  if owner.kind == OwnerOf and owner.target.makesChoice():
+    result.add owner.target
+
+proc effectOwner(owner: RuleValue[Owner], rule: string): RuleValue[Owner] =
+  ## An effect names you, a picked opponent, or all of them.
+  doAssert owner.kind != FixedValue or owner.fixed != AnyOpponent,
+    rule & ": use target({Opponent}) for one opponent, or AllOpponents"
+  owner
+
+proc triggerOwner(owner: RuleValue[Owner], trigger: string): RuleValue[Owner] =
+  ## A trigger watches you or any one opponent.
+  doAssert owner.kind != FixedValue or owner.fixed != AllOpponents,
+    trigger & ": use AnyOpponent in triggers"
+  owner
 
 proc value*(named: RuleValue[Card], context: var RuleContext): Card =
   case named.kind
@@ -813,10 +891,20 @@ proc text*(number: RuleValue[int], card: Card): string =
   of CardNamed, SelfCard, OwnerOf: raiseAssert "not a number: " & $number.kind
 
 proc text*(owner: RuleValue[Owner], card: Card): string =
-  ## "you", "your opponent", "the target's owner".
+  ## "you", "an opponent", "each opponent", "the target's owner".
   case owner.kind
-  of FixedValue: (if owner.fixed == You: "you" else: "your opponent")
-  of OwnerOf: owner.target.targetText(card) & "'s owner"
+  of FixedValue:
+    case owner.fixed
+    of You: "you"
+    of AnyOpponent: "an opponent"
+    of AllOpponents: "each opponent"
+  of OwnerOf:
+    # A picked player is named as picked; a picked card, by its owner.
+    if owner.target of ObjectTarget and
+        ObjectTarget(owner.target).kinds == {Opponent}:
+      owner.target.targetText(card)
+    else:
+      owner.target.targetText(card) & "'s owner"
   else: raiseAssert "not an owner: " & $owner.kind
 
 proc text*(named: RuleValue[Card], card: Card): string =
@@ -1069,14 +1157,6 @@ proc lose*(keyword: KeywordRule, what: Selection, vfx = NoVfx): Rule =
   ## `lose(ranged(), target({Minion}))`: permanent while on the board.
   LoseKeywordRule(keyword: keyword.keyword, what: what, vfx: vfx)
 
-proc playerIndex(owner: Owner, context: RuleContext): int =
-  ## The player an Owner names, seen from the player the rules run for.
-  result = context.sourcePlayer
-  if owner == Opponent:
-    for hero in context.heroes:
-      if hero.owner != context.sourcePlayer:
-        return hero.owner
-
 method text*(rule: DestroyCardRule, card: Card): string =
   "Destroy " & rule.card.text(card) & "."
 
@@ -1109,16 +1189,20 @@ proc cardsText(count: RuleValue[int], card: Card): string =
 
 proc playerSentence(player: RuleValue[Owner], verb, verbs, rest: string,
     card: Card): string =
-  ## "Draw 1 card.", or with a subject: "Your opponent draws 1 card."
+  ## "Draw 1 card.", or with a subject: "Each opponent draws 1 card."
   if player.kind == FixedValue and player.fixed == You:
     verb.capitalizeAscii() & " " & rest & "."
   else:
     player.text(card).capitalizeAscii() & " " & verbs & " " & rest & "."
 
 method text*(rule: DrawRule, card: Card): string =
-  ## "Draw 1 card.", "Draw 2 cards.", "Your opponent draws 1 card.",
+  ## "Draw 1 card.", "Draw 2 cards.", "Each opponent draws 1 card.",
+  ## "An opponent draws 1 card.",
   ## "The target's owner draws cards equal to the target's toughness."
   rule.player.playerSentence("draw", "draws", rule.count.cardsText(card), card)
+
+method targets*(rule: DrawRule): seq[Target] =
+  rule.player.picks()
 
 method run*(
     rule: DrawRule,
@@ -1126,32 +1210,45 @@ method run*(
     context: var RuleContext
 ): bool =
   discard card
-  context.effects.add Effect(kind: DrawEffect,
-    drawPlayer: rule.player.value(context).playerIndex(context),
-    drawCount: rule.count.value(context))
+  let
+    resolved = rule.player.resolvePlayers(context)
+    count = rule.count.value(context)
+  if not resolved.ok:
+    return false
+  for player in resolved.players:
+    context.effects.add Effect(kind: DrawEffect, drawPlayer: player,
+      drawCount: count)
   true
 
 proc draw*(
     count: RuleValue[int],
     player: RuleValue[Owner] = toRuleValue(You)
 ): Rule =
-  ## `draw(1)`, `draw(2, Opponent)`.
-  DrawRule(count: count, player: player)
+  ## `draw(1)`, `draw(2, AllOpponents)`, `draw(1, target({Opponent}))`.
+  DrawRule(count: count, player: player.effectOwner("draw"))
 
 method text*(rule: TossRule, card: Card): string =
-  ## "Discard 1 card.", "Your opponent discards 2 cards."
+  ## "Discard 1 card.", "Each opponent discards 2 cards.",
+  ## "An opponent discards 1 card."
   rule.player.playerSentence("discard", "discards",
     rule.count.cardsText(card), card)
+
+method targets*(rule: TossRule): seq[Target] =
+  rule.player.picks()
 
 method run*(
     rule: TossRule,
     card: Card,
     context: var RuleContext
 ): bool =
-  context.effects.add Effect(kind: TossEffect,
-    tossPlayer: rule.player.value(context).playerIndex(context),
-    tossCount: rule.count.value(context),
-    tossSource: card.name, tossText: rule.text(card))
+  let
+    resolved = rule.player.resolvePlayers(context)
+    count = rule.count.value(context)
+  if not resolved.ok:
+    return false
+  for player in resolved.players:
+    context.effects.add Effect(kind: TossEffect, tossPlayer: player,
+      tossCount: count, tossSource: card.name, tossText: rule.text(card))
   true
 
 proc toss*(
@@ -1160,12 +1257,13 @@ proc toss*(
 ): Rule =
   ## `toss(1)`: that player discards cards of their choice. (`discard` is a
   ## Nim keyword.)
-  TossRule(count: count, player: player)
+  TossRule(count: count, player: player.effectOwner("toss"))
 
 proc nextTurn*(player: RuleValue[Owner]): Trigger =
   ## `on(nextTurn(You), ...)`: fires once, when that player's next turn
-  ## starts, after their draw.
-  Trigger(kind: NextTurnStart, player: player)
+  ## starts, after their draw. `nextTurn(AnyOpponent)`: when the next
+  ## opponent's turn starts.
+  Trigger(kind: NextTurnStart, player: player.triggerOwner("nextTurn"))
 
 proc text*(trigger: Trigger, card: Card): string =
   ## "at the start of your next turn".
@@ -1174,7 +1272,7 @@ proc text*(trigger: Trigger, card: Card): string =
     let player = trigger.player
     if player.kind == FixedValue:
       if player.fixed == You: "when your hero is attacked"
-      else: "when your opponent's hero is attacked"
+      else: "when an opponent's hero is attacked"
     else:
       "when " & player.text(card) & "'s hero is attacked"
   of CardAttacked:
@@ -1183,7 +1281,7 @@ proc text*(trigger: Trigger, card: Card): string =
     let player = trigger.player
     if player.kind == FixedValue:
       if player.fixed == You: "at the start of your next turn"
-      else: "at the start of your opponent's next turn"
+      else: "at the start of an opponent's next turn"
     else:
       "at the start of " & player.text(card) & "'s next turn"
 
@@ -1193,12 +1291,12 @@ proc firesAtTurnStart*(
     turnPlayer, turn, enteredTurn: int
 ): bool =
   ## Whether the trigger of a card that entered play on `enteredTurn` fires
-  ## as `turnPlayer` starts `turn`. Players alternate, so a player's next
-  ## turn is at most two turns after the card entered.
+  ## as `turnPlayer` starts `turn`: on any later turn of a player it
+  ## watches. The game fires each such trigger only once, so that is their
+  ## next turn, however many turns were skipped on the way.
   case trigger.kind
   of NextTurnStart:
-    turnPlayer == trigger.player.value(context).playerIndex(context) and
-      turn > enteredTurn and turn - enteredTurn <= 2
+    turnPlayer in trigger.player.players(context) and turn > enteredTurn
   of HeroAttacked, CardAttacked:
     false
 
@@ -1214,7 +1312,7 @@ proc firesOnAttack*(
     return false
   of HeroAttacked:
     return victim.kind == HeroChoice and
-      victim.owner == trigger.player.value(context).playerIndex(context)
+      victim.owner in trigger.player.players(context)
   of CardAttacked:
     if victim.kind != CreatureChoice:
       return false
@@ -1228,8 +1326,9 @@ proc firesOnAttack*(
           entry.card.energyCost == wanted.energyCost
 
 proc attacked*(player: RuleValue[Owner]): Trigger =
-  ## `on(attacked(You), ...)`: when that player's hero is attacked.
-  Trigger(kind: HeroAttacked, player: player)
+  ## `on(attacked(You), ...)`: when that player's hero is attacked;
+  ## `attacked(AnyOpponent)`: when any opponent's is.
+  Trigger(kind: HeroAttacked, player: player.triggerOwner("attacked"))
 
 proc attacked*(card: RuleValue[Card]): Trigger =
   ## `on(attacked(self()), ...)`: when that card is attacked.
@@ -1282,6 +1381,9 @@ method text*(rule: SummonRule, card: Card): string =
     result.add " for " & rule.owner.text(card)
   result.add "."
 
+method targets*(rule: SummonRule): seq[Target] =
+  rule.owner.picks()
+
 method run*(
     rule: SummonRule,
     card: Card,
@@ -1293,17 +1395,22 @@ method run*(
   let summoned = rule.card.value(context)
   if summoned.name.len == 0:
     return true
-  let owner = rule.owner.value(context).playerIndex(context)
-  for _ in 0 ..< rule.count.value(context):
-    let choice = creatureChoice(owner, context.game.nextMinionId)
-    inc context.game.nextMinionId
-    context.game.board.add BoardCard(choice: choice, card: summoned,
-      power: (if summoned.kind == Minion: summoned.power else: 0),
-      toughness: (if summoned.kind == Minion: summoned.toughness else: 0))
-    context.creatures.add choice
-    context.effects.add Effect(kind: SummonEffect,
-      summonedId: choice.creatureId, summonedOwner: owner,
-      summonedCard: summoned)
+  let
+    resolved = rule.owner.resolvePlayers(context)
+    count = rule.count.value(context)
+  if not resolved.ok:
+    return false
+  for owner in resolved.players:
+    for _ in 0 ..< count:
+      let choice = creatureChoice(owner, context.game.nextMinionId)
+      inc context.game.nextMinionId
+      context.game.board.add BoardCard(choice: choice, card: summoned,
+        power: (if summoned.kind == Minion: summoned.power else: 0),
+        toughness: (if summoned.kind == Minion: summoned.toughness else: 0))
+      context.creatures.add choice
+      context.effects.add Effect(kind: SummonEffect,
+        summonedId: choice.creatureId, summonedOwner: owner,
+        summonedCard: summoned)
   true
 
 proc summon*(
@@ -1314,7 +1421,7 @@ proc summon*(
   ## `summon(2, "Footsoldier")`: new base-set minions enter under `owner`'s
   ## control. Like played minions, they attack from their owner's next
   ## turn; their own on-play rules don't run.
-  SummonRule(count: count, card: card, owner: owner)
+  SummonRule(count: count, card: card, owner: owner.effectOwner("summon"))
 
 proc checkCardNames*(card: Card, cardNamed: CardLookup) =
   ## Looks up every card name the rules mention: a misspelled one raises,
@@ -1332,7 +1439,7 @@ proc board*(game: GameQuery): ZoneQuery =
 
 macro choose*(zone: ZoneQuery, filters: varargs[untyped]): CardQuery =
   ## Selects every card in `zone` matching `kind: CardKind`, `owner:`
-  ## (`You`, `Opponent`, or computed: `getTarget().owner`) and `self: false`
+  ## (`You`, `AllOpponents`, or computed: `getTarget().owner`) and `self: false`
   ## (not the card these rules belong to). An omitted filter matches
   ## anything.
   let query = genSym(nskVar, "query")

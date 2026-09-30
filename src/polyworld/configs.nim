@@ -15,7 +15,7 @@ type
   PlayerConfig* = object
     name*: string
 
-  MatchConfig*[Preset] = object
+  MatchConfig*[Preset, Draft = void] = object
     players*: seq[PlayerConfig]
     seed*: int32 = 2026
     maxTicks*: int32 = DefaultDurationTicks
@@ -26,11 +26,13 @@ type
     waitForLlm*: bool
     when Preset isnot void:
       mapPreset*: Preset
+    when Draft isnot void:
+      draftMode*: Draft
 
   GameConfig* = MatchConfig[void]
 
-proc renameHook*[Preset](
-    value: var MatchConfig[Preset], fieldName: var string
+proc renameHook*[Preset, Draft](
+    value: var MatchConfig[Preset, Draft], fieldName: var string
 ) =
   ## Maps the platform's snake case config fields to Nim field names.
   var
@@ -44,7 +46,7 @@ proc renameHook*[Preset](
       upper = false
   fieldName = name
 
-proc gameConfig*[Preset](config: MatchConfig[Preset]): GameConfig =
+proc gameConfig*[Preset, Draft](config: MatchConfig[Preset, Draft]): GameConfig =
   ## Copies the shared match settings without game-specific map parameters.
   GameConfig(
     players: config.players,

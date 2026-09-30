@@ -1,7 +1,7 @@
 import
   pixie, silky, vmath, windy,
   polyworld/[chrome, configs, gameuis],
-  assets, content, controls, game, layouts, sim
+  assets, content, controls, game, layouts, presets, sim
 
 const
   Gold = rgbx(248, 199, 85, 255)
@@ -59,8 +59,14 @@ proc drawDraft*(sk: Silky, window: Window, size: Vec2, playing: bool) =
       "  /  Pick " & $(world.draftTurn + 1) & " of " & $world.heroes.len &
       "  /  " & $secondsLeft & "s left"
   sk.drawRect(vec2(0), draftSize, rgbx(12, 21, 30, 255))
-  sk.drawLabel("Choose your hero", layout.title.origin,
-    layout.title.size, White, "H1", CenterAlign)
+  sk.drawLabel(
+    world.draftMode.draftName() & " / Choose your hero",
+    layout.title.origin,
+    layout.title.size,
+    White,
+    "H1",
+    CenterAlign
+  )
   sk.drawLabel(status, layout.status.origin, layout.status.size,
     accent, "Bold", CenterAlign)
   sk.drawSprite(
@@ -112,19 +118,20 @@ proc drawDraft*(sk: Silky, window: Window, size: Vec2, playing: bool) =
       if available: White else: Muted, "Bold", CenterAlign)
     if not available:
       for index, hero in world.heroes:
-        if hero.drafted and hero.class == class:
-          let
-            badge = GameUiPanel(
-              origin: card.origin + vec2(6), size: vec2(card.size.x - 12, 24)
-            )
-            pickedBy =
-              (if hero.team == RedTeam: "Red " else: "Blue ") &
-              $(hero.slot + 1) & ": " & playerName(index)
-          sk.drawSprite(WhiteTileKey, badge.origin, badge.size,
-            rgbx(12, 18, 25, 230), radius = 4)
-          sk.drawLabel(sk.fittedLabel(pickedBy, badge.size.x - 8, "Small"),
-            badge.origin, badge.size, Muted, "Small", CenterAlign)
-          break
+        if hero.drafted and hero.class == class and
+          (world.draftMode == UniqueDraft or hero.team == active.team):
+            let
+              badge = GameUiPanel(
+                origin: card.origin + vec2(6), size: vec2(card.size.x - 12, 24)
+              )
+              pickedBy =
+                (if hero.team == RedTeam: "Red " else: "Blue ") &
+                $(hero.slot + 1) & ": " & playerName(index)
+            sk.drawSprite(WhiteTileKey, badge.origin, badge.size,
+              rgbx(12, 18, 25, 230), radius = 4)
+            sk.drawLabel(sk.fittedLabel(pickedBy, badge.size.x - 8, "Small"),
+              badge.origin, badge.size, Muted, "Small", CenterAlign)
+            break
     if canPick and available and hovered and window.buttonPressed[MouseLeft]:
       selectedClass = class.ord.int32
   let

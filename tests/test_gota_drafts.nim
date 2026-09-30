@@ -1,5 +1,5 @@
 import
-  std/[os, tempfiles],
+  std/[os, strutils, tempfiles],
   bassy,
   polyworld/[cli, rngs, tapes],
   ../examples/gods_of_the_arena/[bots, content, controls, maps, replays, sim]
@@ -10,11 +10,13 @@ const
   RusherPolicy = currentSourcePath().parentDir.parentDir /
     "examples/gods_of_the_arena/players/rusher.bas"
 
-proc draftGame(): Game =
+proc draftGame(mode = UniqueDraft): Game =
   ## Creates a live draft on a compact arena with a fresh recording.
   var preset = defaultConfig()
   preset.mapSize = 64
-  result = newGame(generateMap(54, preset), 240, 10, false, ReplayData())
+  result = newGame(
+    generateMap(54, preset), 240, 10, false, ReplayData(), draftMode = mode
+  )
   result.recorder = initReplayRecorder(result.currentSetup(1000), preset)
 
 proc decide(game: Game) =
@@ -205,8 +207,14 @@ repeat = repeat and lastActionError() = ActionNotDraftTurn
       doAssert vm.runtime.getGlobal(name) != 0, name
 
 echo "Testing BASIC composition picks and exact replay through combat"
-for policy in [BasePolicy, RusherPolicy]:
-  let game = draftGame()
+for choice in [
+  (BasePolicy, UniqueDraft), (RusherPolicy, UniqueDraft),
+  (BasePolicy, TeamDraft), (RusherPolicy, TeamDraft),
+  (BasePolicy, OpenDraft), (RusherPolicy, OpenDraft)
+]:
+  let
+    policy = choice[0]
+    game = draftGame(choice[1])
   game.loadBots([BotGroup(path: policy, count: 10)])
   var checkpoint: World
   for i in 0 ..< 160:
@@ -232,6 +240,8 @@ for policy in [BasePolicy, RusherPolicy]:
     data = decodeReplay(encodeReplay(game.recorder.data))
     replay = newGame(game.map, 240, 0, true, data)
   doAssert data.header.setup.drafting
+  doAssert data.config.draftMode == choice[1]
+  doAssert replay.world.draftMode == choice[1]
   replay.historyPlayback = true
   replay.replayPlayer = initReplayPlayer(data)
   for i in 0 ..< data.hashes.len:
@@ -415,5 +425,116 @@ block:
   doAssert game.world.draftTicks < 2 * DraftPickTicks
   doAssert game.world.battleTick() == 0
   doAssert game.durationTicks() == game.config.maxTicks + game.world.draftTicks
+
+echo "Testing team mirrors and unrestricted duplicates"
+for mode in [TeamDraft, OpenDraft]:
+  let
+    game = draftGame(mode)
+    world = game.world
+    first = world.heroById(world.draftHeroId())
+  doAssert world.applyDraft(first.id, Arcanist.ord.int32)
+  doAssert world.heroAvailable(Arcanist.ord.int32)
+  doAssert world.heroAvailable(Arcanist.ord.int32, first.id) ==
+    (mode == OpenDraft)
+  doAssert world.applyDraft(world.draftHeroId(), Arcanist.ord.int32)
+  let third = world.draftHeroId()
+  doAssert world.applyDraft(third, Arcanist.ord.int32) == (mode == OpenDraft)
+  if mode == TeamDraft:
+    doAssert world.heroById(third).lastActionError == ActionHeroTaken
+  while world.phase == Drafting:
+    let class =
+      if mode == OpenDraft: Arcanist.ord.int32
+      else: world.heroById(world.draftHeroId()).slot.int32 + 3
+    doAssert world.applyDraft(world.draftHeroId(), class)
+  for hero in world.heroes:
+    doAssert hero.drafted
+    if mode == OpenDraft:
+      doAssert hero.class == Arcanist
+  let snapshot = world.clone()
+  let original = game.stateHash()
+  world.draftMode = UniqueDraft
+  doAssert game.stateHash() != original
+  world.restore(snapshot)
+  doAssert world.draftMode == mode and game.stateHash() == original
+  let other = world.heroes[1]
+  first.hp = 1
+  first.mana = 0
+  first.abilityLevels[PrimaryAbility] = 1
+  doAssert other.hp == other.maxHp and other.mana > 0
+  doAssert other.abilityLevels[PrimaryAbility] == 0
+
+echo "Testing BASIC duplicates, combat, and replay seeking"
+for mode in [TeamDraft, OpenDraft]:
+  let
+    directory = createTempDir("gota-duplicates-", "")
+    path = directory / "duplicates.bas"
+    game = draftGame(mode)
+  defer:
+    removeDir(directory)
+  let selection =
+    if mode == OpenDraft: "Arcanist"
+    else: "(selfId - " & $FirstHeroId & ") mod 5"
+  writeFile(path, readFile(BasePolicy).replace(
+    "  chooseHero()", "  accepted = draftHero(" & selection & ")" &
+      "\n  observedMode = draftMode" &
+      "\n  availableAfter = heroAvailable(" & selection & ")"
+  ))
+  game.recorder = initReplayRecorder(game.currentSetup(2400), game.map.preset)
+  game.loadBots([BotGroup(path: path, count: 10)])
+  var checkpoint: World
+  for i in 0 ..< 2000:
+    game.tickWorld(proc() =
+      ## Exercises duplicate classes with the normal combat policy.
+      game.decide()
+    )
+    if i == 49:
+      checkpoint = game.world.clone()
+  doAssert game.world.phase == Playing
+  for i, hero in game.world.heroes:
+    let vm = game.heroVms[i]
+    doAssert not vm.failed, vm.lastError
+    doAssert vm.runtime.getGlobal("observedMode") == mode.ord
+    doAssert vm.runtime.getGlobal("availableAfter") ==
+      (if mode == OpenDraft: 1 else: 0)
+    doAssert hero.class.ord == (if mode == OpenDraft: Arcanist.ord else: i mod 5)
+  let
+    expected = game.stateHash()
+    data = decodeReplay(game.recorder.data.encodeReplay())
+    replay = newGame(game.map, 240, 0, true, data)
+  doAssert data.config.draftMode == mode
+  replay.historyPlayback = true
+  replay.replayPlayer = initReplayPlayer(data)
+  for i in 0 ..< data.hashes.len:
+    replay.tickWorld(nil)
+  doAssert replay.hashCheck.mismatches == 0, replay.hashCheck.error
+  doAssert replay.stateHash() == expected
+  replay.world.restore(checkpoint)
+  replay.replayPlayer.syncCursor(checkpoint.tick.uint32)
+  for i in checkpoint.tick.int ..< data.hashes.len:
+    replay.tickWorld(nil)
+  doAssert replay.hashCheck.mismatches == 0, replay.hashCheck.error
+  doAssert replay.stateHash() == expected
+
+echo "Testing timeout picks respect each draft mode"
+for mode in [TeamDraft, OpenDraft]:
+  let game = draftGame(mode)
+  while game.world.phase == Drafting:
+    game.tickWorld(nil)
+  doAssert game.world.draftTicks == 10 * DraftPickTicks
+  for i, hero in game.world.heroes:
+    doAssert hero.drafted
+    if mode == TeamDraft:
+      for j in 0 ..< i:
+        let other = game.world.heroes[j]
+        doAssert hero.team != other.team or hero.class != other.class
+  let
+    data = decodeReplay(game.recorder.data.encodeReplay())
+    replay = newGame(game.map, 240, 0, true, data)
+  replay.historyPlayback = true
+  replay.replayPlayer = initReplayPlayer(data)
+  for i in 0 ..< data.hashes.len:
+    replay.tickWorld(nil)
+  doAssert replay.hashCheck.mismatches == 0, replay.hashCheck.error
+  doAssert replay.stateHash() == game.stateHash()
 
 echo "Gota drafting passed"

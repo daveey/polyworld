@@ -15,7 +15,7 @@ const
   ReplayFormatVersion* = 6'u16
   ## This client supports only this gameplay version. Bump it when rules change.
   ## Older replays use their archived client; never add compatibility branches.
-  ReplayGameVersion* = 64'u16
+  ReplayGameVersion* = 65'u16
   ActionWalkTo* = 1'u8
   ActionAttackTarget* = 2'u8
   ActionBuyItem* = 3'u8
@@ -50,6 +50,7 @@ type
       ## Battle ticks only; drafting has a separate per-player deadline.
     heroes*: seq[ReplayHero]
     drafting*: bool
+    draftMode*: DraftMode
 
   ReplayAction* = object
     tick*: uint32
@@ -84,7 +85,8 @@ proc initReplayData*(
     maxTicks: int32(setup.maximumTicks),
     players: unnamedPlayers(HeroClassCount),
     spawnIntervalTicks: int32(setup.spawnIntervalTicks),
-    mapPreset: preset
+    mapPreset: preset,
+    draftMode: setup.draftMode
   )
   result.config.mapPreset.mapSize = setup.gridTiles.int
 
@@ -287,18 +289,26 @@ proc validate*(data: ReplayData) =
     fail("replay setup duration exceeds the hash limit")
   if setup.heroes.len == 0 or setup.heroes.len > MaxReplayHeroes:
     fail("replay setup has an invalid hero count")
-  if setup.drafting and setup.heroes.len > HeroClassCount:
-    fail("replay draft has more players than available heroes")
+  if data.config.draftMode != setup.draftMode:
+    fail("replay configuration has a different draft mode")
+  if setup.drafting and setup.draftMode == UniqueDraft and
+    setup.heroes.len > HeroClassCount:
+      fail("replay draft has more players than available heroes")
   if data.actions.len > MaxReplayActions:
     fail("replay action limit exceeded")
   if data.hashes.len > MaxReplayHashes:
     fail("replay hash limit exceeded")
   if data.hashes.len.uint64 > totalTicks:
     fail("replay hashes exceed the configured duration")
+  var teamPlayers: array[2, int]
   for i, hero in setup.heroes:
     if hero.team > 1 or hero.lane > 2 or
         hero.class > uint8(HeroClass.high.ord):
       fail("replay setup has invalid hero metadata")
+    inc teamPlayers[hero.team]
+    if setup.drafting and setup.draftMode == TeamDraft and
+      teamPlayers[hero.team] > HeroClassCount:
+        fail("replay team draft has more players than available heroes")
     for j in 0 ..< i:
       if setup.heroes[j].id == hero.id:
         fail("replay setup contains a duplicate hero ID")
