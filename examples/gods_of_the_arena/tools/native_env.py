@@ -80,6 +80,10 @@ class Lib:
             L.gota_seat_defer_stats.argtypes = [vp, ctypes.c_int, i64p]
         if hasattr(L, "gota_action_mask"):
             L.gota_action_mask.argtypes = [vp, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8)]
+        if hasattr(L, "gota_world_state"):  # opt-in critic world state (native_env.h)
+            L.gota_world_state_size.restype = ctypes.c_int
+            L.gota_world_state.restype = ctypes.c_int
+            L.gota_world_state.argtypes = [vp, f32p, ctypes.c_int32]
         L.gota_set_seat_package.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int64]
         L.gota_seat_script_status.argtypes = [vp, ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
         L.gota_set_learner_seats.argtypes = [vp, ctypes.c_uint32]
@@ -179,6 +183,13 @@ class Env:
         """uint8[187]: verb[8] | castTarget ability[4] | 7 target rows x 25 (native_env.h)."""
         out = np.zeros(MASK_SIZE, np.uint8)
         assert self.L.gota_action_mask(self.h, seat, ptr(out, ctypes.c_uint8)) == 0
+        return out
+
+    def world_state(self):
+        """float32[gota_world_state_size()]: absolute-frame critic state (native_env.h)."""
+        out = np.zeros(self.L.gota_world_state_size(), np.float32)
+        n = self.L.gota_world_state(self.h, ptr(out, ctypes.c_float), out.size)
+        assert n == out.size, n
         return out
 
     def set_package(self, seat, data):

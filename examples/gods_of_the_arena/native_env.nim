@@ -11,7 +11,7 @@
 
 {.define: gotaNoLlm.}
 
-import std/[json, locks, os, strutils], jsony, scores, polyworld/visions
+import std/[algorithm, json, locks, os, strutils], jsony, scores, polyworld/visions
 include bots
 
 const
@@ -660,6 +660,145 @@ proc gota_results(handle: pointer, eight: ptr UncheckedArray[float32]): cint {.e
 proc gota_state_hash(handle: pointer): uint64 {.exportc, dynlib, cdecl.} =
   let env = toEnv(handle)
   if env == nil or env.game == nil: 0'u64 else: env.game.stateHash()
+
+# ---------------------------------------------------------------------------
+# World state (opt-in, read-only critic input). Layout: native_env.h.
+
+const
+  WsTowersPerTeam = 9      ## lane 0..2 x tier outer, inner, gate
+  WsGuardsPerTeam = 2      ## god-guard towers (guardsGod)
+  WsBarracksPerTeam = 6    ## lane 0..2 x 2 (map generation fits pairs)
+  WsBuildingsPerTeam = WsTowersPerTeam + WsGuardsPerTeam + WsBarracksPerTeam + 1
+    ## + the god (fort)
+  WsBuildingSlots = 2 * WsBuildingsPerTeam
+  WsLaneBase = WsBuildingSlots * 2
+  WsCampBase = WsLaneBase + 2 * 3 * 2
+  WsMaxCamps = 16
+  WsHeroBase = WsCampBase + WsMaxCamps * 2
+  WsHeroWords = 5
+  WsGlobalBase = WsHeroBase + 10 * WsHeroWords
+  WsGlobalWords = 6
+  WsRawSize = WsGlobalBase + WsGlobalWords
+  WorldStateSize = (WsRawSize + 3) div 4 * 4
+  WsCreepNorm = 40.0
+  WsRespawnNorm = 60 * TickRate  ## HeroMaxRespawnTicks
+  WsGoldNorm = 1000.0
+  WsGoldCap = 3.0
+  WsKillNorm = 50.0
+
+proc wsClamp(value, lo, hi: float64): float32 =
+  if not (value == value): return 0  # NaN guard
+  float32(clamp(value, lo, hi))
+
+proc fillWorldState(env: Env, output: ptr UncheckedArray[float32]) =
+  ## Pure reads of the world; see native_env.h for the index layout.
+  let
+    game = env.game
+    world = game.world
+  for i in 0 ..< WorldStateSize:
+    output[i] = 0
+  proc put(slot: int, hp, maxHp: int32) =
+    output[slot * 2] = float32(hp > 0)
+    output[slot * 2 + 1] = if maxHp > 0: wsClamp(float64(hp) / float64(maxHp), 0, 1)
+      else: 0
+  # 1. Buildings.
+  var
+    guards: array[2, int]
+    barracks: array[2, seq[(int, int)]]  # (lane, building index)
+  for index, b in world.buildings:
+    let t = b.team.ord
+    if b.kind == TowerBuilding and not b.guardsGod:
+      if b.lane in 0..2:
+        put(t * WsBuildingsPerTeam + b.lane * 3 + b.tier.ord, b.hp, b.maxHp)
+    elif b.kind == TowerBuilding:
+      if guards[t] < WsGuardsPerTeam:
+        put(t * WsBuildingsPerTeam + WsTowersPerTeam + guards[t], b.hp, b.maxHp)
+        inc guards[t]
+    else:
+      barracks[t].add((b.lane, index))
+  for t in 0 .. 1:
+    barracks[t].sort()
+    for n, entry in barracks[t]:
+      if n >= WsBarracksPerTeam: break
+      let b = world.buildings[entry[1]]
+      put(t * WsBuildingsPerTeam + WsTowersPerTeam + WsGuardsPerTeam + n,
+        b.hp, b.maxHp)
+    put(t * WsBuildingsPerTeam + WsBuildingsPerTeam - 1,
+      world.forts[t].hp, FortHp)
+  # 2. Lanes: per team, per lane [count, front].
+  var
+    counts: array[2, array[3, int]]
+    fronts: array[2, array[3, float64]]
+  for unit in world.footmen:
+    if unit.camp != 0 or unit.hp <= 0 or unit.state == Dying or
+        unit.lane notin 0..2:
+      continue
+    let
+      t = unit.team.ord
+      own = world.forts[t].center
+      enemy = world.forts[1 - t].center
+      ax = float64(enemy.x - own.x)
+      az = float64(enemy.z - own.z)
+      lengthSq = ax * ax + az * az
+    inc counts[t][unit.lane]
+    if lengthSq > 0:
+      let progress = ((float64(unit.position.x - own.x)) * ax +
+        (float64(unit.position.z - own.z)) * az) / lengthSq
+      fronts[t][unit.lane] = max(fronts[t][unit.lane], clamp(progress, 0, 1))
+  for t in 0 .. 1:
+    for lane in 0 .. 2:
+      let at = WsLaneBase + (t * 3 + lane) * 2
+      output[at] = wsClamp(float64(counts[t][lane]) / WsCreepNorm, 0, 1)
+      output[at + 1] = wsClamp(fronts[t][lane], 0, 1)
+  # 3. Neutral camps: [alive, respawn fraction].
+  for index, camp in world.camps:
+    if index >= WsMaxCamps: break
+    let
+      at = WsCampBase + index * 2
+      alive = camp.started and camp.state != EmptyCamp
+    output[at] = float32(alive)
+    if not alive:
+      output[at + 1] = wsClamp(float64(camp.respawnTick - world.tick) /
+        float64(CampRespawnTicks), 0, 1)
+  # 4. Heroes (seat order).
+  for seat in 0 ..< min(10, world.heroes.len):
+    let
+      hero = world.heroes[seat]
+      at = WsHeroBase + seat * WsHeroWords
+      alive = hero.hp > 0 and hero.state != Dying
+    output[at] = wsClamp(float64(hero.respawnTicks()) / float64(WsRespawnNorm), 0, 1)
+    let price = world.buybackPrice(hero.id)
+    output[at + 1] = float32(price > 0 and hero.gold >= price)
+    output[at + 2] = if hero.maxMana > 0:
+        wsClamp(float64(hero.mana) / float64(hero.maxMana), 0, 1)
+      else: 0
+    let rank = hero.abilityLevels[UltimateAbility]
+    if alive and rank > 0 and hero.cooldowns[UltimateAbility] <= 0 and
+        (not hero.spellsReady or hero.charges[UltimateAbility] > 0):
+      let spec = heroAbility(hero.class, UltimateAbility).abilitySpec(rank)
+      output[at + 3] = float32(hero.mana >= spec.manaCost)
+    output[at + 4] = wsClamp(float64(hero.gold) / WsGoldNorm, 0, WsGoldCap)
+  # 5. Globals.
+  let g = WsGlobalBase
+  output[g] = wsClamp(float64(max(0'i32, world.battleTick())) /
+    float64(max(1'i32, env.maxTicks)), 0, 1)
+  output[g + 1] = float32(world.phase == Drafting)
+  output[g + 2] = float32(world.gameOver)
+  output[g + 3] = if world.spawnIntervalTicks > 0:
+      wsClamp(float64(world.spawnTimerTicks) / float64(world.spawnIntervalTicks), 0, 1)
+    else: 0
+  output[g + 4] = wsClamp(float64(world.teamHeroKills[0]) / WsKillNorm, 0, 1)
+  output[g + 5] = wsClamp(float64(world.teamHeroKills[1]) / WsKillNorm, 0, 1)
+
+proc gota_world_state_size(): cint {.exportc, dynlib, cdecl.} = WorldStateSize
+
+proc gota_world_state(handle: pointer, output: ptr UncheckedArray[float32],
+    capacity: int32): cint {.exportc, dynlib, cdecl.} =
+  let env = toEnv(handle)
+  if env == nil or env.game == nil: return -1
+  if output == nil or capacity < WorldStateSize: return WorldStateSize
+  env.fillWorldState(output)
+  WorldStateSize
 
 proc fillStats(env: Env, seat: int, output: ptr UncheckedArray[int64]) =
   let

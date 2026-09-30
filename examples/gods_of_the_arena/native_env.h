@@ -181,6 +181,35 @@ int gota_step(void *handle, const int32_t *actions, float *rewards,
  * battle_ticks, red_god_hp, blue_god_hp, total_ticks}. */
 int gota_results(void *handle, float *eight);
 uint64_t gota_state_hash(void *handle);  /* the replay hash of the current tick */
+
+/* World state (opt-in, read-only critic input; never changes the observation,
+ * the contract hashes, the RNG, the game or gota_state_hash).
+ * gota_world_state_size() = N = 172 (fixed). gota_world_state writes N floats
+ * and returns N; returns N without writing when out is NULL or capacity < N;
+ * -1 on a bad handle / no game. ABSOLUTE frame: team 0 (red, seats 0..4) first,
+ * then team 1 (blue, seats 5..9). Every value is finite and in [0, 1] except
+ * hero gold (index +4, [0, 3]).
+ *   0..71    buildings: 36 slots x {alive (hp > 0), hp / max_hp}; slot =
+ *            team * 18 + k, k: 0..8 lane towers (lane * 3 + tier; tier 0 outer,
+ *            1 inner, 2 gate), 9..10 god guards (building order), 11..16
+ *            barracks (sorted by lane, then building order: 2 per lane), 17 the
+ *            god (fort hp / 400). Structures never heal or respawn.
+ *   72..83   lanes: (team * 3 + lane) * 2 + {alive lane creeps / 40 (clamped),
+ *            front = max over the team's lane creeps of their projection on the
+ *            own-god -> enemy-god axis, 0 own god .. 1 enemy god; 0 if none}.
+ *            lane = the sim's Footman.lane (0..2).
+ *   84..115  neutral camps: 16 slots (world.camps order; absent zero-filled)
+ *            x {alive (started and not empty), respawn fraction (ticks until
+ *            the respawn attempt / 60 s, 0 when alive)}.
+ *   116..165 heroes: seat * 5 + {respawn ticks remaining / (60 * TickRate)
+ *            (0 alive), buyback affordable (dead, price > 0, gold >= price),
+ *            mana / max_mana, ultimate ready (alive, R rank > 0, cooldown 0,
+ *            charge available, mana >= cost), gold / 1000 clamped to [0, 3]}.
+ *   166..171 globals: battle_tick / max_ticks, drafting, game_over, ticks to
+ *            the next lane wave / wave interval, red hero kills / 50, blue hero
+ *            kills / 50 (clamped). */
+int gota_world_state_size(void);
+int gota_world_state(void *handle, float *out, int32_t capacity);
 int32_t gota_battle_tick(void *handle);
 
 /* Training-only per-seat counters, cumulative since gota_reset; reading them

@@ -13,13 +13,17 @@
 8 ops per tick (5d): gota_net_info operations for w64/w128/w256/w384/w512 against the 4,000,000 budget.
 9 widths: w64/w128/w256/w384/w512 load in both the Nim loader and neural_package.py; every other width
   (including ones whose parameter count fits) is rejected by both, with the dimensions error.
+10 world state: gota_world_state returns gota_world_state_size() finite floats (NULL / short buffer -> size,
+  no write; bad handle -> -1); lane-tower and god hp fractions never rise and never revive within an episode
+  (structures do not heal or respawn); some lane creep count > 0 and some hero respawn timer > 0 mid-game; and
+  per-step state hashes + observations are identical with and without calling it every step (read-only).
 """
 import os, sys, json, zipfile, io, hashlib
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "../../../coworld/gota/runtime"))
-from native_env import Env, Lib, random_actions, HEAD_SIZES
+from native_env import Env, Lib, random_actions, HEAD_SIZES, ptr
 import neural_package as npk
 import ctypes
 
@@ -259,6 +263,58 @@ def test_widths(lib):
               f"py={py[:60]} nim={nim[:60]}" + (f" ops={info[7]} params={info[6]}" if net else ""))
 
 
+def test_world_state(lib, steps):
+    L = lib.L
+    if not hasattr(L, "gota_world_state"):
+        check("world state ABI present", False)
+        return
+    n = L.gota_world_state_size()
+    check("world state size fixed, multiple of 4", n > 0 and n % 4 == 0, f"N={n}")
+    check("world state bad handle -> -1", L.gota_world_state(None, None, 0) == -1)
+
+    def run(call):
+        env = Env(lib, learner_seats=[])
+        env.reset(21)
+        hashes, obs_digest, states = [], hashlib.sha256(), []
+        probe_ok = True
+        for i in range(steps):
+            o, _, _ = env.observe()
+            obs_digest.update(o.tobytes())
+            if call:
+                if i == 0:
+                    buf = np.full(n, 7.0, np.float32)
+                    probe_ok &= L.gota_world_state(env.h, None, n) == n
+                    probe_ok &= L.gota_world_state(env.h, ptr(buf, ctypes.c_float), n - 1) == n
+                    probe_ok &= bool((buf == 7.0).all())
+                states.append(env.world_state())
+            r = env.step(np.zeros((10, 5), np.int32))
+            hashes.append(env.state_hash())
+            if r == 1:
+                break
+        env.close()
+        return hashes, obs_digest.hexdigest(), np.array(states), probe_ok
+
+    plain_h, plain_o, _, _ = run(False)
+    call_h, call_o, ws, probe_ok = run(True)
+    check("world state NULL/short buffer -> N, no write", bool(probe_ok))
+    check("world state read-only (state hashes identical)", plain_h == call_h, f"{len(call_h)} steps")
+    check("world state read-only (observations identical)", plain_o == call_o)
+    check("world state finite", bool(np.isfinite(ws).all()), f"shape={ws.shape}")
+    check("world state in [-1, 3]", bool((ws >= -1).all() and (ws <= 3).all()),
+          f"min={ws.min():.3f} max={ws.max():.3f}")
+    # Towers (9 lane towers + 2 guards per team) and the god: alive/hp never increase.
+    slots = [t * 18 + k for t in (0, 1) for k in list(range(11)) + [17]]
+    alive = ws[:, [2 * s for s in slots]]
+    hp = ws[:, [2 * s + 1 for s in slots]]
+    check("tower/god hp fractions non-increasing", bool((np.diff(hp, axis=0) <= 0).all() and (np.diff(alive, axis=0) <= 0).all()))
+    check("all structures alive + full at start", bool((ws[0, 0:72:2] == 1).all() and (ws[0, 1:72:2] == 1).all()))
+    counts = ws[:, 72:84:2]
+    check("some lane creep count > 0", bool((counts > 0).any()), f"max={counts.max() * 40:.0f} creeps")
+    respawn = ws[:, 116:166:5]
+    check("some hero respawn timer > 0", bool((respawn > 0).any()), f"dead-rows={int((respawn > 0).sum())}")
+    check("some tower damaged", bool((hp < 1).any()), f"min_hp={hp.min():.3f}")
+
+
 def main():
     lib = Lib(sys.argv[1])
     quick = len(sys.argv) > 2 and sys.argv[2] == "quick"
@@ -271,6 +327,7 @@ def main():
     test_validation(lib)
     test_widths(lib)
     test_package_parity(lib, steps if quick else 7200, [64, 128, 256, 384, 512])
+    test_world_state(lib, 2400 if quick else 7200)
     print("ALL PASS" if not failures else f"FAILURES: {failures}")
     sys.exit(1 if failures else 0)
 
