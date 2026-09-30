@@ -12,6 +12,8 @@ type
   NeuralContext* = ref object
     policy*: Policy
     charged: bool
+    auxSizes: seq[int]
+    auxLogits: seq[Fixed]
   ModelReader* = object
     bytes*: string
     position*: int
@@ -102,13 +104,72 @@ proc commit*(
   result = runtime.putArray(values)
   runtime.putBlob(state, next, binding)
 
+proc publishAux*(
+    context: NeuralContext,
+    sizes: openArray[int],
+    logits: openArray[Fixed]
+) =
+  ## Replaces the auxiliary logits of the most recent committed call.
+  context.auxSizes = @sizes
+  context.auxLogits = @logits
+
+proc auxHead(
+    context: NeuralContext,
+    runtime: Runtime,
+    head: Value
+): tuple[offset, size: int] =
+  ## Locates one auxiliary head of the most recent committed call.
+  let index = int(head.asInt)
+  if index < 0 or index >= context.auxSizes.len:
+    fail("Auxiliary head " & $index & " is not in the most recent model, " &
+      "which has " & $context.auxSizes.len)
+  for i in 0 ..< index:
+    result.offset += context.auxSizes[i]
+  result.size = context.auxSizes[index]
+
+proc addAuxFunctions*(host: var Host, context: NeuralContext) =
+  ## Reads optional auxiliary heads of the most recent committed neural call.
+  let
+    count = proc(runtime: Runtime, arguments: openArray[Value]): Value =
+      ## Returns the number of auxiliary heads; zero without any.
+      toValue(int32(context.auxSizes.len))
+    size = proc(runtime: Runtime, arguments: openArray[Value]): Value =
+      ## Returns the number of logits in one auxiliary head.
+      toValue(int32(context.auxHead(runtime, arguments[0]).size))
+    logit = proc(runtime: Runtime, arguments: openArray[Value]): Value =
+      ## Returns one Q16.16 auxiliary logit.
+      let
+        head = context.auxHead(runtime, arguments[0])
+        index = int(arguments[1].asInt)
+      if index < 0 or index >= head.size:
+        fail("Auxiliary logit " & $index & " is outside a head of " &
+          $head.size)
+      toValue(context.auxLogits[head.offset + index])
+    argmax = proc(runtime: Runtime, arguments: openArray[Value]): Value =
+      ## Returns the first index of the largest Q16.16 auxiliary logit.
+      let head = context.auxHead(runtime, arguments[0])
+      var best = 0
+      for i in 1 ..< head.size:
+        if context.auxLogits[head.offset + i] >
+          context.auxLogits[head.offset + best]:
+            best = i
+      toValue(int32(best))
+  discard host.addFunction("nn_aux_count", 0, count, 1)
+  discard host.addFunction("nn_aux_size", 1, size, 1)
+  discard host.addFunction("nn_aux", 2, logit, 1)
+  discard host.addFunction("nn_aux_argmax", 1, argmax, 1)
+
 proc addNeuralFunctions*(
     host: var Host,
-    richard, david, andre, fly: ContextHostProc
+    richard, david, andre, fly: ContextHostProc,
+    context: NeuralContext = nil
 ) =
   ## Registers reviewed architectures through ordinary host-call bytecode.
+  ## With a context, also registers the auxiliary head readers.
   host.addBufferFunctions()
   discard host.addFunction("nn_richard", 3, richard, 1)
   discard host.addFunction("nn_david", 3, david, 1)
   discard host.addFunction("andre_nn", 3, andre, 1)
   discard host.addFunction("fly_nn", 3, fly, 1)
+  if context != nil:
+    host.addAuxFunctions(context)

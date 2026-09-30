@@ -19,7 +19,7 @@ proc hostFor(policy: Policy): Host =
   let context = NeuralContext(policy: policy)
   result.addNeuralFunctions(
     richardRunner(context), davidRunner(context), andreRunner(context),
-    flyRunner(context)
+    flyRunner(context), context
   )
 
 echo "Testing exact Richard integer wrapping and residual fixed-point scores"
@@ -322,3 +322,196 @@ block:
   for vm in game.heroVms:
     doAssert not vm.failed, vm.lastError
     doAssert vm.runtime.nativeMemoryBytes < NativeMemoryBytes
+
+echo "Testing optional David auxiliary heads"
+block:
+  const AuxSizes = [10, 23, 4]
+  let
+    plain = davidAuxFixture(newSeq[int]())
+    extended = davidAuxFixture(AuxSizes)
+    plainModel = loadDavid(plain)
+    auxModel = loadDavid(extended)
+  doAssert plainModel.auxHeads.len == 0 and plainModel.auxOutputs == 0
+  doAssert auxModel.auxHeads == @AuxSizes and auxModel.auxOutputs == 37
+  doAssert extended.len == plain.len + 4 * (1 + AuxSizes.len) +
+    4 * 64 * auxModel.auxOutputs
+  var
+    data = newSeq[Fixed](1407)
+    plainState, auxState: string
+  for step in 0 ..< 6:
+    for i in 0 ..< data.len:
+      data[i] = Fixed(int32(((i * 37 + step * 11) mod 131) - 65) * 1024)
+    let
+      a = inferDavid(plainModel, plainState, data)
+      b = inferDavid(auxModel, auxState, data)
+    # Auxiliary heads never change the action logits or recurrent state.
+    doAssert a.outputs == b.outputs and a.state == b.state
+    doAssert a.aux.len == 0 and b.aux.len == 37
+    for row in 0 ..< b.aux.len:
+      doAssert b.aux[row] == b.outputs[row mod 92]
+    plainState = a.state
+    auxState = b.state
+
+  proc patched(bytes: string, offset: int, value: uint32): string =
+    ## Replaces one little-endian header or weight word.
+    result = bytes
+    for i in 0 ..< 4:
+      result[offset + i] = char((value shr (8 * i)) and 255)
+  const AuxHeader = 160 + 4 * 5
+  doAssert rejected(proc() = discard loadDavid(patched(extended, 8, 3)))
+  doAssert rejected(proc() = discard loadDavid(patched(plain, 8, 2)))
+  doAssert rejected(proc() = discard loadDavid(patched(extended, AuxHeader, 0)))
+  doAssert rejected(proc() = discard loadDavid(patched(extended, AuxHeader, 17)))
+  doAssert rejected(proc() = discard loadDavid(
+    patched(extended, AuxHeader + 4, 1)))
+  doAssert rejected(proc() = discard loadDavid(extended[0 ..< ^4]))
+  doAssert rejected(proc() = discard loadDavid(extended & "\0\0\0\0"))
+  doAssert rejected(proc() = discard loadDavid(
+    patched(extended, extended.len - 4, 0x7fc00000'u32)))
+  doAssert rejected(proc() = discard loadDavid(davidAuxFixture([1024, 2])))
+  doAssert loadDavid(davidAuxFixture([1022, 2])).auxOutputs == 1024
+
+  let policy = loadPolicy(zipFixture([
+    ("policy.bas", "end"), ("aux.bin", extended), ("plain.bin", plain)
+  ]))
+  let host = hostFor(policy)
+  var limits = defaultLimits()
+  limits.maxNativeMemoryBytes = NativeMemoryBytes
+  let program = compile("""
+dim data(1406)
+dim logits(36)
+dim best(2)
+dim sizes(2)
+if initialized = 0 then
+  state = blobCreate()
+  initialized = 1
+end if
+for i = 0 to 1406
+  data(i) = ((i * 37) mod 131 - 65) / 64
+next i
+before = nn_aux_count()
+if probe = 1 then
+  value = nn_aux(0, 0)
+end if
+res = nn_david(path$, state, data)
+count = nn_aux_count()
+position = 0
+for k = 0 to count - 1
+  sizes(k) = nn_aux_size(k)
+  best(k) = nn_aux_argmax(k)
+  for i = 0 to sizes(k) - 1
+    logits(position) = nn_aux(k, i)
+    position = position + 1
+  next i
+next k
+if probe = 2 then
+  value = nn_aux(count, 0)
+end if
+if probe = 3 then
+  value = nn_aux(0, sizes(0))
+end if
+if probe = 4 then
+  value = nn_aux_argmax(-1)
+end if
+""", host, limits)
+  var runtime = initRuntime(program, host, limits)
+  runtime.setGlobal("path$", "aux.bin")
+  runtime.setGlobal("probe", 1)
+  doAssert rejected(proc() = discard runtime.run())
+  runtime.setGlobal("probe", 0)
+  runtime.restart()
+  discard runtime.run()
+  var expected = newSeq[Fixed](1407)
+  for i in 0 ..< expected.len:
+    expected[i] = Fixed(int32((i * 37) mod 131 - 65) * 1024)
+  let direct = inferDavid(auxModel, "", expected)
+  doAssert runtime.getGlobal("before") == 0
+  doAssert runtime.getGlobal("count") == 3
+  var offset = 0
+  for k, size in AuxSizes:
+    doAssert runtime.getArray("sizes", int32(k)) == int32(size)
+    var top = 0
+    for i in 0 ..< size:
+      doAssert runtime.getArrayValue("logits", int32(offset + i)).asFixed ==
+        direct.aux[offset + i]
+      if direct.aux[offset + i] > direct.aux[offset + top]:
+        top = i
+    doAssert runtime.getArray("best", int32(k)) == int32(top)
+    offset += size
+  for probe in 2 .. 4:
+    runtime.setGlobal("probe", probe)
+    runtime.restart()
+    doAssert rejected(proc() = discard runtime.run())
+  # A failed call keeps the previous auxiliary logits, like its state.
+  runtime.setGlobal("probe", 0)
+  runtime.setGlobal("path$", "plain.bin")
+  runtime.restart()
+  doAssert rejected(proc() = discard runtime.run())
+  doAssert runtime.getGlobal("before") == 3
+  runtime.putBlob(runtime.getGlobalValue("state"), "")
+  runtime.restart()
+  discard runtime.run()
+  doAssert runtime.getGlobal("before") == 3
+  doAssert runtime.getGlobal("count") == 0
+  runtime.setGlobal("probe", 1)
+  runtime.restart()
+  doAssert rejected(proc() = discard runtime.run())
+
+  # Ties choose the first index, as the BASIC action decoder does.
+  var tied = extended
+  let tail = tied.len - 4 * 64 * 4
+  for i in tail ..< tied.len:
+    tied[i] = '\0'
+  let tiedPolicy = loadPolicy(zipFixture([("policy.bas", "end"),
+    ("aux.bin", tied)]))
+  let tiedHost = hostFor(tiedPolicy)
+  var tiedRuntime = initRuntime(compile("""
+dim data(1406)
+state = blobCreate()
+res = nn_david("aux.bin", state, data)
+best = nn_aux_argmax(2)
+zero = nn_aux(2, 3)
+""", tiedHost, limits), tiedHost, limits)
+  discard tiedRuntime.run()
+  doAssert tiedRuntime.getGlobal("best") == 0
+  doAssert tiedRuntime.getGlobalValue("zero").asFixed == FixedZero
+
+echo "Testing auxiliary heads leave David glue decisions unchanged in GOTA"
+block:
+  const Library = currentSourcePath().parentDir.parentDir /
+    "examples/gods_of_the_arena/neural/policies/david.bas"
+  let
+    directory = createTempDir("gota-neural-aux-", "")
+    library = readFile(Library).split("' Example policy.")[0]
+    glue = library & "nnStep()\nif nn_aux_count() > 0 then\n" &
+      "  draftChoice = nn_aux_argmax(0)\n  shopChoice = nn_aux_argmax(1)\n" &
+      "  levelChoice = nn_aux_argmax(2)\nend if\n"
+  defer:
+    removeDir(directory)
+  var runs: seq[seq[string]]
+  for model in [davidAuxFixture(newSeq[int]()), davidAuxFixture([10, 23, 4])]:
+    let path = directory / ("policy" & $runs.len)
+    writeFile(path, zipFixture([("policy.bas", glue), ("model.bin", model)],
+      true))
+    let game = newGame(generateMap(7), 600, 10, false,
+      ReplayData(), drafting = false)
+    game.recorder = initReplayRecorder(game.currentSetup(1000))
+    game.loadBots([BotGroup(path: path, count: 10)])
+    var trace: seq[string]
+    for tick in 1 .. 40:
+      game.world.tick = int32(tick)
+      game.runBotDecisions()
+      for vm in game.heroVms:
+        doAssert not vm.failed, vm.lastError
+        doAssert vm.lastInstructions < vm.limits.maxInstructions
+        let state = vm.runtime.getGlobalValue("nnState")
+        var line = vm.runtime.getBlob(state)
+        for head in 0 ..< 5:
+          line.add " " & $vm.runtime.getArray("nnHeads", int32(head))
+        trace.add line
+    if runs.len == 1:
+      let vm = game.heroVms[0]
+      doAssert vm.runtime.getGlobal("shopChoice") in 0'i32 ..< 23'i32
+      doAssert vm.runtime.getGlobal("levelChoice") in 0'i32 ..< 4'i32
+    runs.add trace
+  doAssert runs[0] == runs[1]

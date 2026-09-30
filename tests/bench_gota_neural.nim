@@ -7,13 +7,14 @@ let
   combat = loadRichard(richardFixture())
   residual = loadRichard(richardFixture(true))
   davidModel = loadDavid(davidFixture(1407, 512))
+  davidAux = loadDavid(davidAuxFixture([10, 23, 4], 1407, 512))
   andreModel = loadAndre(andreFixture())
   andreStacked = loadAndre(andreFixture(64, 3))
 var
   combatData = newSeq[Fixed](25)
   residualData = newSeq[Fixed](31)
   davidData = newSeq[Fixed](1407)
-  state: string
+  state, auxState: string
   andreData: array[45, Fixed]
   andreState, stackedState: string
 for value in combatData.mitems:
@@ -31,6 +32,10 @@ timeIt "David recurrent 1407/512/92":
   let next = inferDavid(davidModel, state, davidData)
   state = next.state
   keep next.outputs
+timeIt "David recurrent 1407/512/92 with auxiliary heads 10/23/4":
+  let next = inferDavid(davidAux, auxState, davidData)
+  auxState = next.state
+  keep next.aux
 
 timeIt "Andre recurrent 45/12/12, one layer":
   let next = inferAndre(andreModel, andreState, andreData)

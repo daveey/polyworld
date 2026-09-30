@@ -19,6 +19,19 @@ GOALS = ["w_score", "w_win", "w_xp", "w_gold", "w_hero_kill", "w_assist",
          "w_god_damage", "w_reserved"]
 
 
+def aux_heads(model):
+    """Read version 2 auxiliary head sizes; the glue reads them with nn_aux."""
+    if len(model) < 184:
+        raise ValueError("Truncated auxiliary heads")
+    count = struct.unpack_from("<I", model, 180)[0]
+    if not 1 <= count <= 16 or len(model) < 184 + 4 * count:
+        raise ValueError("Invalid auxiliary head count")
+    sizes = struct.unpack_from(f"<{count}I", model, 184)
+    if any(not 2 <= size <= 1024 for size in sizes) or sum(sizes) > 1024:
+        raise ValueError("Invalid auxiliary head sizes")
+    return sizes, 184 + 4 * count
+
+
 def convert(path):
     """Translate supported manifest settings and preserve the model bytes."""
     if path.stat().st_size > 16 * 1024 * 1024:
@@ -39,11 +52,12 @@ def convert(path):
     if model[:8] != b"GOTANET1" or len(model) < 180:
         raise ValueError("Expected GOTANET1 weights")
     version, inputs, width, outputs, heads, count = struct.unpack_from("<6I", model, 8)
-    if (version, inputs, outputs, heads) != (1, 1407, 92, 5):
+    if version not in (1, 2) or (inputs, outputs, heads) != (1407, 92, 5):
         raise ValueError("Expected the GOTA 1407-input, five-head contract")
+    aux, header = aux_heads(model) if version == 2 else ((), 180)
     if (width not in (64, 128, 256, 384, 512) or
-            count != width * (inputs + 3 * width + outputs) or
-            len(model) != 180 + count * 4):
+            count != width * (inputs + 3 * width + outputs + sum(aux)) or
+            len(model) != header + count * 4):
         raise ValueError("Unexpected model dimensions or byte length")
     if struct.unpack_from("<5I", model, 160) != (8, 25, 49, 4, 6):
         raise ValueError("Unexpected action head layout")

@@ -90,6 +90,48 @@ proc davidFixture*(inputs = 1407, hidden = 64): string =
       i == hidden * (inputs + 3 * hidden)
     result.addWord(cast[uint32](if active: 1.0'f else: 0.0'f))
 
+proc davidAuxFixture*(
+    aux: openArray[int],
+    inputs = 1407,
+    hidden = 64,
+    seed = 1'u32
+): string =
+  ## Encodes public pseudo-random weights and optional auxiliary heads.
+  ## Auxiliary row r copies decoder row r mod 92, so each auxiliary logit
+  ## must equal that action logit exactly. Without heads it is version 1.
+  const Outputs = 92
+  var
+    auxOutputs = 0
+    state = seed
+  for size in aux:
+    auxOutputs += size
+  let
+    trunk = hidden * (inputs + 3 * hidden)
+    count = hidden * (inputs + 3 * hidden + Outputs + auxOutputs)
+  result = "GOTANET1"
+  for value in [(if aux.len > 0: 2 else: 1), inputs, hidden, Outputs, 5,
+      count]:
+    result.addWord(uint32(value))
+  result.add repeat('0', 128)
+  for size in [8, 25, 49, 4, 6]:
+    result.addWord(uint32(size))
+  if aux.len > 0:
+    result.addWord(uint32(aux.len))
+    for size in aux:
+      result.addWord(uint32(size))
+  var weights = newSeq[float32](count)
+  for i in 0 ..< trunk + hidden * Outputs:
+    state = state * 1664525'u32 + 1013904223'u32
+    # Small signed dyadic weights keep every intermediate finite.
+    let scale = if i < hidden * inputs: 1.0'f / 4096.0'f else: 1.0'f / 256.0'f
+    weights[i] = float32(int32(state shr 16) - 32768) * scale / 256.0'f
+  for row in 0 ..< auxOutputs:
+    for column in 0 ..< hidden:
+      weights[trunk + hidden * Outputs + row * hidden + column] =
+        weights[trunk + (row mod Outputs) * hidden + column]
+  for weight in weights:
+    result.addWord(cast[uint32](weight))
+
 proc andreFixture*(hidden = 12, layers = 1, wrapped = true): string =
   ## Builds an aligned PufferNet with one active channel in each layer.
   let
