@@ -154,7 +154,7 @@ proc parsePackage*(bytes: string): NeuralPackage =
   if files[1].len > MaxPolicyBytes:
     raise newException(ValueError, "policy.bas exceeds 256 KiB")
   let model = manifest["model"]
-  model.requireKeys(["format", "inputs", "hidden", "heads"], "model")
+  model.requireKeys(["format", "inputs", "hidden", "heads", "aux_heads"], "model")
   for key in ["format", "inputs", "hidden", "heads"]:
     if not model.hasKey(key):
       raise newException(ValueError, "model is missing " & key)
@@ -173,6 +173,16 @@ proc parsePackage*(bytes: string): NeuralPackage =
     heads.add h.getInt
   if heads != @HeadSizes or actor.headSizes != @HeadSizes:
     raise newException(ValueError, "model.heads must be [8,25,49,4,6]")
+  # Optional auxiliary heads (GOTANET1 version 2): the manifest lists them
+  # exactly when model.bin carries them.
+  var auxHeads: seq[int]
+  if model.hasKey("aux_heads"):
+    if model["aux_heads"].kind != JArray:
+      raise newException(ValueError, "model.aux_heads must be an array")
+    for h in model["aux_heads"]:
+      auxHeads.add h.getInt
+  if auxHeads != actor.auxSizes:
+    raise newException(ValueError, "model.aux_heads does not match model.bin")
   result.actor = actor
   result.goals = [defaultGoal(), defaultGoal()]
   if manifest.hasKey("goal"):

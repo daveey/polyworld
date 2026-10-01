@@ -41,6 +41,12 @@ type
     standing: NeuralCommand
     actor*: Actor
     state*, logits*: seq[float32]
+    aux*: seq[float32]
+      ## Package seats with a GOTANET1 v2 model: auxiliary logits of the last
+      ## inference, published to auxContext (the nn_aux_* readers).
+    auxContext*: NeuralContext
+    auxFrame*: int32
+      ## Inferences whose auxiliary logits were published (gota_aux_frame).
     sampling*: bool
     temperature*: float32
     rng*: uint64
@@ -251,6 +257,8 @@ proc resetEpisode*(seat: NeuralSeat, matchSeed: int32, index: int) =
   if seat.actor != nil:
     seat.state = newSeq[float32](seat.actor.hiddenSize)
     seat.logits = newSeq[float32](seat.actor.outputSize)
+    seat.aux = newSeq[float32](seat.actor.auxOutputs)
+    seat.auxFrame = 0
 
 proc fillStanding(seat: NeuralSeat, world: World) =
   ## Pre-fills the window's label with the standing order (standingMode > 0).
@@ -279,6 +287,41 @@ proc fillStanding(seat: NeuralSeat, world: World) =
   seat.label[8] = command.objectId
   seat.label[14] = encoded.errorMilli
   seat.label[15] = world.tick
+
+proc publishAux(seat: NeuralSeat) =
+  ## Hands the auxiliary logits to BASIC as Q16.16 (#83 outputFixed rounding).
+  var fixedAux = newSeq[Fixed](seat.aux.len)
+  try:
+    for i in 0 ..< seat.aux.len:
+      fixedAux[i] = outputFixed(seat.aux[i])
+  except CatchableError as error:
+    raise newException(BasicError, "neural auxiliary output failed: " & error.msg)
+  if seat.auxContext != nil:
+    seat.auxContext.publishAux(seat.actor.auxSizes, fixedAux)
+  inc seat.auxFrame
+
+proc draftAux*(game: Game, index: int): int32 =
+  ## gota_aux_draft: one inference on the seat's current observation from a
+  ## zero recurrent state (the seat's own state is untouched), publishing only
+  ## the auxiliary logits. For the draft head, before the hero's first
+  ## decision. 0 when the seat has no auxiliary heads.
+  let seat = game.neuralSeat(index)
+  if seat == nil or seat.mode != NeuralPackage or seat.actor == nil or
+      seat.aux.len == 0:
+    return 0
+  var
+    frame: DecisionFrame
+    obs = newSeq[float32](ObservationSize)
+    state = newSeq[float32](seat.actor.hiddenSize)
+    logits = newSeq[float32](seat.actor.outputSize)
+  buildObservation(game.world, index, seat.goal, game.config.maxTicks,
+    game.world.stats, obs, frame)
+  try:
+    seat.actor.infer(obs, state, logits, seat.aux)
+  except ValueError as error:
+    raise newException(BasicError, "neural draft inference failed: " & error.msg)
+  seat.publishAux()
+  1
 
 proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
   ## Captures the decision frame (observation, slots, resets) once per tick.
@@ -319,9 +362,14 @@ proc beginDecision*(game: Game, index: int, seat: NeuralSeat) =
       if seat.resetState:
         for x in seat.state.mitems: x = 0
       try:
-        seat.actor.infer(seat.obs, seat.state, seat.logits)
+        if seat.aux.len > 0:
+          seat.actor.infer(seat.obs, seat.state, seat.logits, seat.aux)
+        else:
+          seat.actor.infer(seat.obs, seat.state, seat.logits)
       except ValueError as error:
         raise newException(BasicError, "neural inference failed: " & error.msg)
+      if seat.aux.len > 0:
+        seat.publishAux()
       inc seat.inferences
       seat.peakOps = max(seat.peakOps, seat.actor.operationCount)
       if seat.maskTargets:
@@ -601,7 +649,16 @@ proc addNeuralSeatFunctions*(host: var Host, heroId: int32) =
     of 3: seat.period
     of 5 .. 9: seat.heads[arguments[0] - 5]
     else: 0
+  let auxDraftProc: HostProc = proc(arguments: openArray[int32]): int32 =
+    ## Draft-head inference on the current observation (zero state).
+    activeGame.draftAux(activeGame.world.heroIndex(heroId))
+  let auxFrameProc: HostProc = proc(arguments: openArray[int32]): int32 =
+    ## Count of published auxiliary-logit sets (changes when they refresh).
+    let seat = seatOf()
+    if seat == nil: 0'i32 else: seat.auxFrame
   discard host.addFunction("gota_act", 0, actProc, 800)
+  discard host.addFunction("gota_aux_draft", 0, auxDraftProc, 800)
+  discard host.addFunction("gota_aux_frame", 0, auxFrameProc, 4)
   discard host.addFunction("run_neural_net", 0, runProc, 4)
   discard host.addFunction("neuralObservation", 1, observationProc, 4)
   discard host.addFunction("neuralLogits", 1, logitsProc, 4)

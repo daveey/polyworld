@@ -530,7 +530,8 @@ proc infoFunctions(host: var Host, heroId: int32) =
 proc initHeroHost(
     heroId: int32,
     policy: Policy = nil,
-    llm: LlmClient = nil
+    llm: LlmClient = nil,
+    neuralContext: NeuralContext = nil
 ): Host =
   ## Builds the bounded world-query and action interface for one hero.
   result = initHost()
@@ -987,7 +988,8 @@ proc initHeroHost(
     )
 
   result.infoFunctions(heroId)
-  let context = NeuralContext(policy: policy)
+  let context =
+    if neuralContext != nil: neuralContext else: NeuralContext(policy: policy)
   result.addNeuralFunctions(
     richardRunner(context), davidRunner(context), andreRunner(context),
     flyRunner(context), context
@@ -1023,11 +1025,15 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
     else:
       compile(package.policy, schema, limits)
   bindHeroData(program)
-  var host = initHeroHost(heroId)
+  # The seat publishes its actor's auxiliary logits (GOTANET1 v2) into this
+  # context, which the nn_aux_* readers of initHeroHost read.
+  let auxContext = NeuralContext()
+  var host = initHeroHost(heroId, nil, nil, auxContext)
   host.addNeuralSeatFunctions(heroId)
   let seat = newNeuralSeat(NeuralPackage, package.decisionPeriod,
     game.config.maxTicks)
   seat.actor = package.actor
+  seat.auxContext = auxContext
   seat.goal = package.goals[game.world.heroes[i].team.ord]
   seat.sampling = package.decoder == SampleDecoder
   seat.temperature = package.temperature

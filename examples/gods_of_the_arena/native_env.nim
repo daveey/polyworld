@@ -63,6 +63,9 @@ type
     decided: bool
     snap: array[10, array[StatCount, int64]]
     events: seq[array[EventWords, int32]]
+    draftObs: seq[seq[float32]]
+      ## Replay mode: the picking seat's observation at each draft event (the
+      ## frame gota_aux_draft infers on); gota_replay_draft_obs.
       ## Replay mode: every recorded non-contract action (draft, buy, level,
       ## buyback) with its context; gota_replay_events.
     pending: array[EventWords, int32]
@@ -265,6 +268,7 @@ proc resetReplay(env: Env): int =
     game = newGame(gameMap, data.config.spawnIntervalTicks, 0, true, data)
   env.replay = data
   env.events.setLen(0)
+  env.draftObs.setLen(0)
   env.config = data.config
   env.maxTicks = data.config.maxTicks
   game.replayPlayer = initReplayPlayer(data)
@@ -312,6 +316,13 @@ proc resetReplay(env: Env): int =
         for c in 0 ..< HeroClassCount:
           if world.heroAvailable(int32(c)):
             extra = extra or (1'i32 shl c)
+        var
+          frame: DecisionFrame
+          o = newSeq[float32](ObservationSize)
+        let seat = e.game.neuralSeat(i)
+        let goal = if seat != nil: seat.goal else: e.goals[i]
+        buildObservation(world, i, goal, e.maxTicks, world.stats, o, frame)
+        e.draftObs.add o
       elif action.kind == ActionLevelAbility:
         extra = int32(hero.abilityPoints)
       e.pending = [int32(world.tick), world.battleTick(), int32(i), int32(action.kind),
@@ -1161,6 +1172,17 @@ proc gota_replay_info(handle: pointer, output: ptr char, capacity: int32): cint 
   let text = $node
   copyText(text, output, capacity)
   cint(text.len)
+
+proc gota_replay_draft_obs(handle: pointer, output: ptr UncheckedArray[float32], capacity: int32): cint {.exportc, dynlib, cdecl.} =
+  ## Replay mode: copies up to `capacity` draft-event observations
+  ## (ObservationSize floats each, in draft-event order) and returns the count.
+  let env = toEnv(handle)
+  if env == nil or env.replayPath.len == 0: return -1
+  if output != nil:
+    for n in 0 ..< min(int(capacity), env.draftObs.len):
+      for k in 0 ..< ObservationSize:
+        output[n * ObservationSize + k] = env.draftObs[n][k]
+  cint(env.draftObs.len)
 
 proc gota_replay_events(handle: pointer, output: ptr UncheckedArray[int32], capacity: int32): cint {.exportc, dynlib, cdecl.} =
   ## Replay mode: copies up to `capacity` events (EventWords = 12 int32 each:

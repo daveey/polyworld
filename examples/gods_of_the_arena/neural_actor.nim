@@ -13,6 +13,10 @@ type
     headSizes*: seq[int]
     observationContract*, actionContract*: string
     encoder, recurrent, decoder: seq[float32]
+    auxSizes*: seq[int]
+      ## GOTANET1 version 2: optional auxiliary linear heads on the decoder
+      ## feature (polyworld PR #89 layout); empty for version 1.
+    aux: seq[float32]
 
 const
   ActorMagic* = "GOTANET1"
@@ -20,6 +24,8 @@ const
   MaxActorInputs* = 4096
   ActorWidths* = [64, 128, 256, 384, 512]
   MaxActorWidth* = 512
+  MaxActorAuxHeads* = 16
+  MaxActorAuxOutputs* = 1024
     ## Largest accepted hidden width; sizes infer's fixed buffers.
   NeuralOpBudget* = 4_000_000
     ## Operations one seat may spend per tick on inference, separate from the
@@ -51,14 +57,33 @@ proc loadActor*(data: string): Actor =
     outputs = int(readU32(data, p))
     heads = int(readU32(data, p))
     parameters = int(readU32(data, p))
-  if version != 1 or inputs notin 1..MaxActorInputs or hidden notin ActorWidths or
+  if version notin [1'u32, 2'u32] or inputs notin 1..MaxActorInputs or hidden notin ActorWidths or
       outputs notin 2..1024 or heads notin 1..32:
     raise newException(ValueError, "unsupported neural actor dimensions/version")
-  let expected = inputs*hidden + 3*hidden*hidden + outputs*hidden
-  if parameters != expected or expected > MaxActorParameters or
-      data.len != headerSize(heads) + expected*4:
-    raise newException(ValueError, "invalid neural actor length/parameter count")
   new(result)
+  var
+    auxTotal = 0
+    header = headerSize(heads)
+  if version == 2:
+    # Version 2 always has at least one auxiliary head (a model without them
+    # is the unchanged version 1 file): <I K> <K I sizes> after the heads.
+    var q = header
+    let count = int(readU32(data, q))
+    if count notin 1..MaxActorAuxHeads:
+      raise newException(ValueError, "invalid auxiliary head count")
+    for i in 0..<count:
+      let size = int(readU32(data, q))
+      if size notin 2..MaxActorAuxOutputs:
+        raise newException(ValueError, "invalid auxiliary head")
+      result.auxSizes.add(size)
+      auxTotal += size
+    if auxTotal > MaxActorAuxOutputs:
+      raise newException(ValueError, "auxiliary heads exceed their limit")
+    header = q
+  let expected = inputs*hidden + 3*hidden*hidden + (outputs + auxTotal)*hidden
+  if parameters != expected or expected > MaxActorParameters or
+      data.len != header + expected*4:
+    raise newException(ValueError, "invalid neural actor length/parameter count")
   result.inputSize = inputs
   result.hiddenSize = hidden
   result.outputSize = outputs
@@ -77,12 +102,14 @@ proc loadActor*(data: string): Actor =
     total += size
   if total != outputs:
     raise newException(ValueError, "head/output mismatch")
-  for which in 0..2:
+  p = header
+  for which in 0..3:
     let n =
       case which
       of 0: inputs*hidden
       of 1: 3*hidden*hidden
-      else: outputs*hidden
+      of 2: outputs*hidden
+      else: auxTotal*hidden
     var dest = newSeq[float32](n)
     for i in 0..<n:
       let x = cast[float32](readU32(data, p))
@@ -92,20 +119,25 @@ proc loadActor*(data: string): Actor =
     case which
     of 0: result.encoder = dest
     of 1: result.recurrent = dest
-    else: result.decoder = dest
-  let ops = 2*(result.encoder.len + result.recurrent.len + result.decoder.len) +
-    32*hidden
+    of 2: result.decoder = dest
+    else: result.aux = dest
+  let ops = 2*(result.encoder.len + result.recurrent.len + result.decoder.len +
+    result.aux.len) + 32*hidden
   if ops > NeuralOpBudget:
     raise newException(ValueError, "neural actor needs " & $ops &
       " operations per inference, over the " & $NeuralOpBudget & " budget")
 
 proc operationCount*(actor: Actor): int =
   ## Published cost: 2 per multiply-accumulate plus 32 per MinGRU unit.
-  2*(actor.encoder.len + actor.recurrent.len + actor.decoder.len) +
-    32*actor.hiddenSize
+  2*(actor.encoder.len + actor.recurrent.len + actor.decoder.len +
+    actor.aux.len) + 32*actor.hiddenSize
 
 proc parameterCount*(actor: Actor): int =
-  actor.encoder.len + actor.recurrent.len + actor.decoder.len
+  actor.encoder.len + actor.recurrent.len + actor.decoder.len + actor.aux.len
+
+proc auxOutputs*(actor: Actor): int =
+  ## Total auxiliary logits (0 for a version 1 model).
+  actor.aux.len div actor.hiddenSize
 
 proc sigmoid(x: float32): float32 =
   ## Same stable branches as PufferLib's GPU sigmoid.
@@ -119,11 +151,13 @@ proc interpolate(a, b, weight: float32): float32 =
   else: b - delta*(1'f32 - weight)
 
 proc infer*(actor: Actor, obs: openArray[float32], state: var openArray[float32],
-    logits: var openArray[float32]) =
+    logits: var openArray[float32], aux: var openArray[float32]) =
   ## One recurrent step. The state (hiddenSize floats) is updated in place;
-  ## on error (shape or nonfinite) neither state nor logits change.
+  ## on error (shape or nonfinite) neither state nor logits change. `aux`
+  ## (auxOutputs floats) receives the auxiliary logits, computed on the
+  ## decoder's feature in the decoder's arithmetic order (as david.nim).
   if obs.len != actor.inputSize or state.len != actor.hiddenSize or
-      logits.len != actor.outputSize:
+      logits.len != actor.outputSize or aux.len != actor.auxOutputs:
     raise newException(ValueError, "neural buffer shape mismatch")
   for x in obs:
     if not finite(x):
@@ -163,10 +197,28 @@ proc infer*(actor: Actor, obs: openArray[float32], state: var openArray[float32]
     if not finite(sum):
       raise newException(ValueError, "nonfinite neural output")
     output[o] = sum
+  var auxOutput: array[MaxActorAuxOutputs, float32]
+  for o in 0..<aux.len:
+    var sum = 0'f32
+    for i in 0..<h:
+      sum += y[i]*actor.aux[o*h+i]
+    if not finite(sum):
+      raise newException(ValueError, "nonfinite neural auxiliary output")
+    auxOutput[o] = sum
   for i in 0..<h:
     state[i] = next[i]
   for i in 0..<actor.outputSize:
     logits[i] = output[i]
+  for i in 0..<aux.len:
+    aux[i] = auxOutput[i]
+
+proc infer*(actor: Actor, obs: openArray[float32], state: var openArray[float32],
+    logits: var openArray[float32]) =
+  ## One recurrent step without auxiliary outputs (version 1 callers).
+  var none: seq[float32]
+  if actor.auxOutputs != 0:
+    none = newSeq[float32](actor.auxOutputs)
+  actor.infer(obs, state, logits, none)
 
 proc encodeActor*(inputs, hidden: int, headSizes: openArray[int],
     obsContract, actionContract: string,
