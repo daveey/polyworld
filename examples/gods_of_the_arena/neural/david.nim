@@ -7,37 +7,18 @@ const
   ModelMagic* = "GOTANET1"
   MaxParameters = 2_000_000
   Widths = [64, 128, 256, 384, 512]
-  MaxAuxHeads* = 16
-  MaxAuxOutputs* = 1024
 
 type
   DavidModel* = object
     inputs*, hidden*, outputs*: int
     heads*: seq[int]
-    auxHeads*: seq[int]
-    auxOutputs*: int
     weights: seq[float32]
   CachedModel = object
     path: string
     model: DavidModel
 
-proc readAuxHeads(reader: var ModelReader, model: var DavidModel) =
-  ## Reads the version 2 auxiliary head count and sizes after the heads.
-  let count = reader.readCount(MaxAuxHeads)
-  if count notin 1 .. MaxAuxHeads:
-    fail("Invalid David model auxiliary head count")
-  for _ in 0 ..< count:
-    let size = reader.readCount(MaxAuxOutputs)
-    if size notin 2 .. MaxAuxOutputs:
-      fail("Invalid David model auxiliary head")
-    model.auxHeads.add size
-    model.auxOutputs += size
-  if model.auxOutputs > MaxAuxOutputs:
-    fail("David model auxiliary heads exceed their limit")
-
 proc loadDavid*(bytes: string): DavidModel =
   ## Loads David's unchanged GOTANET1 encoder, MinGRU and decoder weights.
-  ## Version 2 adds optional auxiliary linear heads on the decoder feature.
   if bytes.len < 160 or bytes[0 ..< 8] != ModelMagic:
     fail("David model needs GOTANET1 magic")
   var reader = ModelReader(bytes: bytes, position: 8)
@@ -48,21 +29,14 @@ proc loadDavid*(bytes: string): DavidModel =
   let
     heads = reader.readCount(32)
     parameters = reader.readCount(MaxParameters)
-  if version notin [1'u32, 2'u32] or result.inputs notin 1 .. 4096 or
+  if version != 1 or result.inputs notin 1 .. 4096 or
     result.hidden notin Widths or result.outputs notin 2 .. 1024 or
     heads notin 1 .. 32:
       fail("Unsupported David model dimensions or version")
-  var header = 160 + 4 * heads
-  if version == 2:
-    # Version 2 always has at least one auxiliary head, so a model without
-    # them has exactly one encoding: the unchanged version 1 layout.
-    reader.position = header
-    reader.readAuxHeads(result)
-    header += 4 + 4 * result.auxHeads.len
-  let expected = result.hidden * (result.inputs + 3 * result.hidden +
-    result.outputs + result.auxOutputs)
+  let expected = result.hidden *
+    (result.inputs + 3 * result.hidden + result.outputs)
   if parameters != expected or expected > MaxParameters or
-    bytes.len != header + 4 * expected:
+    bytes.len != 160 + 4 * heads + 4 * expected:
       fail("Invalid David model parameter count or byte length")
   for i in 32 ..< 160:
     if bytes[i] notin {'0' .. '9', 'a' .. 'f'}:
@@ -77,7 +51,6 @@ proc loadDavid*(bytes: string): DavidModel =
     total += size
   if total != result.outputs:
     fail("David model head sizes do not match outputs")
-  reader.position = header
   result.weights = newSeq[float32](expected)
   for weight in result.weights.mitems:
     weight = cast[float32](reader.readWord())
@@ -104,9 +77,8 @@ proc inferDavid*(
     model: DavidModel,
     state: string,
     data: openArray[Fixed]
-): tuple[outputs: seq[Fixed], state: string, aux: seq[Fixed]] =
+): tuple[outputs: seq[Fixed], state: string] =
   ## Runs one FP32 recurrent step without quantizing the retained state.
-  ## Auxiliary logits use the decoder's feature and arithmetic order.
   try:
     if data.len != model.inputs:
       fail("David input shape mismatch")
@@ -161,13 +133,6 @@ proc inferDavid*(
         sum += value * model.weights[position]
         inc position
       result.outputs[row] = outputFixed(sum)
-    result.aux = newSeq[Fixed](model.auxOutputs)
-    for row in 0 ..< model.auxOutputs:
-      var sum = 0.0'f
-      for value in mixed:
-        sum += value * model.weights[position]
-        inc position
-      result.aux[row] = outputFixed(sum)
   except FloatingPointDefect as error:
     fail("Nonfinite David intermediate: " & error.msg)
 
@@ -187,14 +152,8 @@ proc davidRunner*(context: NeuralContext): ContextHostProc =
         bytes = context.modelBytes(runtime, path)
         retained = int64(bytes.len + path.len) + 1024
       runtime.reserveNativeMemory(retained)
-      var extra = 0'i64
       try:
-        let loaded = loadDavid(bytes)
-        if loaded.auxOutputs > 0:
-          # Room for the published auxiliary logits of this model.
-          extra = int64(loaded.auxOutputs * 8 + loaded.auxHeads.len * 8 + 256)
-          runtime.reserveNativeMemory(extra)
-        models.add CachedModel(path: path, model: loaded)
+        models.add CachedModel(path: path, model: loadDavid(bytes))
       except NeuralError:
         runtime.releaseNativeMemory(retained)
         raise
@@ -204,13 +163,11 @@ proc davidRunner*(context: NeuralContext): ContextHostProc =
       binding = "david:" & path
       previous = runtime.checkState(arguments[1], binding)
       scratch = int64(model.inputs * 8 + model.hidden * 40 +
-        (model.outputs + model.auxOutputs) * 48 + previous.len + 1024)
+        model.outputs * 48 + previous.len + 1024)
     runtime.reserveNativeMemory(scratch)
     defer:
       runtime.releaseNativeMemory(scratch)
     let
       data = runtime.inputValues(arguments[2], model.inputs)
       next = inferDavid(model[], previous, data)
-    result = runtime.commit(arguments[1], binding, next.state, next.outputs)
-    # Auxiliary logits become readable only after the call has committed.
-    context.publishAux(model.auxHeads, next.aux)
+    runtime.commit(arguments[1], binding, next.state, next.outputs)

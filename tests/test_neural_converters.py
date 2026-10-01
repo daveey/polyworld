@@ -97,41 +97,6 @@ with tempfile.TemporaryDirectory() as directory:
     manifest["files"]["model.bin"] = "bad"
     write_package()
     assert rejected(lambda: convert_david.convert(path))
-    plain = model
-
-    def aux_model(sizes, version=2, extra=b""):
-        """Build a version 2 model with auxiliary heads after the five heads."""
-        count = 64 * (1407 + 3 * 64 + 92 + sum(sizes))
-        return (b"GOTANET1" + struct.pack("<6I", version, 1407, 64, 92, 5, count) +
-                "".join(convert_david.CONTRACTS.values()).encode() +
-                struct.pack("<5I", 8, 25, 49, 4, 6) +
-                struct.pack(f"<{len(sizes) + 1}I", len(sizes), *sizes) +
-                bytes(count * 4) + extra)
-
-    for candidate, accepted in [(aux_model([10, 23, 4]), True),
-                                (aux_model([1022, 2]), True),
-                                (aux_model([]), False),
-                                (aux_model([1]), False),
-                                (aux_model([1024, 2]), False),
-                                (aux_model([2] * 17), False),
-                                (aux_model([10], extra=b"\0" * 4), False),
-                                (aux_model([10], version=3), False)]:
-        model = candidate
-        manifest["files"]["model.bin"] = hashlib.sha256(model).hexdigest()
-        write_package()
-        if accepted:
-            assert convert_david.convert(path)[1] == model
-        else:
-            assert rejected(lambda: convert_david.convert(path))
-    model = aux_model([10, 23, 4])
-    manifest["files"]["model.bin"] = hashlib.sha256(model).hexdigest()
-    write_package()
-    extended_output, _ = convert_david.convert(path)
-    model = plain
-    manifest["files"]["model.bin"] = hashlib.sha256(model).hexdigest()
-    write_package()
-    # The glue is independent of auxiliary heads; BASIC reads them by nn_aux.
-    assert convert_david.convert(path)[0] == extended_output
 
 source = "dim f(40)\nif selfHp <= 0 then\nend\nend if\n' METTA_DECISION\n"
 weights = bytes(4 * (convert_andre.count_parameters(12, 1) - 4))

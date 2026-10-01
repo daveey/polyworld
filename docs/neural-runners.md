@@ -144,59 +144,13 @@ from [David's reference implementation](https://github.com/daveey/polyworld/blob
 The reviewed tournament model has 1,407 inputs, 512 recurrent values, and 92
 outputs in heads `[8, 25, 49, 4, 6]`. Its `model.bin` is used unchanged.
 
-The loader accepts versions 1 and 2, 1 through 4,096 inputs, widths 64/128/256/384/512,
+The loader accepts version 1, 1 through 4,096 inputs, widths 64/128/256/384/512,
 2 through 1,024 outputs, up to 32 heads and two million parameters. It validates
 parameter counts, finite weights and exact byte length. Header contract hashes
 are metadata owned by the architecture; the GOTA converter checks the exact
 observation and action contracts before selecting this BASIC glue. State stores
 one little-endian FP32 value per hidden unit. Outputs are unscaled Q16.16 logits.
 The loader does not infer observations or decode actions.
-
-### Optional auxiliary heads
-
-Version 2 adds K optional auxiliary linear heads that read the same feature as
-the action decoder (the highway output after the MinGRU). They let BASIC ask the
-network for decisions the five action heads do not cover, such as draft, shop
-or level choices. They read nothing but the existing trunk, so they add no
-observation. A model without auxiliary heads is always version 1: its bytes,
-parameters, outputs, state and memory accounting are unchanged. Layout:
-
-| Bytes | Contents |
-| --- | --- |
-| 0..159 | Version 1 header with version 2; the parameter count includes auxiliary rows |
-| 160.. | Head sizes, as in version 1 |
-| next 4 | K, 1 through 16 |
-| next 4K | Auxiliary head sizes, 2 through 1,024 each, 1,024 in total |
-| rest | Encoder, recurrent and decoder weights as in version 1, then auxiliary rows `[A][H]` |
-
-`nn_david` still returns only the action outputs, so existing glue reads the same
-array. Each auxiliary logit is computed like a decoder output, with the same FP32
-order and Q16.16 rounding. After a successful `nn_david` call these host functions
-read its auxiliary logits in the same policy VM. Each costs one work unit:
-
-| Function | Result |
-| --- | --- |
-| `nn_aux_count()` | K of the most recent successful call; 0 for a version 1 model or before any call |
-| `nn_aux_size(k)` | Logits in head `k` |
-| `nn_aux(k, i)` | Q16.16 logit `i` of head `k` |
-| `nn_aux_argmax(k)` | First index of the largest logit of head `k` |
-
-Heads and indices outside the most recent model fail the policy. A failed call
-keeps the previous logits, like its recurrent state. BASIC owns masks and
-sampling for auxiliary heads, as it does for the action heads:
-
-```basic
-nnStep()
-if nn_aux_count() > 0 and abilityPoints() > 0 then
-  levelAbility(nn_aux_argmax(2))
-end if
-```
-
-Auxiliary heads cost A times H multiply-adds per call; three heads of 10, 23 and
-4 logits at width 512 add 18,944 to the 1,553,920 of the tournament model (1.2%).
-They also reserve 48 bytes of scratch and 8 bytes of retained cache per logit.
-The converter accepts version 2 models with the same five action heads and emits
-the same BASIC glue as for version 1.
 
 `neural/policies/david.bas` builds observations, calls the native network and
 interprets the five action heads. BASIC owns static target masks, seeded
@@ -407,8 +361,7 @@ source limits, malformed packages/models, arrays and blobs, native memory churn,
 input/output conversion, failed-call atomicity, visibility, BASIC cadence, masks, sampling and
 resets. Private reference comparisons are separate from the published fixtures.
 Native benchmark results depend on the machine and compiler: on the development
-machine David's 1407/512/92 synthetic model took approximately 1.2 ms per step
-(auxiliary heads of 10, 23 and 4 logits added about 1.5%);
+machine David's 1407/512/92 synthetic model took approximately 1.2 ms per step;
 each small Richard network was below one microsecond. Andre's width-12,
 one-layer model took about one microsecond; width 64 with three layers took
 approximately 25 microseconds. A fly model the size of the FlyWire cut
