@@ -8,8 +8,6 @@ if dependencyRoot.len > 0:
     if fields.len == 0:
       continue
     let name = fields[0]
-    if name == "mummy" and not defined(coworld):
-      continue
     let directory = dependencyRoot / name
     switch("path", if dirExists(directory / "src"): directory / "src" else: directory)
 else:
@@ -20,8 +18,7 @@ else:
   --path:"../windy/src"
   --path:"../gltf/src"
   --path:"../vmath/src"
-  when defined(coworld):
-    --path:"../mummy/src"
+  --path:"../mummy/src"
 
 --define:nimTypeNames
 --define:flatty64

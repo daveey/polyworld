@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fast-XP · Performance</title>
+<style>
+:root{color-scheme:dark;font:14px system-ui,sans-serif;background:#101318;color:#e1e6ef}*{box-sizing:border-box}body{margin:0 auto;padding:24px;max-width:1600px}header{display:flex;align-items:center;gap:20px;flex-wrap:wrap}h1{font-size:22px;margin:0}h2{font-size:14px;font-weight:500;color:#b8c2d3;margin:0 0 12px}a{color:#8bc4ff}select{background:#202631;border:1px solid #3c4657;border-radius:5px;padding:7px}#status{margin-left:auto;color:#96a5bc}.bad{color:#ff9a9a!important}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1px;background:#303745;border:1px solid #303745;margin:24px 0}.stat{padding:16px;background:#171c24}.stat span{display:block;color:#96a5bc;font-size:12px}.stat strong{display:block;font-size:25px;font-weight:550;margin-top:6px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}section{min-width:0;margin-bottom:20px}.panel{background:#171c24;border:1px solid #303745;padding:16px;border-radius:6px}canvas{display:block;width:100%;height:210px}.legend{display:flex;gap:16px;font-size:12px;flex-wrap:wrap;color:#96a5bc}.legend i{width:10px;height:3px;display:inline-block;vertical-align:middle;margin-right:5px}.wide{overflow:auto}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;white-space:nowrap}td,th{text-align:right;padding:9px 10px;border-bottom:1px solid #29313f}th{color:#96a5bc;font-size:12px;font-weight:500}td:first-child,th:first-child{text-align:left}small{color:#96a5bc}footer{color:#96a5bc;font-size:12px;margin-top:14px} @media(max-width:800px){.grid{grid-template-columns:1fr}body{padding:14px}#status{margin-left:0}}
+</style>
+<header><h1>Fast-XP <small>/ performance</small></h1><select id="window" aria-label="History window"><option value="15">Last 15 minutes</option><option value="60" selected>Last hour</option><option value="1440">Last 24 hours</option></select><a href="/docs/llms.txt">API docs</a><span id="status" role="status">Connecting…</span></header>
+<div class="stats" id="stats"></div>
+<div class="grid">
+<section class="panel"><h2>Host CPU · running / queued games</h2><canvas id="capacity" aria-label="CPU and game concurrency chart"></canvas><div class="legend"><span><i style="background:#8bc4ff"></i>CPU % · left</span><span><i style="background:#65d7b0"></i>Running · right</span><span><i style="background:#e8bb70"></i>Queued · right</span></div></section>
+<section class="panel"><h2>Game latency · approximate p95 per minute</h2><canvas id="latency" aria-label="Queue and execution latency chart; dashed lines connect minutes without completed games"></canvas><div class="legend"><span><i style="background:#e8bb70"></i>Queue seconds</span><span><i style="background:#b8a0ff"></i>Execution seconds</span><span><i style="border-top:2px dashed #96a5bc"></i>No completed games between points</span></div></section>
+<section class="panel"><h2>Successful games / minute</h2><canvas id="throughput" aria-label="Successful games per minute chart"></canvas></section>
+<section class="panel wide"><h2>Successful timings · approximate percentiles</h2><table><thead><tr><th>Measurement</th><th>Samples</th><th>Median</th><th>p95</th></tr></thead><tbody id="timings"></tbody></table></section>
+</div>
+<section class="panel wide"><h2>Recent games</h2><table><thead><tr><th>Request</th><th>Game</th><th>Seed</th><th>Tick limit</th><th>Status</th><th>Bots OK</th><th>Queue</th><th>Execution</th><th>Finished</th></tr></thead><tbody id="recent"></tbody></table></section>
+<footer>Server processing excludes upload/download. Batch duration is wall time; game timings are per game. Histograms use 25% buckets. History stays in memory for 24 hours and resets on restart.</footer>
+<script>
+'use strict';
+const el=id=>document.getElementById(id), colors=['#8bc4ff','#65d7b0','#e8bb70','#b8a0ff'];
+let latest=null,lastSuccess=0,busy=false;
+const number=(n,d=1)=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:d});
+const seconds=n=>n==null?'—':number(n/1000,2)+' s';
+const gib=n=>n==null?'—':number(n/1073741824,2)+' GiB';
+function cells(parent,values){const row=document.createElement('tr');for(const value of values){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}parent.append(row)}
+function plot(id,series,start,end,right=false){
+ const c=el(id),r=c.getBoundingClientRect(),scale=devicePixelRatio||1;c.width=r.width*scale;c.height=r.height*scale;
+ const g=c.getContext('2d');g.scale(scale,scale);const w=r.width,h=r.height,L=46,R=right?40:12,T=10,B=26;
+ const maxima=[1,1];for(const s of series)for(const p of s.points)if(p[1]!=null)maxima[s.axis||0]=Math.max(maxima[s.axis||0],p[1]);if(right)maxima[0]=100;
+ g.font='11px system-ui';for(let i=0;i<=4;i++){const y=T+(h-T-B)*i/4;g.strokeStyle='#2b3340';g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();g.fillStyle='#96a5bc';g.textAlign='right';g.fillText(number(maxima[0]*(1-i/4)),L-7,y+4);if(right){g.textAlign='left';g.fillText(number(maxima[1]*(1-i/4)),w-R+6,y+4)}}
+ for(const s of series){
+  const points=s.points.map(([t,v],i)=>[t,v,i]).filter(([t,v])=>v!=null&&t>=start&&t<=end).map(([t,v,i])=>[t,L+(t-start)/Math.max(1,end-start)*(w-L-R),T+(1-v/maxima[s.axis||0])*(h-T-B),i]);
+  g.strokeStyle=s.color;g.lineWidth=1.8;
+  for(const gap of [false,true]){
+   if(gap&&!s.connectGaps)continue;
+   g.setLineDash(gap?[4,5]:[]);g.globalAlpha=gap?0.5:1;g.beginPath();
+   for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i];if((b[0]-a[0]>90||b[3]-a[3]>1)!==gap)continue;g.moveTo(a[1],a[2]);g.lineTo(b[1],b[2])}g.stroke();
+  }
+  g.setLineDash([]);g.globalAlpha=1;g.fillStyle=s.color;
+  for(const [,x,y]of points){if(s.connectGaps){g.beginPath();g.arc(x,y,3,0,Math.PI*2);g.fill()}else g.fillRect(x-1,y-1,2,2)}
+ }
+ if(id==='latency'&&!series.some(s=>s.points.some(([t,v])=>v!=null&&t>=start&&t<=end))){g.fillStyle='#96a5bc';g.textAlign='center';g.fillText('No completed games in this window',(L+w-R)/2,h/2)}
+ g.fillStyle='#96a5bc';g.textAlign='left';g.fillText(new Date(start*1000).toLocaleTimeString(),L,h-4);g.textAlign='right';g.fillText(new Date(end*1000).toLocaleTimeString(),w-R,h-4);
+}
+function render(d){
+ const host=d.samples.at(-1)||{},stats=[['EC2 instance',d.instance_type||'Unavailable'],['Running / workers',d.running+' / '+d.worker_limit],['Queued / oldest',d.queued+' / '+seconds(d.oldest_queue_ms)],['Admitted / limit',d.admitted_requests+' / '+d.request_limit],['Successful games/min',number(d.games_per_minute)],['Host CPU',host.cpu_percent==null?'—':number(host.cpu_percent)+'%'],['Service memory',gib(host.service_memory_bytes)],['Temp / cache free',gib(host.temporary_free_bytes)+' / '+gib(host.cache_free_bytes)],['Game failures / timeouts',d.failed_games+' / '+d.timeouts],['Request failures / 429s',d.failed_requests+' / '+d.rejected_requests],['Artifact cache hit rate',d.cache_hits+d.cache_misses?number(100*d.cache_hits/(d.cache_hits+d.cache_misses))+'% ('+d.cache_hits+'/'+(d.cache_hits+d.cache_misses)+')':'—'],['ZIP bytes returned',gib(d.response_bytes)],['Uptime',number(d.uptime_seconds/3600,1)+' h']];
+ el('stats').replaceChildren();for(const [label,value]of stats){const box=document.createElement('div');box.className='stat';const title=document.createElement('span'),n=document.createElement('strong');title.textContent=label;n.textContent=value;box.append(title,n);el('stats').append(box)}
+ el('timings').replaceChildren();for(const [label,key]of [['Single request','single_request'],['Batch request','batch_request'],['Game queue','queue'],['Game execution','worker'],['Preparation / fetch','preparation'],['ZIP creation','zip']])cells(el('timings'),[label,d[key].count,seconds(d[key].median_ms),seconds(d[key].p95_ms)]);
+ el('recent').replaceChildren();for(const game of d.recent_games)cells(el('recent'),[game.request_id,game.index,game.seed,game.max_ticks,game.status===200?'OK':game.status===504?'Timeout':game.status,game.active_bots<0?'—':game.active_bots+'/10',seconds(game.queue_ms),seconds(game.worker_ms),new Date(game.timestamp*1000).toLocaleTimeString()]);
+ if(!d.recent_games.length)cells(el('recent'),['No completed games yet']);
+ const start=d.timestamp-Math.min(d.uptime_seconds,d.window_minutes*60),end=d.timestamp;
+ plot('capacity',[{points:d.samples.map(s=>[s.timestamp,s.cpu_percent]),color:colors[0]},{points:d.samples.map(s=>[s.timestamp,s.running]),color:colors[1],axis:1},{points:d.samples.map(s=>[s.timestamp,s.queued]),color:colors[2],axis:1}],start,end,true);
+ const timeline=new Map(d.timeline.map(t=>[t.timestamp,t])),minutes=[];
+ const origin=d.timestamp-d.uptime_seconds;for(let t=origin+Math.max(0,Math.floor((start-origin)/60))*60;t<=end;t+=60)minutes.push(timeline.get(t)||{timestamp:t,games:0,queue:{p95_ms:null},worker:{p95_ms:null}});
+ plot('latency',[{points:minutes.map(t=>[t.timestamp,t.queue.p95_ms==null?null:t.queue.p95_ms/1000]),color:colors[2],connectGaps:true},{points:minutes.map(t=>[t.timestamp,t.worker.p95_ms==null?null:t.worker.p95_ms/1000]),color:colors[3],connectGaps:true}],start,end);
+ plot('throughput',[{points:minutes.map(t=>[t.timestamp,t.games]),color:colors[1]}],start,end);
+}
+async function refresh(){if(document.hidden||busy)return;busy=true;try{const r=await fetch('/v1/metrics?minutes='+el('window').value,{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error();latest=await r.json();render(latest);lastSuccess=Date.now();el('status').textContent='Live · '+new Date().toLocaleTimeString();el('status').className=''}catch{el('status').textContent=lastSuccess?'Disconnected · last update '+new Date(lastSuccess).toLocaleTimeString():'Unable to reach server';el('status').className='bad'}finally{busy=false}}
+el('window').addEventListener('change',refresh);document.addEventListener('visibilitychange',refresh);window.addEventListener('resize',()=>{if(latest)render(latest)});setInterval(refresh,5000);refresh();
+</script>
+</html>

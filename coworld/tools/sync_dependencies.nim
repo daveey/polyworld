@@ -133,12 +133,8 @@ proc syncDependencies*(latest = false) =
         echo fields[0], ": ", fields[3]
     require(errors.len == 0, errors.join("\n"))
   if latest:
-    var ordinary: seq[string]
-    for entry in resolved:
-      if not entry.startsWith("mummy "):
-        ordinary.add entry
     writeFile(Root / "coworld/dependencies.lock", resolved.join("\n") & "\n")
-    writeFile(Root / "nimby.lock", ordinary.join("\n") & "\n")
+    writeFile(Root / "nimby.lock", resolved.join("\n") & "\n")
   echo "Dependencies ready in ", cache
 
 when isMainModule:

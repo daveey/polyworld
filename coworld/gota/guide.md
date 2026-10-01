@@ -25,7 +25,7 @@ Slots 0–4 are Red and slots 5–9 are Blue. Platform slots are zero-based. Upl
 
 Start with the bundled `players/base.bas`. The [game documentation](https://github.com/Metta-AI/polyworld/blob/main/examples/gods_of_the_arena/docs/index.html) describes observations and available BASIC commands. The same source is available under `examples/gods_of_the_arena/bots.nim` and `content.nim`.
 
-The baseline is a playable reference for all GotA host functions. It drafts
+The baseline is a playable reference using structured GotA observations. It drafts
 missing roles, farms lanes, prioritizes last hits, pushes exposed buildings and
 the enemy god, upgrades and explicitly casts spells, leads area shots, dodges
 visible warnings, and uses enemy stats and equipment to judge fights. It also
@@ -34,9 +34,8 @@ and buys back when affordable. Actions are conditional on a useful opportunity,
 so one match need not exercise every mechanic. Its observation scans are bounded
 and its main decisions run every six ticks. Abilities and items require
 explicit policy commands; the engine never casts or uses them automatically.
-Spell ranges and shapes are not queryable, so their small policy table must
-follow balance changes in `content.nim`; health, damage, costs, and ranks use
-live observations. This is an editable starting point, not an optimal policy.
+Spell lead times and targeting preferences use a small policy table; ranges,
+health, damage, costs, and ranks use live observations. This is an editable starting point, not an optimal policy.
 
 Every hero has a free single-target melee or ranged basic attack in addition
 to four abilities. Basic damage grows each level and includes equipment bonuses.
@@ -50,6 +49,86 @@ charges.
 `attackMove(x, y)` uses the same attack-move order as the player controls. It follows a path toward that tile, stops for enemies in the hero's normal acquisition range, and resumes afterward. Like other actions, it returns 1 when accepted and 0 when rejected, and is recorded in replays.
 
 The bundled `players/rusher.bas` sends all five heroes down mid together. It regroups toward the living team's center when any pair is more than 10 tiles apart, closing to 8 tiles before resuming. It attacks visible, vulnerable enemies within 20 tiles, favoring the enemy closest to the group's center. Otherwise it attack-moves through the middle and toward the opposing god. Dead allies are ignored until they respawn. This policy uses basic attacks only; add explicit casting commands to use abilities.
+
+## Structured observations
+
+Existing policies keep working without changes. To use the additional API,
+put this marker on the first nonblank line of your BASIC source:
+
+```basic
+' @gota-structures
+
+if draft.active then
+  if draft.turnId = self.id then
+    accepted = draftHero(Ranger)
+  end if
+  end
+end if
+
+for i = 0 to match.objectCount - 1
+  if objects(i).team <> self.team and objects(i).alive then
+    accepted = attackTarget(objects(i).id)
+    exit for
+  end if
+next i
+```
+
+The host supplies the types and declarations in
+[`structures.bas`](https://github.com/Metta-AI/polyworld/blob/main/examples/gods_of_the_arena/structures.bas).
+Do not redeclare these names. Additional policy-defined types are allowed.
+
+| Record | Contents |
+| --- | --- |
+| `self` | Own health, mana, economy, level/XP, role, motion, combat, controls, respawn, shop and buyback state. |
+| `objects(i)` | Visible objects, including health, level, mana, motion, target, controls and neutral-camp metadata. |
+| `abilities(slot)` | Four ability slots with ranks, upgrade eligibility, effects, costs, range/radius, casting kind, charges and timers. |
+| `items(slot)` | Six inventory slots with ID, count and cooldown. |
+| `objectItems(i * 6 + slot)` | Visible object inventory IDs and stack counts. |
+| `spells(i)` | Visible spell warnings, positions, ability/caster IDs, impact tick, hostile and support flags. |
+| `camps(i)` | Public camp positions and difficulty tiers. |
+| `match` | Match/battle ticks, limits, seed, wave timers, observation counts and team-known building counts. |
+| `map` | Dimensions, layer count, world-to-map origin and enemy god position. |
+| `draft`, `players(i)`, `heroChoices(class)` | Draft state, public roster selections, roles and hero availability. |
+| `lastAction` | The latest gameplay command's `accepted` flag and `error` code. |
+| `tile` | Terrain kind, walkability, height and water depth after `readTile(x, y, layer)`. |
+
+Positions use FIXED tile-center map coordinates, the same frame accepted by
+`walkTo`, `attackMove`, `castPoint` and `useItemAt`. They are not team-relative.
+`position.y` is the map's second horizontal axis. Facing is a unit vector;
+velocity and `self.moveSpeed` are tiles per simulation tick. Attack and ability
+ranges are tiles. Durations end in `Ticks`; `spells(i).impactTick` is an absolute
+world tick. Flags, counts, IDs and health are INTEGER. Tile height/water depth
+retain the legacy terrain query units. `readTile` requires integer tile indices;
+use `floor(position.x + .5)` to select the containing tile.
+
+The visible-object and spell collections are a snapshot of the decision frame.
+They use the existing team LOS filter. Hidden target/caster identities remain
+zero, and enemy building counts use team-known state. `objects(i).alive`
+preserves `objectAlive(i)` semantics, including building vulnerability.
+Camp records contain static geometry, not hidden respawn or population data.
+Use the corresponding count: `match.objectCount`, `match.spellCount`,
+`match.campCount`, or `draft.playerCount`. Indices can change between decisions;
+remember stable IDs instead. Slots vacated by a shrinking collection are cleared.
+
+Own state, inventory, abilities, draft state and action feedback refresh after
+each gameplay command, including rejected commands. This lets a policy upgrade
+several abilities or buy several items in one decision. World snapshots stay
+fixed until the next decision. Writes to records only change the policy's copy;
+they cannot heal a hero, reveal an enemy, or alter the simulation.
+
+The API reserves space for 4,096 objects, 2,048 warnings, 64 camps, 10 players,
+and 10 hero choices. Exceeding a collection capacity raises a BASIC error rather
+than silently omitting observations. Structured policies have limits of 512
+scalar fields/globals, 128 array fields/arrays, 262,144 array cells and 8 MiB
+logical VM storage. Snapshot fields count toward those limits. Existing policies
+retain their original limits, and instruction/work budgets are unchanged.
+
+The host prepares referenced scalar fields and loads array columns on first
+access, avoiding work for observations a policy does not use. Loading keeps
+the same decision snapshot and does not change instruction or work budgets.
+
+The baseline now uses these records. The legacy scalar variables, functions,
+math helpers, neural functions, and chat/LLM APIs remain available.
 
 ## Drafting
 

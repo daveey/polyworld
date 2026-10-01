@@ -1,5 +1,6 @@
+' @gota-structures
 ' GotA reference policy: draft, farm, push, heal, resupply, and finish the god.
-' Every GotA host function has a gameplay use here; calls remain conditional.
+' Structured snapshots provide observations; commands remain explicit.
 ' Object indices last only for this decision. IDs may be remembered.
 ' Read the bot guide for units, LOS restrictions, and action error constants.
 ' Abilities and items are used only by our explicit policy commands.
@@ -14,20 +15,20 @@ dim castGround(3)
 dim castMinimum(3)
 
 sub chooseHero()
-  if draftTurnId <> selfId then
+  if draft.turnId <> self.id then
     exit sub
   end if
   bestClass = -1
   bestScore = -10000
   for candidate = 0 to 9
-    if heroAvailable(candidate) then
-      role = heroRole(candidate)
+    if heroChoices(candidate).available then
+      role = heroChoices(candidate).role
       score = 100
-      for player = 0 to draftPlayerCount() - 1
-        if draftPlayerTeam(player) = selfTeam then
-          picked = draftedClass(draftPlayerId(player))
+      for player = 0 to draft.playerCount - 1
+        if players(player).team = self.team then
+          picked = players(player).class
           if picked >= 0 then
-            if heroRole(picked) = role then
+            if heroChoices(picked).role = role then
               score = score - 100
             end if
           end if
@@ -41,23 +42,23 @@ sub chooseHero()
   next candidate
   if bestClass >= 0 then
     accepted = draftHero(bestClass)
-    actionError = lastActionError()
+    actionError = lastAction.error
   end if
 end sub
 
 sub learnAbilities()
   ' Rank requirements and effects come from the host, not a stat table.
   for upgrade = 1 to 4
-    if abilityPoints() = 0 then
+    if self.abilityPoints = 0 then
       exit sub
     end if
     upgradeSlot = -1
     upgradeScore = -1
     for spellSlot = 0 to 3
-      rank = abilityLevel(spellSlot)
-      if rank < abilityMaxLevel(spellSlot) then
-        if selfLevel >= abilityRequiredLevel(spellSlot) then
-          if canLevelAbility(spellSlot) then
+      rank = abilities(spellSlot).level
+      if rank < abilities(spellSlot).maxLevel then
+        if self.level >= abilities(spellSlot).requiredLevel then
+          if abilities(spellSlot).canLevel then
             ' Prefer R, W, E, Q whenever the next rank is legal.
             score = spellSlot
             if spellSlot = 1 then
@@ -77,46 +78,49 @@ sub learnAbilities()
       exit sub
     end if
     accepted = levelAbility(upgradeSlot)
-    actionError = lastActionError()
+    actionError = lastAction.error
   next upgrade
 end sub
 
 sub readObject(index)
-  id = objectId(index)
-  kind = objectKind(index)
-  team = objectTeam(index)
-  hp = objectHp(index)
+  id = objects(index).id
+  kind = objects(index).kind
+  team = objects(index).team
+  hp = objects(index).hp
   if hp <= 0 then
     exit sub
   end if
-  x = originX + side * objectX(index)
-  y = originY + side * objectY(index)
+  x = (originX + floor(side * objects(index).position.x + .5))
+  y = (originY + floor(side * objects(index).position.y + .5))
   dx = x - myX
   dy = y - myY
   distance = dx * dx + dy * dy
   if kind = 6 then
     ' Camps never distract from lane combat or count as enemy heroes.
-    if objectReturning(index) or objectAlive(index) = 0 then
+    if objects(index).returning or objects(index).alive = 0 then
       exit sub
     end if
-    camp = objectCamp(index)
-    tier = campTier(camp)
-    campDx = originX + side * campX(camp) - myX
-    campDy = originY + side * campY(camp) - myY
+    camp = objects(index).campId
+    if camp < 0 or camp >= match.campCount then
+      exit sub
+    end if
+    tier = camps(camp).tier
+    campDx = (originX + floor(side * camps(camp).position.x + .5)) - myX
+    campDy = (originY + floor(side * camps(camp).position.y + .5)) - myY
     if campDx * campDx + campDy * campDy > 100 then
       exit sub
     end if
-    enoughHealth = selfHp * 10 >= selfMaxHp * 7
-    if selfTarget = id then
-      enoughHealth = selfHp * 10 >= selfMaxHp * 4
+    enoughHealth = self.hp * 10 >= self.maxHp * 7
+    if self.targetId = id then
+      enoughHealth = self.hp * 10 >= self.maxHp * 4
     end if
-    if camp >= 0 and camp < campCount() and enoughHealth then
-      if selfLevel >= 1 + (tier - 1) * 3 and distance <= 64 then
+    if camp >= 0 and camp < match.campCount and enoughHealth then
+      if self.level >= 1 + (tier - 1) * 3 and distance <= 64 then
         score = 100 - distance
-        if objectLeader(index) then
+        if objects(index).leader then
           score = score - 10
         end if
-        if selfTarget = id then
+        if self.targetId = id then
           score = score + 100
         end if
         if score > campScore then
@@ -132,12 +136,12 @@ sub readObject(index)
     end if
     exit sub
   end if
-  if team = selfTeam then
+  if team = self.team then
     if kind = 1 then
       homeX = x
       homeY = y
-      enemyX = mapWidth - 1 - x
-      enemyY = mapHeight - 1 - y
+      enemyX = map.width - 1 - x
+      enemyY = map.height - 1 - y
     elseif kind = 4 then
       ' Protected allied towers still serve as portal anchors.
       dx = x - enemyX
@@ -151,12 +155,12 @@ sub readObject(index)
     elseif kind = 2 then
       allyIds(allies) = id
       allies = allies + 1
-      class = objectClass(index)
+      class = objects(index).class
       if hp > seenMaxHp(class) then
         seenMaxHp(class) = hp
       end if
       if distance <= 100 then
-        friendlyPower = friendlyPower + objectLevel(index) + 2
+        friendlyPower = friendlyPower + objects(index).level + 2
       end if
       missing = seenMaxHp(class) - hp
       if distance <= healRange * healRange and missing > healMissing then
@@ -173,8 +177,8 @@ sub readObject(index)
     enemyY = y
   end if
   if kind = 2 and distance <= 144 then
-    enemyPower = enemyPower + objectLevel(index) + 2
-    if objectMana(index) >= 25 and objectSilenceTicks(index) = 0 then
+    enemyPower = enemyPower + objects(index).level + 2
+    if objects(index).mana >= 25 and objects(index).controls.silenceTicks = 0 then
       enemyPower = enemyPower + 2
     end if
   end if
@@ -183,36 +187,36 @@ sub readObject(index)
     threatX = x
     threatY = y
   end if
-  if distance > 324 or objectAlive(index) = 0 then
+  if distance > 324 or objects(index).alive = 0 then
     exit sub
   end if
-  target = objectTarget(index)
-  if kind = 4 and target = selfId then
+  target = objects(index).targetId
+  if kind = 4 and target = self.id then
     towerAggro = 1
   end if
   score = 1000 - distance * 2
   if kind = 1 then
     score = score + 500
   elseif kind = 2 then
-    score = score + 60 - objectLevel(index) * 8
-    if hp < selfAttackDamage * 4 then
+    score = score + 60 - objects(index).level * 8
+    if hp < self.attackDamage * 4 then
       score = score + 250
     end if
   elseif kind = 3 then
     score = score + 100
-    if hp <= selfAttackDamage and selfAttackCooldown <= tickRate \ 2 then
+    if hp <= self.attackDamage and self.attackCooldownTicks <= match.tickRate \ 2 then
       score = score + 400
     end if
   elseif kind = 5 then
     score = score + 40
   end if
-  if target = selfId then
+  if target = self.id then
     score = score + 40
   end if
-  if id = selfTarget then
+  if id = self.targetId then
     score = score + 60
   end if
-  if id = blockedId and worldTick < blockedUntil then
+  if id = blockedId and match.tick < blockedUntil then
     exit sub
   end if
   if score > bestScore then
@@ -240,10 +244,10 @@ sub observe()
   allies = 0
   tanks = 0
   towerAggro = 0
-  healId = selfId
-  healMissing = selfMaxHp - selfHp
-  seenMaxHp(selfClass) = selfMaxHp
-  objects = objectCount()
+  healId = self.id
+  healMissing = self.maxHp - self.hp
+  seenMaxHp(self.class) = self.maxHp
+  visibleCount = match.objectCount
   ' Buildings and heroes precede creeps. Rotate the large creep tail so a
   ' crowded battlefield cannot exhaust the per-decision VM budget.
   for scan = 0 to 95
@@ -251,21 +255,21 @@ sub observe()
     if scan >= 48 then
       index = scan + scanOffset
     end if
-    if index < objects then
+    if index < visibleCount then
       readObject(index)
     end if
   next scan
   ' Retain a creep target outside this scan window only after validating
   ' its remembered index against the stable ID in the fresh observation.
-  if targetIndex >= 48 and targetIndex < objects and selfTarget <> 0 then
+  if targetIndex >= 48 and targetIndex < visibleCount and self.targetId <> 0 then
     if targetIndex < 48 + scanOffset or targetIndex >= 96 + scanOffset then
-      if objectId(targetIndex) = selfTarget then
+      if objects(targetIndex).id = self.targetId then
         readObject(targetIndex)
       end if
     end if
   end if
   scanOffset = scanOffset + 48
-  if scanOffset >= objects - 48 then
+  if scanOffset >= visibleCount - 48 then
     scanOffset = 0
   end if
   if bestId = 0 and campId <> 0 and towerAggro = 0 and enemyPower = 0 then
@@ -281,23 +285,23 @@ sub observe()
     exit sub
   end if
   targetIndex = bestIndex
-  ' Divide large integer world units before mixing them with Q16.16 values.
-  velocityX = (side * objectVelX(bestIndex) \ 100) / (worldScale \ 100)
-  velocityY = (side * objectVelY(bestIndex) \ 100) / (worldScale \ 100)
+  ' Structured motion and facing already use fixed-point tile units.
+  velocityX = side * objects(bestIndex).velocity.x
+  velocityY = side * objects(bestIndex).velocity.y
   ' Do not lead a unit whose control lasts through the predicted impact.
-  targetHeld = objectStunTicks(bestIndex)
-  targetRoot = objectRootTicks(bestIndex)
+  targetHeld = objects(bestIndex).controls.stunTicks
+  targetRoot = objects(bestIndex).controls.rootTicks
   if targetRoot > targetHeld then
     targetHeld = targetRoot
   end if
-  facingX = (side * objectFacingX(bestIndex) \ 100) / (worldScale \ 100)
-  facingY = (side * objectFacingY(bestIndex) \ 100) / (worldScale \ 100)
+  facingX = side * objects(bestIndex).facing.x
+  facingY = side * objects(bestIndex).facing.y
   aimedAtUs = facingX * (myX - bestX) + facingY * (myY - bestY)
   if bestKind = 2 then
     ' Visible equipment and potion stacks help judge a close duel.
     for inspectSlot = 0 to 5
-      gear = objectItemId(bestIndex, inspectSlot)
-      quantity = objectItemCount(bestIndex, inspectSlot)
+      gear = objectItems(bestIndex * 6 + inspectSlot).id
+      quantity = objectItems(bestIndex * 6 + inspectSlot).count
       if quantity > 0 and bestDistance <= 144 then
         if gear >= 5 and gear <= 20 then
           enemyPower = enemyPower + 1
@@ -317,7 +321,7 @@ sub buy(id, price, quantity)
     exit sub
   end if
   accepted = buyItem(id)
-  actionError = lastActionError()
+  actionError = lastAction.error
   if accepted then
     if owned(id) = 0 then
       emptySlots = emptySlots - 1
@@ -325,7 +329,7 @@ sub buy(id, price, quantity)
     owned(id) = owned(id) + 1
     budget = budget - price
     for boughtSlot = 0 to 5
-      if itemId(boughtSlot) = id then
+      if items(boughtSlot).id = id then
         inventorySlot(id) = boughtSlot
       end if
     next boughtSlot
@@ -339,28 +343,28 @@ sub inventory()
   next id
   emptySlots = 0
   for itemSlot = 0 to 5
-    id = itemId(itemSlot)
+    id = items(itemSlot).id
     if id = 0 then
       emptySlots = emptySlots + 1
     else
-      owned(id) = itemCount(itemSlot)
+      owned(id) = items(itemSlot).count
       inventorySlot(id) = itemSlot
-      if itemCooldown(itemSlot) = 0 and inOwnSpawn() = 0 then
+      if items(itemSlot).cooldownTicks = 0 and self.inOwnSpawn = 0 then
         consume = 0
-        if id = 1 and selfMaxHp - selfHp >= 60 then
-          consume = threatDistance > 100 and worldTick - hurtTick > tickRate
-        elseif id = 2 and selfHp * 2 < selfMaxHp then
+        if id = 1 and self.maxHp - self.hp >= 60 then
+          consume = threatDistance > 100 and match.tick - hurtTick > match.tickRate
+        elseif id = 2 and self.hp * 2 < self.maxHp then
           consume = 1
-        elseif id = 22 and selfMaxMana - selfMana >= 45 then
-          consume = threatDistance > 100 and worldTick - hurtTick > tickRate
-        elseif id = 3 and selfMana * 3 < selfMaxMana then
+        elseif id = 22 and self.maxMana - self.mana >= 45 then
+          consume = threatDistance > 100 and match.tick - hurtTick > match.tickRate
+        elseif id = 3 and self.mana * 3 < self.maxMana then
           consume = bestId <> 0
-        elseif id = 4 and selfTarget = bestId and bestId <> 0 then
+        elseif id = 4 and self.targetId = bestId and bestId <> 0 then
           consume = bestDistance <= attackRange * attackRange
         end if
         if consume then
           accepted = useItem(itemSlot)
-          actionError = lastActionError()
+          actionError = lastAction.error
           if accepted then
             owned(id) = owned(id) - 1
             if owned(id) = 0 then
@@ -372,12 +376,12 @@ sub inventory()
       end if
     end if
   next itemSlot
-  if canShop() = 0 then
+  if self.canShop = 0 then
     exit sub
   end if
   ' Reserve three slots for recovery and travel, two for useful equipment,
   ' and one for a role-specific burst consumable. Stacks top up on return.
-  budget = selfGold
+  budget = self.gold
   buy(8, 100, 1)
   buy(1, 30, 2)
   buy(21, 100, 2)
@@ -396,13 +400,13 @@ end sub
 
 sub dodgeWarnings()
   dodge = 0
-  warnings = spellCount()
+  warnings = match.spellCount
   ' Rotate unusually busy spell lists instead of starving later warnings.
   for warning = warningOffset to warningOffset + 11
     if warning < warnings then
-      spell = spellAbility(warning)
-      caster = spellCasterId(warning)
-      hostile = caster <> selfId
+      spell = spells(warning).abilityId
+      caster = spells(warning).casterId
+      hostile = caster <> self.id
       for ally = 0 to allies - 1
         if caster = allyIds(ally) then
           hostile = 0
@@ -418,12 +422,12 @@ sub dodgeWarnings()
       if spell = 32 or spell = 36 then
         hostile = 0
       end if
-      impact = spellImpactTick(warning) - worldTick
-      warningX = originX + side * spellX(warning)
-      warningY = originY + side * spellY(warning)
+      impact = spells(warning).impactTick - match.tick
+      warningX = (originX + floor(side * spells(warning).position.x + .5))
+      warningY = (originY + floor(side * spells(warning).position.y + .5))
       dx = myX - warningX
       dy = myY - warningY
-      if hostile and impact > 0 and impact <= tickRate * 3 then
+      if hostile and impact > 0 and impact <= match.tickRate * 3 then
         if dx * dx + dy * dy <= 9 then
           dodge = 1
           dodgeX = myX + 3
@@ -445,11 +449,11 @@ sub dodgeWarnings()
 end sub
 
 sub moveTo(goalX, goalY, marching)
-  if selfRootTicks > 0 then
+  if self.controls.rootTicks > 0 then
     exit sub
   end if
   if goalX = orderX and goalY = orderY and marching = orderMarch then
-    if worldTick - orderTick < tickRate * 2 then
+    if match.tick - orderTick < match.tickRate * 2 then
       exit sub
     end if
   end if
@@ -457,30 +461,33 @@ sub moveTo(goalX, goalY, marching)
   ' host still owns the complete route and cliff/ramp collision checks.
   routeScore = 1000000
   routeFound = 0
-  floorHeight = terrainHeight(selfX, selfY)
+  readTile(originX + side * myX, originY + side * myY, self.layer)
+  floorHeight = tile.height
   for offsetY = -1 to 1
     for offsetX = -1 to 1
       tileX = goalX + offsetX
       tileY = goalY + offsetY
       worldTileX = originX + side * tileX
       worldTileY = originY + side * tileY
-      if tileX >= 0 and tileX < mapWidth then
-        if tileY >= 0 and tileY < mapHeight then
-          open = terrainWalkable(worldTileX, worldTileY)
-          ground = terrainKind(worldTileX, worldTileY)
-          height = terrainHeight(worldTileX, worldTileY)
-          depth = terrainWaterDepth(worldTileX, worldTileY)
+      if tileX >= 0 and tileX < map.width then
+        if tileY >= 0 and tileY < map.height then
+          readTile(worldTileX, worldTileY, self.layer)
+          open = tile.walkable
+          ground = tile.kind
+          height = tile.height
+          depth = tile.waterDepth
           if open = 0 then
-            for layer = 0 to mapLayers - 1
+            for layer = 0 to map.layers - 1
               worldLayer = layer
               if layer = RedFortLayer or layer = BlueFortLayer then
-                worldLayer = layer + selfTeam * (RedFortLayer + BlueFortLayer - 2 * layer)
+                worldLayer = layer + self.team * (RedFortLayer + BlueFortLayer - 2 * layer)
               end if
-              if terrainWalkableAt(worldTileX, worldTileY, worldLayer) then
+              readTile(worldTileX, worldTileY, worldLayer)
+              if tile.walkable then
                 open = 1
-                ground = terrainKindAt(worldTileX, worldTileY, worldLayer)
-                height = terrainHeightAt(worldTileX, worldTileY, worldLayer)
-                depth = terrainWaterDepthAt(worldTileX, worldTileY, worldLayer)
+                ground = tile.kind
+                height = tile.height
+                depth = tile.waterDepth
                 exit for
               end if
             next layer
@@ -514,8 +521,8 @@ sub moveTo(goalX, goalY, marching)
   else
     accepted = walkTo(originX + side * routeX, originY + side * routeY)
   end if
-  actionError = lastActionError()
-  orderTick = worldTick
+  actionError = lastAction.error
+  orderTick = match.tick
   if accepted then
     orderX = goalX
     orderY = goalY
@@ -524,40 +531,41 @@ sub moveTo(goalX, goalY, marching)
     ' Try the lane center on the next decision rather than retrying a wall.
     crossedMiddle = 0
     blockedId = bestId
-    blockedUntil = worldTick + tickRate * 3
+    blockedUntil = match.tick + match.tickRate * 3
   end if
 end sub
 
-sub spells()
-  if selfSilenceTicks > 0 then
+sub castAbilities()
+  if self.controls.silenceTicks > 0 then
     exit sub
   end if
   for spellSlot = 0 to 3
-    charges = abilityCharges(spellSlot)
-    recharge = abilityRecharge(spellSlot)
-    damage = abilityDamage(spellSlot)
-    healing = abilityHeal(spellSlot)
-    restore = abilityRestore(spellSlot)
-    cost = abilityManaCost(spellSlot)
-    if abilityLevel(spellSlot) > 0 and charges > 0 then
-      if abilityCooldown(spellSlot) = 0 and selfMana >= cost then
+    castRange(spellSlot) = abilities(spellSlot).range
+    charges = abilities(spellSlot).charges
+    recharge = abilities(spellSlot).rechargeTicks
+    damage = abilities(spellSlot).damage
+    healing = abilities(spellSlot).heal
+    restore = abilities(spellSlot).restore
+    cost = abilities(spellSlot).manaCost
+    if abilities(spellSlot).level > 0 and charges > 0 then
+      if abilities(spellSlot).cooldownTicks = 0 and self.mana >= cost then
         castId = 0
         if healing > 0 and healMissing >= healing \ 2 then
-          if selfClass = DruidWarden and spellSlot > 0 then
+          if self.class = DruidWarden and spellSlot > 0 then
             castId = healId
-          elseif selfClass = VanguardKnight and spellSlot = 2 then
+          elseif self.class = VanguardKnight and spellSlot = 2 then
             ' Aegis heals around us, even when only an ally is wounded.
-            castId = selfId
-          elseif selfMaxHp - selfHp >= healing \ 2 then
-            castId = selfId
+            castId = self.id
+          elseif self.maxHp - self.hp >= healing \ 2 then
+            castId = self.id
           end if
-        elseif restore > 0 and selfMaxMana - selfMana >= restore then
-          castId = selfId
+        elseif restore > 0 and self.maxMana - self.mana >= restore then
+          castId = self.id
         elseif damage > 0 and bestId <> 0 then
           if bestDistance <= castRange(spellSlot) * castRange(spellSlot) then
             if bestDistance >= castMinimum(spellSlot) * castMinimum(spellSlot) then
               ' Save the last recharging charge for valuable targets.
-              if bestKind <> 3 or charges > 1 or recharge <= tickRate then
+              if bestKind <> 3 or charges > 1 or recharge <= match.tickRate then
                 castId = bestId
               elseif bestHp <= damage then
                 castId = bestId
@@ -586,10 +594,10 @@ sub spells()
             end if
             aimX = bestX + leadX
             aimY = bestY + leadY
-            if aimX >= 0 and aimX < mapWidth - 1 then
-              if aimY >= 0 and aimY < mapHeight - 1 then
+            if aimX >= 0 and aimX < map.width - 1 then
+              if aimY >= 0 and aimY < map.height - 1 then
                 accepted = castPoint(spellSlot, originX + side * aimX, originY + side * aimY)
-                actionError = lastActionError()
+                actionError = lastAction.error
                 if accepted then
                   exit sub
                 end if
@@ -600,7 +608,7 @@ sub spells()
           ' offset their center so the enemy is inside the damaging band.
           ' Also fall back here if a led point is outside the map or vision.
           accepted = castTarget(spellSlot, castId)
-          actionError = lastActionError()
+          actionError = lastAction.error
           if accepted then
             exit sub
           end if
@@ -610,38 +618,38 @@ sub spells()
   next spellSlot
 end sub
 
-if drafting then
+if draft.active then
   chooseHero()
   end
 end if
 
 ' Buy back immediately whenever affordable, including during a long respawn.
-if selfHp <= 0 then
-  price = buybackPrice()
-  if price > 0 and selfGold >= price then
+if self.hp <= 0 then
+  price = self.buybackPrice
+  if price > 0 and self.gold >= price then
     accepted = buyback()
-    actionError = lastActionError()
+    actionError = lastAction.error
   end if
   initialized = 0
   end
 end if
-if selfChannelTicks > 0 or selfStunTicks > 0 then
+if self.channelTicks > 0 or self.controls.stunTicks > 0 then
   end
 end if
-if worldTick < nextThink then
+if match.tick < nextThink then
   end
 end if
 ' Use the same team-relative coordinates for every spatial decision.
-side = 1 - selfTeam * 2
-originX = selfTeam * (mapWidth - 1)
-originY = selfTeam * (mapHeight - 1)
-myX = originX + side * selfX
-myY = originY + side * selfY
+side = 1 - self.team * 2
+originX = self.team * (map.width - 1)
+originY = self.team * (map.height - 1)
+myX = (originX + floor(side * self.position.x + .5))
+myY = (originY + floor(side * self.position.y + .5))
 
-nextThink = worldTick + 6
-role = heroRole(selfClass)
-attackRange = (selfAttackRange \ 100) / (worldScale \ 100)
-speed = (selfMoveSpeed \ 100) / (worldScale \ 100)
+nextThink = match.tick + 6
+role = heroChoices(self.class).role
+attackRange = self.attackRange
+speed = self.moveSpeed
 
 if initialized = 0 then
   initialized = 1
@@ -649,20 +657,15 @@ if initialized = 0 then
   spawnY = myY
   homeX = myX
   homeY = myY
-  enemyX = mapWidth - 1 - myX
-  enemyY = mapHeight - 1 - myY
-  previousHp = selfHp
-  progressTick = worldTick
+  enemyX = map.width - 1 - myX
+  enemyY = map.height - 1 - myY
+  previousHp = self.hp
+  progressTick = match.tick
   previousX = myX
   previousY = myY
   crossedMiddle = 0
   retreating = 0
-  ' The host exposes effects and costs, but not spell range or cast shape.
-  ' These small tables mirror content.nim; all distances are in tiles.
-  castRange(0) = 0
-  castRange(1) = 1.5
-  castRange(2) = 2.5
-  castRange(3) = 2
+  ' Keep tactical lead times here; read current ranges from the host below.
   castDelay(2) = 24
   castDelay(3) = 24
   healRange = 4
@@ -670,110 +673,80 @@ if initialized = 0 then
     castGround(spellSlot) = spellSlot >= 2
     castMinimum(spellSlot) = 0
   next spellSlot
-  if selfClass = VanguardKnight then
+  if self.class = VanguardKnight then
     healRange = 7 / 3
-    castRange(2) = 7 / 3
-    castRange(3) = 11 / 6
     castDelay(2) = 12
     castDelay(3) = 6
-  elseif selfClass = Ranger then
-    castRange(0) = 7
-    castRange(1) = 6
-    castRange(2) = 6.5
-    castRange(3) = 8
-  elseif selfClass = Arcanist then
-    castRange(1) = 5.5
-    castRange(2) = 6
-    castRange(3) = 7
+  elseif self.class = Arcanist then
     castDelay(2) = 48
     castDelay(3) = 72
-  elseif selfClass = DruidWarden then
-    castRange(1) = 4
-    castRange(2) = 4
-    castRange(3) = 10 / 3
-  elseif selfClass = DemonHunter then
-    castRange(2) = 2
-    castRange(3) = 5
+  elseif self.class = DemonHunter then
     castDelay(2) = 6
     castGround(3) = 0
-  elseif selfClass = DeathKnight then
-    castRange(2) = 8 / 3
-    castRange(3) = 7 / 3
+  elseif self.class = DeathKnight then
     castDelay(3) = 12
     castGround(3) = 0
     castMinimum(3) = 2 / 3
-  elseif selfClass = Crossbowman then
-    castRange(0) = 7
-    castRange(1) = 20 / 3
-    castRange(2) = 6
-    castRange(3) = 7.5
+  elseif self.class = Crossbowman then
     castDelay(2) = 12
-  elseif selfClass = Lich then
-    castRange(0) = 6
-    castRange(1) = 20 / 3
-    castRange(2) = 5
-    castRange(3) = 6.5
+  elseif self.class = Lich then
     castGround(3) = 0
-  elseif selfClass = Warlock then
-    castRange(1) = 14 / 3
-    castRange(2) = 4
-    castRange(3) = 5
+  elseif self.class = Warlock then
     castGround(3) = 0
-  elseif selfClass = Berserker then
-    castRange(3) = 13 / 6
+  elseif self.class = Berserker then
     castDelay(2) = 12
     castDelay(3) = 48
   end if
 end if
 
-if selfHp < previousHp then
-  hurtTick = worldTick
+if self.hp < previousHp then
+  hurtTick = match.tick
 end if
-previousHp = selfHp
-if selfAttacksLanded <> previousHits or myX <> previousX or myY <> previousY then
-  progressTick = worldTick
+previousHp = self.hp
+if self.attacksLanded <> previousHits or myX <> previousX or myY <> previousY then
+  progressTick = match.tick
 end if
-previousHits = selfAttacksLanded
+previousHits = self.attacksLanded
 previousX = myX
 previousY = myY
-if worldTick - progressTick > tickRate * 6 and selfTarget <> 0 then
-  blockedId = selfTarget
-  blockedUntil = worldTick + tickRate * 3
-  progressTick = worldTick
+if match.tick - progressTick > match.tickRate * 6 and self.targetId <> 0 then
+  blockedId = self.targetId
+  blockedUntil = match.tick + match.tickRate * 3
+  progressTick = match.tick
 end if
 
 learnAbilities()
 observe()
 inventory()
-spells()
+castAbilities()
 dodgeWarnings()
 
-if selfHp * 4 < selfMaxHp or (bestKind = 6 and selfHp * 10 < selfMaxHp * 4) then
+if self.hp * 4 < self.maxHp or (bestKind = 6 and self.hp * 10 < self.maxHp * 4) then
   retreating = 1
 end if
-if selfMana * 8 < selfMaxMana and bestId = 0 then
+if self.mana * 8 < self.maxMana and bestId = 0 then
   retreating = 1
 end if
-if inOwnSpawn() then
-  if selfHp * 10 < selfMaxHp * 9 or selfMana * 10 < selfMaxMana * 9 then
+if self.inOwnSpawn then
+  if self.hp * 10 < self.maxHp * 9 or self.mana * 10 < self.maxMana * 9 then
     moveTo(spawnX, spawnY, 0)
     end
   end if
   retreating = 0
 end if
 
-if dodge and selfRootTicks = 0 then
+if dodge and self.controls.rootTicks = 0 then
   moveTo(dodgeX, dodgeY, 0)
   end
 end if
 if retreating then
   ' A safe scroll saves the long return trip; damage and control can punish it.
-  if owned(21) > 0 and selfPortalCooldown = 0 and selfRootTicks = 0 then
+  if owned(21) > 0 and self.portalCooldownTicks = 0 and self.controls.rootTicks = 0 then
     dx = myX - homeX
     dy = myY - homeY
     if dx * dx + dy * dy > 400 and threatDistance > 144 then
       accepted = useItemAt(inventorySlot(21), originX + side * spawnX, originY + side * spawnY)
-      actionError = lastActionError()
+      actionError = lastAction.error
       if accepted then
         end
       end if
@@ -783,12 +756,12 @@ if retreating then
   end
 end if
 
-if towerAggro and selfHp * 3 < selfMaxHp * 2 and tanks = 0 then
+if towerAggro and self.hp * 3 < self.maxHp * 2 and tanks = 0 then
   moveTo(homeX, homeY, 0)
   end
 end if
 if enemyPower > friendlyPower + 6 and threatDistance < 64 then
-  if selfHp * 4 < selfMaxHp * 3 then
+  if self.hp * 4 < self.maxHp * 3 then
     moveTo(homeX, homeY, 0)
     end
   end if
@@ -797,9 +770,9 @@ end if
 if bestId <> 0 then
   ' Finish a windup before kiting; never cancel every swing with movement.
   if bestKind = 2 and aimedAtUs > 0 and attackRange >= 3 then
-    if bestDistance < 4 and selfAttackCooldown > tickRate \ 2 then
-      if selfAttacksLanded > 0 and speed > 0 then
-        kiteStep = (selfMoveSpeed * tickRate) \ worldScale
+    if bestDistance < 4 and self.attackCooldownTicks > match.tickRate \ 2 then
+      if self.attacksLanded > 0 and speed > 0 then
+        kiteStep = floor(self.moveSpeed * match.tickRate)
         if kiteStep < 1 then
           kiteStep = 1
         elseif kiteStep > 4 then
@@ -818,12 +791,12 @@ if bestId <> 0 then
       end if
     end if
   end if
-  if selfTarget <> bestId then
+  if self.targetId <> bestId then
     accepted = attackTarget(bestId)
-    actionError = lastActionError()
+    actionError = lastAction.error
     if accepted = 0 then
       blockedId = bestId
-      blockedUntil = worldTick + tickRate * 3
+      blockedUntil = match.tick + match.tickRate * 3
     else
       orderTick = 0
     end if
@@ -832,15 +805,15 @@ if bestId <> 0 then
 end if
 
 ' Farm separate lanes early, then converge on the enemy god to finish.
-middleX = mapWidth \ 2
-middleY = mapHeight \ 2
-if selfLevel < 6 then
+middleX = map.width \ 2
+middleY = map.height \ 2
+if self.level < 6 then
   if role = 0 or role = 2 then
-    middleX = mapWidth \ 10
-    middleY = mapHeight \ 10
+    middleX = map.width \ 10
+    middleY = map.height \ 10
   elseif role = 1 or role = 3 then
-    middleX = mapWidth * 9 \ 10
-    middleY = mapHeight * 9 \ 10
+    middleX = map.width * 9 \ 10
+    middleY = map.height * 9 \ 10
   end if
 end if
 dx = myX - middleX
@@ -854,13 +827,13 @@ if crossedMiddle then
   goalX = enemyX
   goalY = enemyY
 end if
-if canShop() and owned(21) > 0 and selfPortalCooldown = 0 then
+if self.canShop and owned(21) > 0 and self.portalCooldownTicks = 0 then
   dx = myX - forwardX
   dy = myY - forwardY
   if forwardDistance < 1000000 and dx * dx + dy * dy > 400 then
     if threatDistance > 144 then
       accepted = useItemAt(inventorySlot(21), originX + side * forwardX, originY + side * forwardY)
-      actionError = lastActionError()
+      actionError = lastAction.error
       if accepted then
         end
       end if

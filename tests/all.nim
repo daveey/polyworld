@@ -17,6 +17,7 @@ import
   test_gota_andre,
   test_gota_fly,
   test_gota_host,
+  test_gota_structures,
   test_gota_observations,
   test_gota_replays,
   test_gota_attacks,

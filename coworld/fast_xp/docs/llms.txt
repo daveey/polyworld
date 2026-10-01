@@ -1,0 +1,159 @@
+# Polyworld Fast XP
+
+> Run a Gota match synchronously and download its replay and your bot's logs.
+
+## Make a request
+
+Connect to the Softmax Tailscale network. Send **POST `/v1/games/gota/run`**
+with `Content-Type: application/json`. No API token or Authorization header is
+needed on the Tailscale service.
+
+The JSON body contains a seed and a roster of bots. Supply your own bot as BASIC
+`source` text or a ZIP in `package_base64`. Select submitted opponents using policy-version UUIDs or
+exact policy labels such as `my-bot:v12`. The server fetches submitted policies
+using its own Observatory credential; callers do not need their source.
+
+```json
+{
+  "seed": 743478993,
+  "roster": [
+    {"slot": 0, "player": {"source": "print selfId\nend"}},
+    {"player": {"policy_ref": "109b99c1-3bb7-4276-b17e-378b43a97874"}}
+  ],
+  "config": {"max_ticks": 28800}
+}
+```
+
+This puts your source in seat 0 and fills seats 1–9 with the referenced bot
+(Richard's benchmark policy). Replace the short printing script with your full
+BASIC bot. To send a local file without hand-escaping its contents:
+
+```sh
+FAST_XP_URL=https://fast-xp-request.tail0f4a29.ts.net
+jq -n --rawfile source ./my-bot.bas \
+  '{seed:743478993, roster:[
+    {slot:0, player:{source:$source}},
+    {player:{policy_ref:"109b99c1-3bb7-4276-b17e-378b43a97874"}}
+  ], config:{max_ticks:28800}}' > request.json
+curl --fail-with-body --max-time 900 \
+  -H 'Content-Type: application/json' \
+  --data-binary @request.json "$FAST_XP_URL/v1/games/gota/run" -o result.zip
+```
+
+To upload a ZIP instead, replace the source-file `jq` command above with:
+
+```sh
+base64 -w 0 ./my-bot.zip > package.b64
+jq -n --rawfile package package.b64 \
+  '{seed:743478993, roster:[
+    {slot:0, player:{package_base64:$package}},
+    {player:{policy_ref:"109b99c1-3bb7-4276-b17e-378b43a97874"}}
+  ]}' > request.json
+```
+
+On macOS, use `base64 -i ./my-bot.zip | tr -d '\n' > package.b64`.
+Send `request.json` with the same curl command. No Observatory submission is needed.
+
+For ten games, use the same request with `num_episodes` set to 10:
+
+```sh
+jq '.num_episodes = 10' request.json > batch.json
+curl --fail-with-body --max-time 900 \
+  -H 'Content-Type: application/json' \
+  --data-binary @batch.json "$FAST_XP_URL/v1/games/gota/run" -o result.zip
+```
+
+Only unpack `result.zip` after a successful HTTP response; errors are JSON.
+
+## Roster and settings
+
+- The roster accepts 1–10 entries; the complete JSON request may be up to 224 MiB.
+- Gota has ten seats, numbered 0–9. Seats 0–4 are Red; 5–9 are Blue.
+- Every `player` must contain exactly one of `source`, `package_base64`, or `policy_ref`.
+- `slot: 0` through `slot: 9` pins an entry to that seat. Pinned seats must be unique.
+- Omit `slot` (or use `-1`) to provide a bot for unfilled seats. The server fills
+  seats in ascending order, cycling through these unpinned entries in roster
+  order. Pinned entries are not reused. With your bot pinned to 0 and three
+  unpinned opponents A/B/C, seats 1–9 become A/B/C/A/B/C/A/B/C.
+- To fill every seat with your own bot, use one unpinned `source` entry. If all
+  entries are pinned, supply all ten seats.
+- `source`: BASIC source text, up to 64 KiB per bot.
+- `package_base64`: a ZIP file encoded as standard padded base64 without
+  whitespace, up to 16 MiB before encoding. Uses Gota’s normal policy format.
+- `policy_ref`: a submitted policy version. The server downloads and runs its
+  uploaded artifact, up to 16 MiB.
+- `seed` is required: a signed 32-bit integer. Game index `i` uses `seed + i`;
+  the last seed must also fit in that range.
+- `num_episodes` is optional, defaults to 1, and accepts 1–10. All games share
+  the supplied configuration and bots. Unpinned entries rotate through open
+  seats between games, matching Observatory; pinned seats stay fixed.
+  For example, add `"num_episodes": 10` to run ten games with one upload.
+- `config` is optional. `config.max_ticks` defaults to 28800; valid values are
+  1–28800. This bounds battle ticks, plus drafting. It is not wall-clock seconds.
+- Supply actual source text, not a local path or URL. `random`, `top_n`, batch
+  targets and unknown fields are not supported. Resolve leaderboard opponents
+  to policy references before submitting.
+
+## Response and timing
+
+The connection stays open while the game runs. A successful response is HTTP
+200 with `Content-Type: application/zip`, containing:
+
+- `replay.replay`
+- `logs/slot-N.txt` for each seat using uploaded `source` or `package_base64`
+
+There are no source files or logs for `policy_ref` seats in the response, even
+if you own that submitted policy. Use `source` or `package_base64` for any seat whose logs you
+need. There is no polling endpoint or later result retrieval. `X-Request-ID` identifies
+the request for server-log lookups.
+
+For `num_episodes` greater than 1, the ZIP contains `manifest.json` and numbered
+folders such as `games/000/replay.replay` and `games/000/logs/slot-0.txt`.
+The manifest lists each game's zero-based index, seed, status, HTTP status,
+`roster_entries_by_slot` (indexes into your submitted roster), timing, and artifact
+paths. Check it for failed games: completed batches return HTTP 200 even when
+some or all games fail, and successful games remain available. Private opponents'
+logs and detailed errors are still excluded after seat rotation. A single game
+keeps the flat ZIP and HTTP error behavior shown above.
+
+The server runs six games at a time on the hosted VM and queues the rest. Ready
+batches take turns receiving free workers. Up to 16 requests can be admitted;
+HTTP 429 means that request limit is full, not merely that six games are running.
+Each game's 120-second execution deadline starts when its worker starts, excluding
+queue time. Set the client timeout to at least 900 seconds for batches; other
+queued work can make the wait longer. Disconnected clients' accepted games finish,
+but their results are discarded. There is no automatic retry.
+
+`Server-Timing` reports `run`, `fetch`, `queue`, `worker`, and `zip` in milliseconds.
+`run` is elapsed server time; `fetch` covers shared policy preparation once per
+request. `queue` and `worker` are sums across games and can exceed elapsed time
+because games overlap. `zip` covers response packaging. Upload/download time is
+not included. Individual game timings are in the batch manifest.
+
+## Errors
+
+Errors normally return JSON `{"error":"message"}`. Check HTTP status before
+treating the response as a ZIP.
+
+- 400: invalid request, unsupported fields, or invalid/ambiguous policy reference.
+- 404: unknown route or policy version.
+- 409: selected policy has no downloadable player file.
+- 413: JSON request exceeds 224 MiB, or an uploaded package exceeds 16 MiB.
+- 415: incorrect content type.
+- 422: Policy loading or BASIC compilation failed. Only uploaded-bot diagnostics are disclosed.
+- 502: policy lookup/download/verification failed; policy artifacts may be
+  at most 16 MiB. Read the error message for the failing stage.
+- 429: 16 requests are already admitted; retry after the `Retry-After` interval.
+- 503: the server is shutting down or lacks its Observatory credential.
+- 504: a policy fetch or game execution timed out.
+- 500: game worker failed; the operator can inspect server diagnostics.
+
+GET `/healthz` returns `ok`. This document is sufficient to make a request;
+[run.md](run.md) contains additional reference details.
+
+## Server performance
+
+Open `/` for the live dashboard. `GET /v1/metrics?minutes=60` returns the same
+metrics as JSON (supported windows: 15, 60, 1440 minutes). History is held in
+memory for 24 hours and resets on restart. Request durations measure server
+processing, excluding client upload/download. No bot sources or logs are exposed.

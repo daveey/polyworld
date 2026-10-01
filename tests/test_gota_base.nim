@@ -1,5 +1,5 @@
 import
-  std/[os, sets, strutils],
+  std/[os, strutils],
   bassy,
   polyworld/[cli, pathing, tapes],
   ../examples/gods_of_the_arena/[bots, content, maps, replays, sim]
@@ -57,35 +57,15 @@ proc middle(game: Game): WorldPoint =
   const Unit = WorldScale div PathUnitsPerTile
   WorldPoint(x: point.x * Unit, y: point.y * Unit, z: point.z * Unit)
 
-echo "Testing base policy calls cover the current GotA host API"
+echo "Testing structured base policy and hosted copy agree"
 block:
-  doAssert readFile(Policy) == readFile(Root / "coworld/gota/players/base.bas")
-  let host = readFile(Root / "examples/gods_of_the_arena/bots.nim")
-  var
-    names: HashSet[string]
-    source: string
-  let examples = readFile(Policy) & readFile(Root /
-    "examples/gods_of_the_arena/neural/policies/david.bas")
-  for line in examples.splitLines():
-    if not line.strip().startsWith("'"):
-      source.add line & "\n"
-  for line in host.splitLines():
-    let
-      text = line.strip()
-      field = text.startsWith("(Object") or text.startsWith("(Spell") or
-        text.startsWith("(Ability") or text.startsWith("(Terrain")
-    if "addFunction(\"" in line or (field and ", \"" in line):
-        let name = line.split('"')[1]
-        names.incl(name)
-        if name.startsWith("terrain"):
-          names.incl(name & "At")
-  doAssert names.len >= 68
-  for name in names:
-    # Chat is exercised by the mailbox example instead of the combat policy.
-    if name in ["sendChat", "pullMailbox$", "mailboxId", "mailboxCount",
-      "mailboxSelf", "mailboxPlayers"]:
-        continue
-    doAssert name & "(" in source, "Example policies omit host call " & name
+  let source = readFile(Policy)
+  doAssert source == readFile(Root / "coworld/gota/players/base.bas")
+  doAssert source.startsWith("' @gota-structures\n")
+  for name in ["draftHero", "levelAbility", "walkTo", "attackMove",
+    "attackTarget", "castTarget", "castPoint", "buyItem", "buyback",
+    "useItem", "useItemAt", "readTile"]:
+      doAssert name & "(" in source, "Reference policy omits " & name
 
 echo "Testing base spends ability points in R, W, E, Q order at legal levels"
 for class in HeroClass:

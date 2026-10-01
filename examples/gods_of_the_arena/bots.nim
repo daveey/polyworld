@@ -15,7 +15,7 @@ import
   neural_package,
   observations,
   sim,
-  replays, scores,
+  replays, scores, structures,
   terrains
 
 when defined(coworld):
@@ -113,6 +113,13 @@ proc bindHeroData(program: Program) =
     heroDataIds[slot] = program.hostDataIndex(name)
     doAssert heroDataIds[slot] >= 0, "missing host data " & name
   heroDataBound = true
+
+proc usesHeroData(program: Program): bool =
+  ## Keeps legacy scalar observations for policies that read them.
+  for instruction in program.bytecode:
+    if instruction.op in {LoadHostDataOp, AddGlobalHostDataOp} and
+      instruction.b in heroDataIds:
+        return true
 
 proc heroVmLimits(): Limits =
   ## Returns independent structural and per-decision limits for a hero VM.
@@ -518,14 +525,23 @@ proc infoFunctions(host: var Host, heroId: int32) =
       if scaled > float64(high(int32)):
         raise newException(BasicError, "exp() result is outside Q16.16")
       toValue(Fixed(int32(scaled)))
-  discard host.addFunction("floor", 1, floorProc, 1)
-  discard host.addFunction("sqrt", 1, sqrtProc, 1)
-  discard host.addFunction("exp", 1, expProc, 1)
-  discard host.addFunction("selfInfo", 1, selfInfo, 4)
-  discard host.addFunction("objectInfo", 2, objectInfo, 4)
-  discard host.addFunction("abilityInfo", 2, abilityInfo, 4)
-  discard host.addFunction("spellInfo", 2, spellInfo, 4)
-  discard host.addFunction("matchInfo", 1, matchInfo, 4)
+  discard host.addQuery("floor", 1, floorProc, 1)
+  discard host.addQuery("sqrt", 1, sqrtProc, 1)
+  discard host.addQuery("exp", 1, expProc, 1)
+  discard host.addQuery("selfInfo", 1, selfInfo, 4)
+  discard host.addQuery("objectInfo", 2, objectInfo, 4)
+  discard host.addQuery("abilityInfo", 2, abilityInfo, 4)
+  discard host.addQuery("spellInfo", 2, spellInfo, 4)
+  discard host.addQuery("matchInfo", 1, matchInfo, 4)
+
+proc finishStructuredAction(heroId: int32, accepted: bool) =
+  ## Refreshes opted-in own snapshots after accepted and rejected commands.
+  let index = activeGame.world.heroIndex(heroId)
+  if index >= 0:
+    let vm = activeGame.heroVms[index]
+    if vm != nil and vm.structured:
+      activeGame.refreshOwnStructures(index)
+      vm.structureGlobal("lastAction.accepted").value = toValue(accepted)
 
 proc initHeroHost(
     heroId: int32,
@@ -612,6 +628,7 @@ proc initHeroHost(
       activeGame.metrics.command(
         activeGame.world.heroIndex(heroId), activeGame.world.tick
       )
+    finishStructuredAction(heroId, accepted)
     int32(accepted)
   let draftedClassProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads any player's public selection, including the opposing team.
@@ -712,7 +729,9 @@ proc initHeroHost(
       arguments[0].asFixed, arguments[1].asFixed))
     if activeGame.interceptCommand(heroId, command):
       return 1'i32
-    int32(activeGame.issueWalkTo(heroId, x, y, offset))
+    let accepted = activeGame.issueWalkTo(heroId, x, y, offset)
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
   let attackMoveProc: NumericHostProc = proc(
       arguments: openArray[Value]
   ): Value =
@@ -723,14 +742,18 @@ proc initHeroHost(
       arguments[0].asFixed, arguments[1].asFixed))
     if activeGame.interceptCommand(heroId, command):
       return 1'i32
-    int32(activeGame.issueAttackMove(heroId, x, y, offset))
+    let accepted = activeGame.issueAttackMove(heroId, x, y, offset)
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
   let attackTargetProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
     if activeGame.interceptCommand(heroId,
         NeuralCommand(kind: AttackTargetCommand, objectId: arguments[0])):
       return 1
-    int32(activeGame.issueAttackTarget(heroId, arguments[0]))
+    let accepted = activeGame.issueAttackTarget(heroId, arguments[0])
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
   let itemIdProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
@@ -785,6 +808,7 @@ proc initHeroHost(
       activeGame.metrics.command(
         heroIndex(activeGame.world, heroId), activeGame.world.tick
       )
+    finishStructuredAction(heroId, accepted)
     int32(accepted)
   let buybackPriceProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads this hero's current buyback price from the shared rules.
@@ -805,6 +829,7 @@ proc initHeroHost(
       activeGame.metrics.command(
         heroIndex(activeGame.world, heroId), activeGame.world.tick
       )
+    finishStructuredAction(heroId, accepted)
     int32(accepted)
   let useItemProc: HostProc = proc(
       arguments: openArray[int32]
@@ -812,7 +837,9 @@ proc initHeroHost(
     if activeGame.interceptCommand(heroId,
         NeuralCommand(kind: UseItemCommand, item: arguments[0])):
       return 1
-    int32(activeGame.issueUseItem(heroId, arguments[0]))
+    let accepted = activeGame.issueUseItem(heroId, arguments[0])
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
 
   let useItemAtProc: NumericHostProc = proc(arguments: openArray[Value]): Value =
     ## Records and attempts a scroll channel at fractional map coordinates.
@@ -823,7 +850,9 @@ proc initHeroHost(
     if activeGame.interceptCommand(heroId,
         NeuralCommand(kind: UseItemAtCommand, item: slot, point: point)):
       return 1'i32
-    int32(activeGame.issueUseItemAt(heroId, slot, x, y, offset))
+    let accepted = activeGame.issueUseItemAt(heroId, slot, x, y, offset)
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
 
   let levelAbilityProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Records and spends a point through the shared upgrade validator.
@@ -841,6 +870,7 @@ proc initHeroHost(
       activeGame.metrics.command(
         heroIndex(activeGame.world, heroId), activeGame.world.tick
       )
+    finishStructuredAction(heroId, accepted)
     int32(accepted)
   let abilityPointsProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads unspent points immediately, including after an upgrade.
@@ -867,7 +897,9 @@ proc initHeroHost(
     if activeGame.interceptCommand(heroId, NeuralCommand(kind: CastTargetCommand,
         ability: arguments[0], objectId: arguments[1])):
       return 1
-    int32(activeGame.issueCastTarget(heroId, arguments[0], arguments[1]))
+    let accepted = activeGame.issueCastTarget(heroId, arguments[0], arguments[1])
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
   let castPointProc: NumericHostProc = proc(arguments: openArray[Value]): Value =
     ## Records and attempts a ground-aimed spell.
     let
@@ -877,7 +909,9 @@ proc initHeroHost(
     if activeGame.interceptCommand(heroId,
         NeuralCommand(kind: CastPointCommand, ability: slot, point: point)):
       return 1'i32
-    int32(activeGame.issueCastPoint(heroId, slot, x, y, offset))
+    let accepted = activeGame.issueCastPoint(heroId, slot, x, y, offset)
+    finishStructuredAction(heroId, accepted)
+    int32(accepted)
   let abilityChargesProc: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Reads remaining charges for one of this hero's four ability slots.
     let index = heroIndex(activeGame.world, heroId)
@@ -986,6 +1020,22 @@ proc initHeroHost(
       32
     )
 
+  let readTile: HostProc = proc(arguments: openArray[int32]): int32 =
+    ## Fills the opted-in tile record using the existing fog-safe queries.
+    let index = activeGame.world.heroIndex(heroId)
+    if index < 0 or not activeGame.heroVms[index].structured:
+      return 0
+    var runtime = activeGame.heroVms[index].runtime
+    runtime.setGlobal("tile.x", arguments[0])
+    runtime.setGlobal("tile.y", arguments[1])
+    runtime.setGlobal("tile.layer", arguments[2])
+    for (name, field) in [("kind", TerrainKindField),
+      ("walkable", TerrainWalkableField), ("height", TerrainHeightField),
+      ("waterDepth", TerrainWaterDepthField)]:
+        runtime.setGlobal("tile." & name,
+          terrainProc(heroId, field, true)(arguments))
+    1
+  discard result.addFunction("readTile", 3, readTile, 128)
   result.infoFunctions(heroId)
   let context = NeuralContext(policy: policy)
   result.addNeuralFunctions(
@@ -1058,6 +1108,7 @@ proc loadBots*(
     kinds = controllerKinds(game.world.heroes.len, playerSlot)
     sources = groups.expandBotSources(kinds)
   game.heroVms = newSeq[HeroVm](game.world.heroes.len)
+  game.structuredBots = false
   game.inboxes.setLen(game.world.heroes.len)
   for inbox in game.inboxes.mitems:
     inbox = newMailbox()
@@ -1075,7 +1126,11 @@ proc loadBots*(
         loadPlayerPolicy(sources[i], int(i))
       else:
         loadPolicy(sources[i])
-    let source = policy.source
+    let
+      structured = policy.source.len > 0 and usesStructures(policy.source)
+      source = if structured: StructureSource & "\n" & policy.source
+               else: policy.source
+      limits = if structured: structureLimits(limits) else: limits
     let program =
       when defined(coworld):
         compilePlayer(source, schema, limits, int(i))
@@ -1084,7 +1139,10 @@ proc loadBots*(
     if not bound:
       bindHeroData(program)
       bound = true
+    game.structuredBots = game.structuredBots or structured
     game.heroVms[i] = HeroVm(
+      structured: structured,
+      legacyHeroData: not structured or program.usesHeroData(),
       runtime: initRuntime(
         program,
         initHeroHost(game.world.heroes[i].id, policy, llm),
@@ -1094,6 +1152,11 @@ proc loadBots*(
       prepareDecision: llm.decisionCallback(),
       pollRequests: llm.requestPoller(),
       ready: true
+    )
+    game.heroVms[i].bindStructures(
+      program,
+      game.world,
+      game.world.heroes[i].id
     )
     llm.bindRuntime(game.heroVms[i].runtime)
     when defined(coworld):
@@ -1110,61 +1173,63 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
     if vm.prepareDecision != nil:
       vm.prepareDecision(game.world.tick)
     discard game.world.worldObjectCount(hero.id)
-    vm.runtime.setData(heroDataIds[DataSelfId], hero.id)
-    vm.runtime.setData(heroDataIds[DataSelfTeam], int32(hero.team.ord))
-    vm.runtime.setData(
-      heroDataIds[DataSelfClass], game.world.draftedClass(hero.id)
-    )
-    vm.runtime.setData(
-      heroDataIds[DataDrafting], int32(game.world.phase == Drafting)
-    )
-    vm.runtime.setData(
-      heroDataIds[DataDraftMode], int32(game.world.draftMode.ord)
-    )
-    vm.runtime.setData(
-      heroDataIds[DataDraftTurnId], game.world.draftHeroId()
-    )
-    vm.runtime.setData(
-      heroDataIds[DataSelfX],
-      mapCoordinate(hero.position.x, hero.team)
-    )
-    vm.runtime.setData(
-      heroDataIds[DataSelfY],
-      mapCoordinate(hero.position.z, hero.team)
-    )
-    vm.runtime.setData(heroDataIds[DataSelfHp], max(hero.hp, 0'i32))
-    vm.runtime.setData(heroDataIds[DataSelfMaxHp], hero.maxHp)
-    vm.runtime.setData(heroDataIds[DataSelfMana], hero.mana)
-    vm.runtime.setData(heroDataIds[DataSelfMaxMana], hero.maxMana)
-    vm.runtime.setData(heroDataIds[DataSelfGold], int32(hero.gold))
-    vm.runtime.setData(heroDataIds[DataSelfLevel], int32(hero.level))
-    vm.runtime.setData(heroDataIds[DataWorldTick], game.world.tick)
-    vm.runtime.setData(heroDataIds[DataSelfLayer], hero.navLayer)
-    vm.runtime.setData(heroDataIds[DataSelfMoveSpeed], hero.heroMoveSpeed())
-    vm.runtime.setData(
-      heroDataIds[DataSelfAttackRange], hero.class.heroAttackRange()
-    )
-    vm.runtime.setData(
-      heroDataIds[DataSelfAttackDamage], hero.heroAttackDamage()
-    )
-    vm.runtime.setData(heroDataIds[DataSelfTarget], hero.attackObjectId)
-    vm.runtime.setData(
-      heroDataIds[DataSelfAttackCooldown],
-      game.world.heroAttackCooldown(hero)
-    )
-    vm.runtime.setData(heroDataIds[DataSelfAttacksLanded], hero.attacksLanded)
-    vm.runtime.setData(heroDataIds[DataSelfPortalCooldown],
-      max(0'i32, hero.portalCooldownEnds - game.world.tick))
-    vm.runtime.setData(heroDataIds[DataSelfChannelTicks],
-      max(0'i32, hero.portalEnds - game.world.tick))
-    vm.runtime.setData(heroDataIds[DataSelfStunTicks],
-      max(0'i32, hero.controls[StunControl].ends - game.world.tick))
-    vm.runtime.setData(heroDataIds[DataSelfSilenceTicks],
-      max(0'i32, hero.controls[SilenceControl].ends - game.world.tick))
-    vm.runtime.setData(heroDataIds[DataSelfRootTicks],
-      max(0'i32, hero.controls[RootControl].ends - game.world.tick))
-    vm.runtime.setData(heroDataIds[DataSelfDeaths], hero.deaths)
-    vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
+    if vm.legacyHeroData:
+      vm.runtime.setData(heroDataIds[DataSelfId], hero.id)
+      vm.runtime.setData(heroDataIds[DataSelfTeam], int32(hero.team.ord))
+      vm.runtime.setData(
+        heroDataIds[DataSelfClass], game.world.draftedClass(hero.id)
+      )
+      vm.runtime.setData(
+        heroDataIds[DataDrafting], int32(game.world.phase == Drafting)
+      )
+      vm.runtime.setData(
+        heroDataIds[DataDraftMode], int32(game.world.draftMode.ord)
+      )
+      vm.runtime.setData(
+        heroDataIds[DataDraftTurnId], game.world.draftHeroId()
+      )
+      vm.runtime.setData(
+        heroDataIds[DataSelfX],
+        mapCoordinate(hero.position.x, hero.team)
+      )
+      vm.runtime.setData(
+        heroDataIds[DataSelfY],
+        mapCoordinate(hero.position.z, hero.team)
+      )
+      vm.runtime.setData(heroDataIds[DataSelfHp], max(hero.hp, 0'i32))
+      vm.runtime.setData(heroDataIds[DataSelfMaxHp], hero.maxHp)
+      vm.runtime.setData(heroDataIds[DataSelfMana], hero.mana)
+      vm.runtime.setData(heroDataIds[DataSelfMaxMana], hero.maxMana)
+      vm.runtime.setData(heroDataIds[DataSelfGold], int32(hero.gold))
+      vm.runtime.setData(heroDataIds[DataSelfLevel], int32(hero.level))
+      vm.runtime.setData(heroDataIds[DataWorldTick], game.world.tick)
+      vm.runtime.setData(heroDataIds[DataSelfLayer], hero.navLayer)
+      vm.runtime.setData(heroDataIds[DataSelfMoveSpeed], hero.heroMoveSpeed())
+      vm.runtime.setData(
+        heroDataIds[DataSelfAttackRange], hero.class.heroAttackRange()
+      )
+      vm.runtime.setData(
+        heroDataIds[DataSelfAttackDamage], hero.heroAttackDamage()
+      )
+      vm.runtime.setData(heroDataIds[DataSelfTarget], hero.attackObjectId)
+      vm.runtime.setData(
+        heroDataIds[DataSelfAttackCooldown],
+        game.world.heroAttackCooldown(hero)
+      )
+      vm.runtime.setData(heroDataIds[DataSelfAttacksLanded], hero.attacksLanded)
+      vm.runtime.setData(heroDataIds[DataSelfPortalCooldown],
+        max(0'i32, hero.portalCooldownEnds - game.world.tick))
+      vm.runtime.setData(heroDataIds[DataSelfChannelTicks],
+        max(0'i32, hero.portalEnds - game.world.tick))
+      vm.runtime.setData(heroDataIds[DataSelfStunTicks],
+        max(0'i32, hero.controls[StunControl].ends - game.world.tick))
+      vm.runtime.setData(heroDataIds[DataSelfSilenceTicks],
+        max(0'i32, hero.controls[SilenceControl].ends - game.world.tick))
+      vm.runtime.setData(heroDataIds[DataSelfRootTicks],
+        max(0'i32, hero.controls[RootControl].ends - game.world.tick))
+      vm.runtime.setData(heroDataIds[DataSelfDeaths], hero.deaths)
+      vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
+    game.refreshStructures(index)
     discard vm.runtime.run(vm.output)
     inc vm.decisions
     if primary and vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
@@ -1210,6 +1275,8 @@ proc runHeroScript(game: Game, index: int) =
 proc runBotDecisions*(game: Game) {.measure.} =
   ## Runs every VM in seeded cyclic order and advances the first slot.
   activeGame = game
+  if game.structuredBots:
+    game.refreshStructureCounts()
   if game.world.phase == Drafting:
     runHeroScript(game, game.world.heroIndex(game.world.draftHeroId()))
     return
