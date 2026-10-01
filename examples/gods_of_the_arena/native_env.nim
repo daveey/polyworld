@@ -24,6 +24,15 @@ const
     ## points before (level)
   DataRoot = currentSourcePath().parentDir
 
+proc dataRoot(): string =
+  ## The compile-time data directory, or, when the library runs on a machine
+  ## without that tree (a copied .so), $GOTA_GAME/examples/gods_of_the_arena.
+  result = DataRoot
+  if not fileExists(DataRoot / "players/base.bas"):
+    let game = getEnv("GOTA_GAME")
+    if game.len > 0 and fileExists(game / "examples/gods_of_the_arena/players/base.bas"):
+      result = game / "examples/gods_of_the_arena"
+
 type
   SeatSource = enum SourceDefault, SourceScript, SourcePackage
   SeatStatus = object
@@ -478,7 +487,7 @@ proc gota_create(configJson: cstring, error: ptr char, capacity: int32): pointer
             "learner_seats", "script_path", "policy_path", "data_root",
             "record", "capture", "reward", "standing_labels", "replay_path"]:
           raise newException(ValueError, "unknown config key " & key)
-      let root = if node.hasKey("data_root"): node["data_root"].getStr else: DataRoot
+      let root = if node.hasKey("data_root"): node["data_root"].getStr else: dataRoot()
       let env = Env(period: DefaultDecisionPeriod, capture: true, root: root)
       env.config =
         if node.hasKey("config_path"): loadConfig(resolve(root, node["config_path"].getStr))
@@ -909,7 +918,7 @@ proc gota_set_policy_script(handle: pointer, source: cstring, length: int32): ci
   let env = toEnv(handle)
   if env == nil or length < 0 or (length > 0 and source == nil): return -1
   if length == 0:
-    env.policyScript = readFile(DataRoot / "neural/policy.bas")
+    env.policyScript = readFile(dataRoot() / "neural/policy.bas")
     return 0
   var text = newString(length)
   copyMem(addr text[0], source, length)
