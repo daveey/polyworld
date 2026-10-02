@@ -223,7 +223,8 @@ proc computeWalkable*() {.measure.} =
   layerWalkable = newSeq[seq[bool]](layers.len)
   layerNodeOffsets = newSeq[int](layers.len + 1)
   var totalNodes = 0
-  for i, layer in layers:
+  for i in 0 ..< layers.len:
+    let layer {.cursor.} = layers[i]
     layerWalkable[i] = computeWalkable(layer)
     layerNodeOffsets[i] = totalNodes
     totalNodes += layer.tiles.len
@@ -242,7 +243,8 @@ proc computeWalkable*() {.measure.} =
   pathSeen = newSeq[uint32](totalNodes)
   pathGeneration = 0
 
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     for z in 0 ..< layer.depth:
       for x in 0 ..< layer.width:
         let
@@ -384,7 +386,7 @@ proc pickTile*(
     found = false
     hitLayer, hitX, hitZ = 0
   for li in first .. last:
-    let layer = layers[li]
+    let layer {.cursor.} = layers[li]
     if layer.water:
       continue
     for z in 0 ..< layer.depth:
@@ -455,7 +457,7 @@ proc worldPreferLayer*(current, dest, worldX, worldZ: int): int =
 proc computeEdgeLink(layerIndex, x, z, direction: int): EdgeLink =
   ## Computes one uncached walkable connection between tile edges.
   let
-    layer = layers[layerIndex]
+    layer {.cursor.} = layers[layerIndex]
     h = layer.tiles[z * layer.width + x].tops
   var
     myA, myB: int16
@@ -490,7 +492,7 @@ proc computeEdgeLink(layerIndex, x, z, direction: int): EdgeLink =
     if li == layerIndex:
       continue
     let
-      other = layers[li]
+      other {.cursor.} = layers[li]
       lx = worldX - other.originX
       lz = worldZ - other.originZ
     if lx < 0 or lx >= other.width or lz < 0 or lz >= other.depth:
@@ -519,7 +521,8 @@ proc edgeLink*(layerIndex, x, z, direction: int): EdgeLink =
 proc warmEdgeLinks*() =
   ## Fills the whole edge cache so later searches only read it (required
   ## before several threads search the same installed graph).
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     for z in 0 ..< layer.depth:
       for x in 0 ..< layer.width:
         for direction in 0 .. 3:
@@ -565,7 +568,7 @@ proc tileCenter*(layerIndex, x, z: int): Vec3 =
         nodePathZs[index].float32 / PathUnitsPerTile.float32
       )
   let
-    layer = layers[layerIndex]
+    layer {.cursor.} = layers[layerIndex]
     h = layer.tiles[z * layer.width + x].tops.unpack
   vec3(
     (layer.originX + x).float32 - HalfGrid + 0.5,
@@ -580,7 +583,7 @@ proc tileTop*(layerIndex, x, z: int): int32 =
   ## Division floors toward negative infinity so the result is stable for
   ## tiles below y = 0 rather than biased toward zero.
   let
-    layer = layers[layerIndex]
+    layer {.cursor.} = layers[layerIndex]
     tops = layer.tiles[z * layer.width + x].tops
     total = int32(tops[0]) + int32(tops[1]) + int32(tops[2]) + int32(tops[3])
   if total >= 0:
@@ -617,7 +620,7 @@ proc layerHeight(
 ): bool =
   ## Samples one layer's top surface; false when no tile exists there.
   let
-    layer = layers[layerIndex]
+    layer {.cursor.} = layers[layerIndex]
     tileX = int(floor(worldX + HalfGrid)) - layer.originX
     tileZ = int(floor(worldZ + HalfGrid)) - layer.originZ
   if tileX < 0 or tileX >= layer.width or tileZ < 0 or tileZ >= layer.depth:

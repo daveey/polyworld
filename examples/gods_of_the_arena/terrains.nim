@@ -19,7 +19,7 @@ proc readTile(layerIndex, mapX, mapY: int32, tile: var Tile): bool =
     layerIndex < 0 or layerIndex >= layers.len:
       return false
   let
-    layer = layers[int(layerIndex)]
+    layer {.cursor.} = layers[int(layerIndex)]
     x = int(mapX) + mapOrigin() - layer.originX
     y = int(mapY) + mapOrigin() - layer.originZ
   if x < 0 or x >= layer.width or y < 0 or y >= layer.depth:
@@ -49,7 +49,8 @@ proc kindAt(layerIndex, mapX, mapY: int32, tile: Tile): TerrainKind =
     discard
   if tile.impassable:
     # Ground beneath a solid fort is blocked, but an open arch stays a road.
-    for i, layer in layers:
+    for i in 0 ..< layers.len:
+      let layer {.cursor.} = layers[i]
       if i == int(layerIndex) or not layer.slab or layer.water:
         continue
       var cover: Tile
@@ -70,7 +71,8 @@ proc kindAt(layerIndex, mapX, mapY: int32, tile: Tile): TerrainKind =
 proc waterDepth(layerIndex, mapX, mapY: int32, tile: Tile): int32 =
   ## Measures center submergence above this surface, rounding positive depth up.
   let surface = tile.heightSum()
-  for i, layer in layers:
+  for i in 0 ..< layers.len:
+    let layer {.cursor.} = layers[i]
     if not layer.water:
       continue
     var water: Tile
@@ -81,7 +83,8 @@ proc waterDepth(layerIndex, mapX, mapY: int32, tile: Tile): int32 =
     if layers[int(layerIndex)].water:
       # A water-layer query measures the column above its highest solid bed.
       floorHeight = int32.low
-      for j, bed in layers:
+      for j in 0 ..< layers.len:
+        let bed {.cursor.} = layers[j]
         if bed.water:
           continue
         var floor: Tile
@@ -106,7 +109,7 @@ proc terrainValue*(
   of TerrainKindField:
     int32(kindAt(layerIndex, mapX, mapY, tile).ord)
   of TerrainWalkableField:
-    let layer = layers[int(layerIndex)]
+    let layer {.cursor.} = layers[int(layerIndex)]
     int32(isWalkable(
       int(layerIndex),
       int(mapX) + mapOrigin() - layer.originX,

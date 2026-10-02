@@ -156,7 +156,7 @@ proc terrainProc(
     let index = heroIndex(activeGame.world, heroId)
     if index < 0:
       return 0
-    let floor = layers[int(layer)]
+    let floor {.cursor.} = layers[int(layer)]
     int32(activeGame.world.knownWalkable(
       activeGame.world.heroes[index].team,
       int(layer),
@@ -175,17 +175,17 @@ proc campProc(heroId: int32, field: CampField): HostProc =
     case field
     of CampTier: int32(camp.tier)
     of CampX:
-      mapCoordinate(camp.center.x, world.heroById(heroId).team)
+      mapCoordinate(camp.center.x, world.heroTeamById(heroId))
     of CampY:
-      mapCoordinate(camp.center.z, world.heroById(heroId).team)
+      mapCoordinate(camp.center.z, world.heroTeamById(heroId))
 
 proc objectProc(heroId: int32, field: ObjectField): HostProc =
   ## Binds one field to the hero's visibility-filtered object snapshot.
   result = proc(arguments: openArray[int32]): int32 =
     ## Reads a visible object's field without exposing hidden targets.
-    let world = activeGame.world
-    var value: WorldObject
-    if not world.worldObjectAt(heroId, int(arguments[0]), value):
+    let world {.cursor.} = activeGame.world
+    let value = world.worldObjectPtr(heroId, int(arguments[0]))
+    if value == nil:
       return (if field == ObjectCamp: -1 else: 0)
     case field
     of ObjectCamp: int32(value.camp - 1)
@@ -216,13 +216,13 @@ proc objectProc(heroId: int32, field: ObjectField): HostProc =
         WorldScale
       )
     of ObjectTarget:
-      if value.targetId == 0:
+      let targetId = value.targetId
+      if targetId == 0:
         return 0
-      var target: WorldObject
       for i in 0 ..< world.worldObjectCount(heroId):
-        if world.worldObjectAt(heroId, i, target) and
-          target.id == value.targetId:
-            return target.id
+        let target = world.worldObjectPtr(heroId, i)
+        if target != nil and target.id == targetId:
+          return target.id
       0
     of ObjectVelX:
       value.velocity.x
@@ -243,9 +243,9 @@ proc spellProc(heroId: int32, field: SpellField): HostProc =
     of SpellCasterId:
       world.visibleSpellCasterId(heroId, value)
     of SpellX:
-      mapCoordinate(value.position.x, world.heroById(heroId).team)
+      mapCoordinate(value.position.x, world.heroTeamById(heroId))
     of SpellY:
-      mapCoordinate(value.position.z, world.heroById(heroId).team)
+      mapCoordinate(value.position.z, world.heroTeamById(heroId))
     of SpellImpactTick:
       value.impact
 
@@ -498,67 +498,64 @@ proc initHeroHost(heroId: int32): Host =
   let objectIdProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.id
     else:
       0
   let objectKindProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.kind
     else:
       0
   let objectTeamProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      value.faction
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
+      value[].faction
     else:
       0
   let objectClassProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       value.class
     else:
       -1
   let objectXProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      mapCoordinate(value.position.x, activeGame.world.heroById(heroId).team)
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
+      mapCoordinate(value.position.x, activeGame.world.heroTeamById(heroId))
     else:
       0
   let objectYProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
-      mapCoordinate(value.position.z, activeGame.world.heroById(heroId).team)
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
+      mapCoordinate(value.position.z, activeGame.world.heroTeamById(heroId))
     else:
       0
   let objectHpProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    if worldObjectAt(activeGame.world, heroId, int(arguments[0]), value):
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    if value != nil:
       max(value.hp, 0'i32)
     else:
       0
   let objectAliveProc: HostProc = proc(
       arguments: openArray[int32]
   ): int32 =
-    var value: WorldObject
-    int32(
-      worldObjectAt(activeGame.world, heroId, int(arguments[0]), value) and
-        value.alive
-    )
+    let value = worldObjectPtr(activeGame.world, heroId, int(arguments[0]))
+    int32(value != nil and value.alive)
   let walkToProc: NumericHostProc = proc(
       arguments: openArray[Value]
   ): Value =
@@ -994,7 +991,8 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
       max(0'i32, hero.controls[RootControl].ends - game.world.tick))
     vm.runtime.setData(heroDataIds[DataSelfDeaths], hero.deaths)
     vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
-    discard vm.runtime.run(vm.output)
+    perfRegion PrBasicRun:
+      discard vm.runtime.run(vm.output)
     inc vm.decisions
     if primary and vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
       game.runOverride(index, NeuralSeat(vm.neural))
@@ -1043,10 +1041,12 @@ proc runBotDecisions*(game: Game) {.measure.} =
       game.world.thawObservations()
   for vm in game.heroVms:
     if vm != nil and vm.neural != nil:
-      game.neuralPrelude()
+      perfRegion PrNeuralPrelude:
+        game.neuralPrelude()
       break
-  for offset in 0 ..< game.world.heroes.len:
-    let index = (game.world.heroTurnStart + offset) mod game.world.heroes.len
-    runHeroScript(game, index)
+  perfRegion PrDecisions:
+    for offset in 0 ..< game.world.heroes.len:
+      let index = (game.world.heroTurnStart + offset) mod game.world.heroes.len
+      runHeroScript(game, index)
   game.world.heroTurnStart =
     (game.world.heroTurnStart + 1) mod game.world.heroes.len
