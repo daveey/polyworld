@@ -1,7 +1,7 @@
 ## Geometry checks run without a window or graphics driver.
 import std/[math, random, unittest]
 import vmath
-import ../awmcourtyard
+import ../src/scene/courtyard
 
 suite "Old Crossroads battlefield":
   let mesh = buildCourtyardMesh()

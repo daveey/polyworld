@@ -1,6 +1,6 @@
 import
   std/[options, strutils, unittest],
-  ../awm
+  ../src/awm
 
 suite "AWM base set":
   test "the Mage deck is Bouncers and Oozifications, without Oozes":

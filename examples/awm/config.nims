@@ -1,4 +1,4 @@
-import std/os
+import std/[os, strutils]
 
 # POLYWORLD_REPO is the Polyworld repository (the folder with src/).
 # Dependencies are resolved from the nimby workspace (parent of the repo).
@@ -9,13 +9,21 @@ let
   awmDependenciesDir = awmPolyworldRepo.parentDir
 
 switch("path", awmPolyworldRepo / "src")
-for dependency in [
-  "windy", "silky", "bumpy", "chroma", "vmath", "pixie", "jsony", "opengl",
-  "shady", "gltf", "benchy", "noisy", "fluffy", "flatty", "urlly", "metal4",
-  "ws", "dx12", "vk14", "nimsimd", "crunchy", "zippy", "webby"
-]:
-  let d = awmDependenciesDir / dependency
-  switch("path", if dirExists(d / "src"): d / "src" else: d)
+# With POLYWORLD_DEPS the repository's config.nims adds the pinned
+# dependencies (as for the Coworld builds); otherwise use the workspace.
+if getEnv("POLYWORLD_DEPS").len == 0:
+  for dependency in [
+    "windy", "silky", "bumpy", "chroma", "vmath", "pixie", "jsony", "opengl",
+    "shady", "gltf", "benchy", "noisy", "fluffy", "flatty", "urlly", "metal4",
+    "ws", "dx12", "vk14", "nimsimd", "crunchy", "zippy", "webby"
+  ]:
+    let d = awmDependenciesDir / dependency
+    switch("path", if dirExists(d / "src"): d / "src" else: d)
+
+# The sources live in src/, but the game is built into the project folder,
+# next to players/ and web/. An -o on the command line (Coworld) still wins.
+if projectName() == "awm":
+  switch("out", awmProjectDir / "awm")
 
 --define:nimTypeNames
 --define:flatty64
@@ -48,10 +56,28 @@ when defined(emscripten):
     quoteShell(awmWebAssets / "polyworld_art" & "@/polyworld_art"))
   switch("passL", "--preload-file " &
     quoteShell(awmWebAssets / "players" & "@/players"))
-  switch("passL", "--pre-js " &
-    quoteShell(awmPolyworldRepo / "src/polyworld/webinputs.js"))
-  switch("passL", "--pre-js " & quoteShell(awmProjectDir / "web/inputs.js"))
-  switch("passL", "--shell-file " & quoteShell(awmProjectDir / "web/shell.html"))
+  when defined(replayViewer):
+    # The Coworld replay viewer: Polyworld's replay page fetches the episode
+    # and passes --replay itself, so no URL inputs.
+    let replayShell = awmWebDir / "replay-shell.html"
+    writeFile(replayShell,
+      readFile(awmPolyworldRepo / "src/polyworld/replay.html").replace(
+        "<!-- GAME_LOGO -->",
+        "<img id=\"loading-logo\" alt=\"Archers Warriors Mages\" " &
+          "width=\"320\" height=\"240\" src=\"loading-logo.svg\" " &
+          "fetchpriority=\"high\">"))
+    switch("passL", "--shell-file " & quoteShell(replayShell))
+  else:
+    switch("passL", "--pre-js " &
+      quoteShell(awmPolyworldRepo / "src/polyworld/webinputs.js"))
+    switch("passL", "--pre-js " & quoteShell(awmProjectDir / "web/inputs.js"))
+    switch("passL", "--shell-file " &
+      quoteShell(awmProjectDir / "web/shell.html"))
+  # Nim's release -O3 only reaches the compile step. emcc also needs it at
+  # link time, or Binaryen leaves the wasm (and Asyncify's
+  # instrumentation) unoptimized.
+  when not defined(debug):
+    switch("passL", "-O3")
   switch("passL", "-s ASYNCIFY -s FETCH -s USE_WEBGL2=1 " &
     "-s MAX_WEBGL_VERSION=2 -s MIN_WEBGL_VERSION=2 -s FULL_ES3=1 " &
     "-s GL_ENABLE_GET_PROC_ADDRESS=1 -s ALLOW_MEMORY_GROWTH " &

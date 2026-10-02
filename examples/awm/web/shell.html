@@ -3,45 +3,194 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111d30">
   <title>AWM — Archers Warriors Mages</title>
   <link rel="icon" href="data:,">
+  <link rel="preload" href="loading/Grenze-SemiBold.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="loading/awm-logo.svg" as="image">
+  <link rel="preload" href="loading/courtyard-night.svg" as="image">
   <style>
-    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #171c23; color: #f2e1bf; }
+    @font-face { font-family: Grenze; src: url("loading/Grenze-SemiBold.ttf") format("truetype"); font-style: normal; font-weight: 600; font-display: swap; }
+    :root { color-scheme: dark; --ink: #111d30; --parchment: #f1e5c9; --gold: #d6b775; --muted: #adb6c4; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--ink); color: var(--parchment); }
+    body { font: 14px/1.5 system-ui, sans-serif; }
     #canvas { display: block; width: 100%; height: 100%; outline: none; }
-    #loading { position: fixed; inset: 0; display: grid; place-content: center; text-align: center; background: #171c23; font: 16px/1.6 system-ui, sans-serif; }
-    #loading h1 { margin: 0 0 12px; font: 600 48px Georgia, serif; letter-spacing: .12em; }
-    #loading p { margin: 0; white-space: pre-wrap; max-width: min(600px, 85vw); }
-    #game-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    #loading.error { background: #271b1b; }
+    #game-status, .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    #loading { position: fixed; z-index: 1; inset: 0; overflow-y: auto; display: flex; isolation: isolate; padding: 48px 24px 72px; background: #111d30; opacity: 1; transition: opacity .35s ease; }
+    #loading::before { content: ""; position: fixed; pointer-events: none; z-index: -1; inset: 0; background: radial-gradient(ellipse at 50% 42%, #0b172400 12%, #0b142338 66%, #080e1a8c 100%), linear-gradient(#111d3015, #0d192535); }
+    #loading::after { content: ""; position: fixed; pointer-events: none; inset: 18px; border: 1px solid #d6b77524; clip-path: polygon(0 0, 30% 0, 30% 1px, 70% 1px, 70% 0, 100% 0, 100% 100%, 70% 100%, 70% calc(100% - 1px), 30% calc(100% - 1px), 30% 100%, 0 100%); }
+    #loading[hidden] { display: none; }
+    #loading.ready { opacity: 0; pointer-events: none; }
+    .loading-background { position: fixed; z-index: -2; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center bottom; pointer-events: none; }
+    .loading-content { width: min(100%, 660px); margin: auto; text-align: center; }
+    h1 { margin: 0; }
+    .game-logo { display: block; width: min(100%, 530px); height: auto; margin: 0 auto; filter: drop-shadow(0 9px 22px #050c1799); }
+    .game-name { display: flex; align-items: center; justify-content: center; gap: .35em; margin: -1px 0 0; color: var(--parchment); font: 600 clamp(22px, 2.7vw, 31px)/1.3 Grenze, Georgia, serif; letter-spacing: .045em; text-shadow: 0 2px 7px #08121d; }
+    .game-name .class-name { white-space: nowrap; }
+    .game-name .separator { color: #a78c5a; font: 7px Georgia, serif; }
+    .divider { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 21px 0 0; color: var(--gold); font-size: 8px; }
+    .divider::before, .divider::after { content: ""; width: 76px; height: 1px; background: linear-gradient(90deg, transparent, #c8a46980); }
+    .divider::after { transform: rotate(180deg); }
+    .loading-footer { width: min(100%, 376px); margin: 39px auto 0; }
+    .loading-message { display: flex; min-height: 24px; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: var(--parchment); font-size: 12px; letter-spacing: .04em; text-shadow: 0 1px 4px #071321; }
+    #status { margin: 0; text-align: left; }
+    #progress-value { flex-shrink: 0; color: var(--gold); font-variant-numeric: tabular-nums; }
+    .progress-frame { position: relative; padding: 4px; border: 1px solid #a98b53; background: #0b1420; box-shadow: inset 0 0 0 1px #050c14, 0 4px 18px #0005; }
+    .progress-frame::before, .progress-frame::after { content: ""; position: absolute; z-index: 1; top: 50%; width: 7px; height: 7px; border: 1px solid #e5c88c; background: #79613a; transform: translateY(-50%) rotate(45deg); }
+    .progress-frame::before { left: -5px; }
+    .progress-frame::after { right: -5px; }
+    #progress { height: 9px; overflow: hidden; background: #233040; }
+    #progress-fill { width: 0; height: 100%; background: linear-gradient(0deg, #a98145, #e9ca87 49%, #f7dfac 50%, #c7a162 100%); box-shadow: 0 0 12px #e3bb7366; transition: width .25s ease; }
+    #progress.indeterminate #progress-fill { width: 32%; animation: kindle 2.2s ease-in-out infinite; }
+    .loading-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+    #error-details { margin: 12px 0; color: #e2b6a8; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; }
+    #retry { margin-top: 4px; padding: 9px 24px; border: 1px solid var(--gold); background: #342c20; color: var(--parchment); font: inherit; cursor: pointer; }
+    #retry:hover, #retry:focus-visible { background: #51412a; outline: 2px solid var(--parchment); outline-offset: 3px; }
+    #loading.error .progress-frame { display: none; }
+    #loading.error #status { color: #edc0b1; }
+    @keyframes kindle { 0% { transform: translateX(-110%); } 50% { transform: translateX(105%); } 100% { transform: translateX(325%); } }
+    @media (max-width: 600px) {
+      #loading { padding: 28px 24px 70px; }
+      #loading::after { inset: 10px; }
+      .game-logo { width: min(114%, 450px); max-width: none; margin-left: 50%; transform: translateX(-50%); }
+      .game-name { font-size: clamp(19px, 5.2vw, 28px); letter-spacing: .015em; gap: .30em; }
+      .game-name .separator { font-size: 5px; }
+      .divider { margin-top: 20px; }
+      .loading-footer { width: min(90%, 360px); margin-top: 34px; }
+      .loading-message { font-size: 11px; letter-spacing: .01em; }
+    }
+    @media (max-height: 560px) and (min-width: 601px) {
+      #loading { padding: 20px 24px 30px; }
+      .loading-background { object-position: center top; }
+      .game-logo { width: 350px; }
+      .game-name { font-size: 24px; }
+      .divider { margin-top: 12px; }
+      .loading-footer { margin-top: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #loading, #progress-fill { transition: none; }
+      #progress.indeterminate #progress-fill { animation: none; width: 100%; opacity: .35; }
+    }
   </style>
 </head>
 <body>
   <canvas id="canvas" tabindex="0" aria-label="AWM game" oncontextmenu="event.preventDefault()"></canvas>
   <p id="game-status" role="status" aria-live="polite"></p>
-  <div id="loading" role="status"><h1>AWM</h1><p id="status">Loading Archers Warriors Mages…</p></div>
+  <main id="loading" aria-labelledby="game-title" aria-busy="true">
+    <img class="loading-background" src="loading/courtyard-night.svg" alt="" aria-hidden="true" fetchpriority="high">
+    <div class="loading-content">
+      <header>
+        <h1 id="game-title"><img class="game-logo" src="loading/awm-logo.svg" alt="AWM" width="600" height="292" fetchpriority="high"></h1>
+        <p class="game-name"><span class="class-name">Archers</span> <span class="separator" aria-hidden="true">◆</span> <span class="class-name">Warriors</span> <span class="separator" aria-hidden="true">◆</span> <span class="class-name">Mages</span></p>
+        <div class="divider" aria-hidden="true">◆</div>
+      </header>
+      <div class="loading-footer">
+        <div class="loading-message"><p id="status" role="status" aria-live="polite">Gathering your cards…</p><span id="progress-value" aria-hidden="true"></span></div>
+        <div class="progress-frame"><div id="progress" class="indeterminate" role="progressbar" aria-label="Loading game assets" aria-valuemin="0" aria-valuemax="100"><div id="progress-fill"></div></div></div>
+        <p id="loading-note" class="loading-note" hidden></p>
+        <p id="error-details" hidden></p>
+        <button id="retry" type="button" hidden>Try again</button>
+        <noscript><p>Enable JavaScript to play Archers Warriors Mages.</p></noscript>
+      </div>
+    </div>
+  </main>
   <script>
     var canvas = document.getElementById("canvas");
+    var gameStatus = document.getElementById("game-status");
     var loading = document.getElementById("loading");
     var statusText = document.getElementById("status");
-    function reportError(message) {
-      loading.hidden = false;
-      loading.style.display = "grid";
-      loading.classList.add("error");
-      statusText.textContent = "AWM could not start.\n" + message;
+    var progress = document.getElementById("progress");
+    var progressFill = document.getElementById("progress-fill");
+    var progressValue = document.getElementById("progress-value");
+    var loadingNote = document.getElementById("loading-note");
+    var errorDetails = document.getElementById("error-details");
+    var retry = document.getElementById("retry");
+    var loadingFailed = false;
+    var loadingComplete = false;
+    var runtimeInitialized = false;
+    function setProgress(current, total) {
+      var known = Number.isFinite(current) && Number.isFinite(total) && total > 0;
+      progress.classList.toggle("indeterminate", !known);
+      if (known) {
+        var percent = Math.max(0, Math.min(100, Math.floor(current / total * 100)));
+        progressFill.style.width = percent + "%";
+        progressValue.textContent = percent + "%";
+        progress.setAttribute("aria-valuenow", percent);
+      } else {
+        progressFill.style.width = "";
+        progressValue.textContent = "";
+        progress.removeAttribute("aria-valuenow");
+      }
     }
+    function reportError(message) {
+      loadingFailed = true;
+      readyObserver.disconnect();
+      loading.hidden = false;
+      loading.classList.remove("ready");
+      loading.classList.add("error");
+      loading.setAttribute("aria-busy", "false");
+      statusText.textContent = "Your battle could not begin.";
+      progressValue.textContent = "";
+      loadingNote.hidden = false;
+      loadingNote.textContent = "Try again to return to the battlefield.";
+      errorDetails.hidden = false;
+      errorDetails.textContent = String(message);
+      retry.hidden = false;
+    }
+    // The runtime starts before the game builds its atlas and scene. The first
+    // published game status means its first frame is ready to reveal.
+    function revealGame() {
+      if (!runtimeInitialized || loadingFailed || loadingComplete || !gameStatus.textContent.trim()) return;
+      loadingComplete = true;
+      readyObserver.disconnect();
+      statusText.textContent = "The battlefield awaits.";
+      setProgress(1, 1);
+      loading.setAttribute("aria-busy", "false");
+      loading.classList.add("ready");
+      window.setTimeout(function () {
+        if (loadingFailed) return;
+        loading.hidden = true;
+        canvas.focus();
+      }, 350);
+    }
+    var readyObserver = new MutationObserver(revealGame);
+    readyObserver.observe(gameStatus, { childList: true, characterData: true, subtree: true });
+    retry.addEventListener("click", function () { window.location.reload(); });
     canvas.addEventListener("webglcontextlost", function (event) {
       event.preventDefault();
       reportError("The graphics context was lost. Reload the page to reconnect.");
     });
     var Module = {
       preRun: [], postRun: [], canvas: canvas,
-      setStatus: function (text) { if (text) statusText.textContent = text; },
+      setStatus: function (text) {
+        if (loadingFailed || loadingComplete) return;
+        var download = String(text).match(/\(([\d.]+)\s*\/\s*([\d.]+)\)/);
+        if (download) {
+          statusText.textContent = "Gathering your cards…";
+          progress.setAttribute("aria-label", "Downloading game assets");
+          setProgress(Number(download[1]), Number(download[2]));
+        } else {
+          statusText.textContent = text && /download/i.test(text) ? "Gathering your cards…" : "Preparing the battlefield…";
+          progress.setAttribute("aria-label", "Preparing the game");
+          setProgress();
+        }
+      },
       monitorRunDependencies: function (left) {
-        statusText.textContent = left ? "Loading game assets…" : "Preparing the game…";
+        if (loadingFailed || loadingComplete) return;
+        if (!left) {
+          statusText.textContent = "Preparing the battlefield…";
+          progress.setAttribute("aria-label", "Preparing the game");
+          setProgress();
+        }
       },
       onRuntimeInitialized: function () {
-        loading.style.display = "none";
-        canvas.focus();
+        if (loadingFailed) return;
+        runtimeInitialized = true;
+        statusText.textContent = "Preparing the battlefield…";
+        progress.setAttribute("aria-label", "Preparing the game");
+        setProgress();
+        revealGame();
       },
       onAbort: function (reason) { reportError(String(reason)); },
       printErr: function (text) {
@@ -49,7 +198,13 @@
         if (String(text).includes("unhandled exception:") || String(text).includes("Aborted(")) reportError(String(text));
       }
     };
-    window.addEventListener("error", function (event) { reportError(event.message || "See the browser console for details."); });
+    window.addEventListener("error", function (event) {
+      if (event.target && event.target.tagName === "SCRIPT") {
+        reportError("The game could not be downloaded. Check your connection and try again.");
+      } else if (event.message) {
+        reportError(event.message);
+      }
+    }, true);
     window.addEventListener("unhandledrejection", function (event) { reportError(String(event.reason)); });
   </script>
   {{{ SCRIPT }}}

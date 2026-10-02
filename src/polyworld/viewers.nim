@@ -20,6 +20,26 @@ type Splash* = object
   startedAt*: float64
   name*: string
 
+when defined(emscripten):
+  # Hidden tabs never fire requestAnimationFrame, so the timeout keeps
+  # networked and bot games ticking in the background.
+  {.emit: """
+  EM_ASYNC_JS(void, polyworldWaitForDisplay, (), {
+    await new Promise(function(resolve) {
+      requestAnimationFrame(resolve);
+      setTimeout(resolve, 100);
+    });
+  });
+  """.}
+  proc polyworldWaitForDisplay() {.importc, nodecl.}
+
+proc waitForDisplay*() =
+  ## Paces a browser game loop to the display's refresh. windy's pollEvents
+  ## only yields a setTimeout(0), so without this the game renders frames
+  ## the browser never shows and stalls when the GPU queue fills up.
+  when defined(emscripten):
+    polyworldWaitForDisplay()
+
 type ViewingClock* = object
   last: float64
   hidden: bool

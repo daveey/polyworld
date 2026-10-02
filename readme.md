@@ -26,6 +26,11 @@ Seeded maps, saved configurations, and action replays make runs reproducible.
 Native and browser replay viewers let you inspect decisions, pause playback,
 and compare strategies.
 
+Game integrations start hosts with [`initPolicyHost`](src/polyworld/policyhosts.nim),
+then register game observations and actions. Schema hosts omit the seat; runtime
+hosts pass their policy slot. This keeps [optional annotations](coworld/integration.md#policy-annotations)
+and future shared policy capabilities consistent across native and browser games.
+
 ## Run locally
 
 Use Nim 2.2.10 or newer with the dependencies in

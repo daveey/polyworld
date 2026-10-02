@@ -5,9 +5,9 @@ Coworld builds. Desktop, ordinary headless, and WASM builds do not import Mummy.
 `-d:emscripten -d:replayViewer` selects the static replay bootstrap and enables
 looping. Each game retains its simulation, BASIC resource limits and early endings.
 
-The packages are `coworld/gota`, `coworld/lvd`, and `coworld/cta`. Each contains a
-manifest template, Compose definition, unchanged BASIC baseline, game guide and
-executable viewer build hook. Generated packages and test outputs are ignored.
+The packages are `coworld/gota`, `coworld/lvd`, `coworld/cta`, and `coworld/awm`.
+Each contains a manifest template, Compose definition, unchanged BASIC baseline,
+game guide and executable viewer build hook. Generated packages and test outputs are ignored.
 
 ## Build
 
@@ -22,6 +22,7 @@ export POLYWORLD_DEPS="$PWD/tmp/coworld/deps"
 coworld build --project coworld/gota --version 2026.9.9.3
 coworld build --project coworld/lvd --version 2026.9.9.3
 coworld build --project coworld/cta --version 2026.9.9.3
+coworld build --project coworld/awm --version VERSION
 ```
 
 `nimby.lock` pins ordinary dependencies. `coworld/dependencies.lock` pins the same
@@ -41,7 +42,8 @@ The runner supplies local `file://` URIs through `COGAME_CONFIG_URI`,
 `COGAME_PLAYER_SEATS_URI`, `COGAME_RESULTS_URI`, `COGAME_SAVE_REPLAY_URI`, and
 `COGAME_PLAYER_FAILURE_URI`. Configurations require matching tokens and players
 arrays. GotA has ten seats, CTA has four, and LvD supports variable rosters with
-six-player FFA in Competition. Staged policy filenames may have no extension.
+six-player FFA in Competition. AWM takes two to seven seats: two play a duel,
+more a free-for-all; its turn-based tick is one game action. Staged policy filenames may have no extension.
 Raw BASIC source is read with bounded reads and compiled with the game limits.
 
 Every seat log is created before compilation. PRINT and BASIC diagnostics stay in
@@ -56,14 +58,78 @@ status message and exact Ping/Pong. Gameplay uses files. `/healthz` is live;
 `/client/global` and other legacy clients show a static page. Unimplemented routes
 return HTTP 501. No player artifact ZIP is produced.
 
+## Policy annotations
+
+All Polyworld policy hosts register the same annotation API through
+`polyworld/policyhosts.initPolicyHost`. Game builders add their game-specific
+functions to that host. Schema hosts omit the seat; live hosts supply their policy
+slot. Annotation registration is independent of the LLM client and Bassy is unchanged.
+
+```basic
+status = ANNOTATE(123, "intent", "selectTarget", "{""target"":7}")
+if status <> 0 then print ANNOTATE_ERROR$()
+```
+
+`time` is an integer in the game's replay time convention. `kind` describes the
+purpose, `function` names the operation, and `args` must encode a JSON object.
+The policy cannot select a seat or filesystem path. Coworld binds its optional
+`annotations_uri` to each seat. Desktop and WASM hosts expose the same functions
+and return disabled when there is no destination; they do not save files yet.
+This includes GoTA, Light vs Dark, Call to Adventure, AWM and Heartleaf hosts.
+Heartleaf does not yet have a Coworld output integration.
+
+`ANNOTATE` returns a status instead of raising a BASIC error.
+`ANNOTATE_ERROR$()` explains the most recent call:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Written to the buffered file (not yet guaranteed durable) |
+| 1 | No destination; disabled |
+| 2 | Invalid arguments or JSON object |
+| 3 | Event exceeds 2 KiB |
+| 4 | Seat exceeds 1000 annotations or 2 MiB per episode |
+| 5 | Output write failed |
+
+Limits include serialized JSON and the trailing newline. Kind and function are
+limited to 128 and 256 bytes; JSON nesting is limited to 64 levels and numbers must
+be finite. These errors reject the event without disabling the VM. Calls still
+consume the VM's normal instruction/work budget, like other host functions.
+
+Each seat has one lazily opened, buffered file handle, like PRINT. Calls append
+records synchronously and in order. There is no background worker or shared queue,
+so one seat cannot exhaust queue capacity for another seat.
+
+Existing player-output cleanup flushes and closes the files before the completion
+marker. Write errors return a status; cleanup errors are summarized in the policy
+log. Buffer flushes can block on storage, just as PRINT can. Accepted records are
+not guaranteed durable before flushing; abrupt termination can lose buffered data.
+No new platform finalization phase is introduced.
+
+No calls means no file. Accepted events produce UTF-8 JSON Lines:
+
+```json
+{"schema_version":1,"time":123,"kind":"intent","function":"selectTarget","args":{"target":7}}
+```
+
+The platform validates each file before upload and reports rejection in the policy
+log. Annotations never enter PRINT logs or the replay. Existing output collection
+uploads the files after the episode.
+
 ## Verification
+
+`nim r tests/test_annotations.nim` checks the portable API, seat isolation, limits,
+nonfatal input and storage errors, and ordered output from multi-seat bursts.
+The same test with `-d:coworld` covers hosted registration; file output also runs
+under Emscripten without threads. It is included in the normal CI suite.
 
 `nim r coworld/tools/verify_native.nim` checks all desktop, headless and Coworld
 entrypoints, recording regression tests, and full replay verification. First record
 full matches into `tmp/coworld/{gota,lvd,cta}.replay` with the headless binaries and
 `--record PATH`. Run `nim r coworld/tools/test_runtime.nim` from the repository root.
+Pass a game name, such as `awm`, to check only that game.
 It uses the binaries in `tmp/coworld` to check
-extensionless and empty sources, slot-specific print output, compilation failure,
+extensionless and empty sources, slot-specific print and annotation output, optional
+annotation destinations, compilation failure,
 disabled VMs, health/Ping/Pong, completion ordering and the 10 MiB log bound.
 
 `nim r coworld/tools/test_tools.nim` checks concurrent build subprocesses,
@@ -81,14 +147,16 @@ for the most banked gold receive 1; every other hero receives 0. Light vs Dark
 also emits binary scores. GotA emits Emmett's Glory: lifetime XP per elapsed
 minute for the winning team, rounded down to integers, and zero for losses,
 draws, or timeouts, in zero-based platform slot order.
-GotA uses random pairings and averages scores within each round, then updates
-standings with 15% of the new round average and 85% of the previous standing.
+GotA standings use team win/loss Elo MMR, starting at 1,500 with K=32 and
+no score-margin scaling. Emmett's Glory remains in game results for analysis.
 Its league scheduler must preserve `strategy: "team_n"`, `team_count: 2`,
-`team_layout: "blocks"`, `matchmaking: "random"`, and
+`team_layout: "blocks"`, `matchmaking: "elo_softmax"`,
+`matchmaking_temperature: 100`, and
 `distinct_teammates: true`. With ten eligible policies, each controls one hero
 in a mixed five-versus-five match. Omitting `distinct_teammates` instead clones
 one policy across each team's five seats. Keep this league setting intact
-when publishing releases or changing scoring.
+when publishing releases or changing scoring. The Competition variant uses
+`draft_mode: "open"`, allowing any hero to be picked multiple times.
 
 ## Release acceptance
 

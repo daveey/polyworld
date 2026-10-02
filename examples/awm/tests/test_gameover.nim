@@ -1,4 +1,4 @@
-import ../awmsim
+import ../src/core/sim
 
 var game = newGame(Archer, Archer, 20260910)
 echo "starting life p0: ", game.players[0].life

@@ -11,7 +11,7 @@
     args.push("--human", "true");
   }
 
-  ["class", "opponent", "seed"].forEach(
+  ["class", "opponent", "players"].forEach(
     function addValue(name) {
       parameters.getAll(name).forEach(function (value) {
         args.push("--" + name, value);

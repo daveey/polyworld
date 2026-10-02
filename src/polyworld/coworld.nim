@@ -2,7 +2,7 @@ import
   std/[os, posix, strutils, times, uri],
   jsony, mummy,
   bassy,
-  cli, policies
+  annotations, cli, policies
 
 const
   PlayerLogLimit* = 10 * 1024 * 1024
@@ -18,7 +18,7 @@ type
     slot*: int
     fileUri*, contentHash*: string
     sizeBytes*: int64
-    logUri*, artifactUri*: string
+    logUri*, artifactUri*, annotationsUri*: string
   CoworldSeats* = object
     schema*: string
     seats*: seq[CoworldSeat]
@@ -55,6 +55,7 @@ var
   seats*: CoworldSeats
   config*: GameConfig
   logs: seq[PlayerLog]
+  annotationSinks: seq[AnnotationSink]
   server: Server
   serverThread: Thread[ServerAddress]
   resultsPath, replayPath, failurePath: string
@@ -172,8 +173,12 @@ proc playerError*(slot: int, message: string) =
   logs[slot].failed = true
   playerLog(slot, "\nBASIC error: " & message & "\n")
 
-proc closePlayerLogs*() =
-  ## Flushes and closes all seat logs before publishing episode completion.
+proc closePlayerOutputs*() =
+  ## Flushes and closes private outputs before episode completion.
+  for slot, sink in annotationSinks:
+    if sink.close() == AnnotationWriteFailed:
+      playerLog(slot, "\n[Annotations: " & AnnotationWriteFailed.annotationMessage & ".]\n")
+  annotationSinks.setLen(0)
   for log in logs.mitems:
     if log.file != nil:
       try:
@@ -199,13 +204,12 @@ proc writePlayerStatus() =
 
 proc waitForCollection*() =
   ## Keeps health and contract stubs alive until the runner stops the process.
-  when not defined(fastXpWorker):
-    joinThread(serverThread)
+  joinThread(serverThread)
 
 proc rejectPlayer(slot: int, message: string) {.noreturn.} =
   ## Reports package and compilation failures through the same seat boundary.
   playerError(slot, message)
-  closePlayerLogs()
+  closePlayerOutputs()
   writePlayerStatus()
   writeAtomic(failurePath, PlayerFailure(
     message: "Policy loading failed for player slot " & $slot,
@@ -220,6 +224,11 @@ proc loadPlayerPolicy*(bytes: string, slot: int): Policy =
     result = loadPolicy(bytes)
   except PolicyError as error:
     rejectPlayer(slot, error.msg)
+
+proc playerAnnotations*(slot: int): AnnotationSink =
+  ## Returns only the seat's existing destination; schema/local hosts have none.
+  if slot >= 0 and slot < annotationSinks.len:
+    result = annotationSinks[slot]
 
 proc compilePlayer*(
     source: string,
@@ -281,7 +290,7 @@ proc coworldOptions*(requiredSlots: int): GameOptions =
       "Invalid Coworld configuration: " & error.msg)
   let slotCount =
     if requiredSlots > 0: requiredSlots else: config.players.len
-  if slotCount < 1 or seats.schema != "coworld-player-seats/1" or
+  if slotCount < 1 or seats.schema notin ["coworld-player-seats/1", "coworld-player-seats/2"] or
     seats.seats.len != slotCount or tokens.tokens.len != slotCount or
     config.players.len != slotCount:
       raise newException(CoworldError, "Coworld roster does not match the game")
@@ -313,25 +322,28 @@ proc coworldOptions*(requiredSlots: int): GameOptions =
       createDir(logPath.parentDir)
       logs[slot].file = open(logPath, fmWrite)
     except IOError, OSError:
-      closePlayerLogs()
+      closePlayerOutputs()
       raise newException(CoworldError,
         "Cannot open player files: " & getCurrentExceptionMsg())
     result.botGroups.add BotGroup(path: path, count: 1)
     playerLog(slot, "Player slot " & $slot & " started.\n")
-  when not defined(fastXpWorker):
-    var port: int
-    try:
-      port = parseInt(getEnv("COGAME_PORT", "8080"))
-    except ValueError:
-      raise newException(CoworldError, "COGAME_PORT must be an integer")
-    if port < 1 or port > 65535:
-      raise newException(CoworldError, "COGAME_PORT is out of range")
-    server = newServer(requestHandler, websocketHandler, workerThreads = 2)
-    createThread(serverThread, serve, ServerAddress(
-      server: server,
-      host: getEnv("COGAME_HOST", "0.0.0.0"),
-      port: Port(port)
-    ))
+  annotationSinks = newSeq[AnnotationSink](slotCount)
+  for slot, seat in seats.seats:
+    if seat.annotationsUri.len > 0:
+      annotationSinks[slot] = newAnnotationSink(localPath(seat.annotationsUri))
+  var port: int
+  try:
+    port = parseInt(getEnv("COGAME_PORT", "8080"))
+  except ValueError:
+    raise newException(CoworldError, "COGAME_PORT must be an integer")
+  if port < 1 or port > 65535:
+    raise newException(CoworldError, "COGAME_PORT is out of range")
+  server = newServer(requestHandler, websocketHandler, workerThreads = 2)
+  createThread(serverThread, serve, ServerAddress(
+    server: server,
+    host: getEnv("COGAME_HOST", "0.0.0.0"),
+    port: Port(port)
+  ))
 
 proc completedSignal(signal: cint) {.noconv.} =
   ## Exits successfully when the runner terminates a completed episode.
@@ -345,7 +357,7 @@ proc finishCoworld*(results: CoworldResults, totalXp: seq[int] = @[]) =
     raise newException(CoworldError, "XP results do not match the roster")
   for slot in 0 ..< logs.len:
     playerLog(slot, "\nPlayer slot " & $slot & " completed.\n")
-  closePlayerLogs()
+  closePlayerOutputs()
   writePlayerStatus()
   echo "Coworld episode completed after ", results.ticks, " ticks."
   try:

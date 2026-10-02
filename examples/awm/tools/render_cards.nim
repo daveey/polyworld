@@ -3,7 +3,7 @@
 ## nim c -r --out:/tmp/awm-render-cards tools/render_cards.nim
 import std/[os, strutils]
 import pixie
-import ../[awmcore, baseset, cardfaces, paths]
+import ../src/core/core, ../src/core/baseset, ../src/ui/cardfaces, ../src/paths
 
 let
   root = artworkRoot() / "cards"

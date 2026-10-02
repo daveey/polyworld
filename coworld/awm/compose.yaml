@@ -1,0 +1,10 @@
+services:
+  game:
+    image: polyworld-awm-coworld:latest
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: coworld/Dockerfile
+      args:
+        GAME: awm
+        ENTRY: src/awm

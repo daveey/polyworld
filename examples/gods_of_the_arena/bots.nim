@@ -4,7 +4,7 @@
 import
   std/[math, strutils],
   bassy, fixxy,
-  polyworld/[llms, mailboxes, metrics, bodies, cli, controllers,
+  polyworld/[policyhosts, llms, mailboxes, metrics, bodies, cli, controllers,
     pathing, profiles, tapes],
   neural/[common, richard, david, andre, fly],
   content,
@@ -546,10 +546,11 @@ proc finishStructuredAction(heroId: int32, accepted: bool) =
 proc initHeroHost(
     heroId: int32,
     policy: Policy = nil,
-    llm: LlmClient = nil
+    llm: LlmClient = nil,
+    policySlot = -1
 ): Host =
   ## Builds the bounded world-query and action interface for one hero.
-  result = initHost()
+  result = initPolicyHost(policySlot)
   let services = if llm == nil: newLlmClient(0, LlmConfig()) else: llm
   services.addFunctions(result)
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
@@ -1145,7 +1146,7 @@ proc loadBots*(
       legacyHeroData: not structured or program.usesHeroData(),
       runtime: initRuntime(
         program,
-        initHeroHost(game.world.heroes[i].id, policy, llm),
+        initHeroHost(game.world.heroes[i].id, policy, llm, i),
         limits
       ),
       limits: limits,

@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-01",
+  "version": "2026.10.1.2",
+  "source_commit": "0b310327cd82314f0591e47f313bccd5c4554f09",
+  "source_tree": "140515e05e023bfbb4626bb3dc44069fbef44f75",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+  "manifest_hash": "sha256:0065ad73242d6577154158e1303414d649d25b3f84c947fc615f1a9c1c02904d",
+  "canonical": true,
+  "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+  "league_url": "https://softmax.com/archers-warriors-mages",
+  "watch_url": "https://softmax.com/archers-warriors-mages?e=80650a22-ab79-4663-b41b-619783e0ac1b",
+  "changes": [
+    "Reset all avatar death and presentation state when rewinding or looping.",
+    "Render living avatars alive even if a previous death timestamp remains.",
+    "Preserve seek destinations and recorded attack damage during seeks.",
+    "Keep player-panel glow at normal speed and play one game by default."
+  ],
+  "local_certification": {
+    "steps_passed": 10,
+    "native_replay_verified": true
+  },
+  "hosted_certification": {
+    "state": "certified",
+    "contract_version": "main-434b6fc3c7b7",
+    "steps": [
+      {
+        "id": "matriculate",
+        "status": "pass"
+      },
+      {
+        "id": "source-resolves",
+        "status": "pass"
+      },
+      {
+        "id": "images-reachable",
+        "status": "pass"
+      },
+      {
+        "id": "fixture-conforms",
+        "status": "pass"
+      },
+      {
+        "id": "smoke-episode",
+        "status": "pass"
+      },
+      {
+        "id": "results-conform",
+        "status": "pass"
+      },
+      {
+        "id": "replay-present",
+        "status": "pass"
+      },
+      {
+        "id": "replay-loadable",
+        "status": "pass"
+      },
+      {
+        "id": "players-run",
+        "status": "pass"
+      },
+      {
+        "id": "supporting-roles",
+        "status": "pass"
+      }
+    ]
+  },
+  "hosted_smoke": [
+    {
+      "id": "ereq_2b035d1a-76cb-4700-8fc7-8ee214077963",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_b6a12966-cc79-4745-bef2-5b88f8c82ebc",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_cab8adf5-61f1-423e-97b1-0a21f22f46d4",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_d281dd75-20d2-448e-8b93-efbd4cc6344b",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_f140b2fe-c1f4-41ec-b246-670d8c7e760b",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "forced_round": {
+    "id": "round_7cd7cab6-a440-407c-b5db-892fbf0c51ba",
+    "round_number": 13,
+    "status": "completed",
+    "trigger": {
+      "kind": "platform",
+      "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+      "workflow_id": "ladder-league_ad6dc809-4696-46f5-99a5-fc2b1c58d082"
+    },
+    "episodes": [
+      {
+        "episode_request_id": "ereq_ff8914bc-4136-42b9-804d-9b77d307326c",
+        "episode_id": "80650a22-ab79-4663-b41b-619783e0ac1b",
+        "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 157,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_a3243e4f-d130-4921-9c7f-834fc916c608",
+        "episode_id": "a509514d-55e9-4ad0-9658-28ec8338a528",
+        "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 104,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_7a8a77a9-4b20-4520-8e89-4926b6b1229d",
+        "episode_id": "717ec0e0-5bfa-4fde-9154-cc53863ee629",
+        "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 167,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_19e2daa9-c477-415c-8b68-9f26dc69b49a",
+        "episode_id": "86601121-fd7f-426b-8fa9-1fac1aa9382f",
+        "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+        "scores": [
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "ticks": 132,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_37efb035-388f-4e86-bfca-f564c9946c7d",
+        "episode_id": "d4352147-8618-46fd-992d-4bdf2c53da6a",
+        "coworld_id": "cow_a8499615-b37a-4b92-84c5-a81acf8ed5d4",
+        "scores": [
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 154,
+        "status": "completed"
+      }
+    ]
+  },
+  "league_settings_preserved": {
+    "round_interval_minutes": 15,
+    "scheduler": "random_fill",
+    "num_episodes": 5
+  },
+  "replay_verification": {
+    "native_replay_verified": true,
+    "replay_sha256": "a215b499c1555d61f5d5d3208173d7697b3e5283df49e19225e8ac05d15aa493",
+    "viewer_assets": {
+      "js": {
+        "bytes": 294784,
+        "sha256": "cb9db23bf787ee97bc6f529dd01729306929e45423865b67bea4c94fce9e3ef6"
+      },
+      "wasm": {
+        "bytes": 4439295,
+        "sha256": "e390aacac57f1e8be995f16535045ea41e37ec9f08ea6ac340e40227dee9a151"
+      },
+      "data": {
+        "bytes": 64732179,
+        "sha256": "f7d0cea1193788a8f406e019c37f4587f67f427ae21391145d1e5d92fc6b4416"
+      }
+    }
+  },
+  "browser_verification": {
+    "watch_url": "https://softmax.com/archers-warriors-mages?e=80650a22-ab79-4663-b41b-619783e0ac1b",
+    "public_page_verified": true,
+    "round_number": 13,
+    "episode_number": 1,
+    "rendered": true,
+    "observed_tick": 14,
+    "total_ticks": 157,
+    "browser_errors": [],
+    "viewer_bundle": "sha256:6a541c8a7d4e8a96a298606d677cb767f79c2a3bee7ce88e8fbb2e23bced33c9"
+  },
+  "recorded_at": "2026-10-01T20:53:35.914516+00:00"
+}

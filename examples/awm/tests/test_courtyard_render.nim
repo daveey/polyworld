@@ -2,7 +2,8 @@
 ## nim r --out:build/test_courtyard_render tests/test_courtyard_render.nim
 import std/[math, os]
 import opengl, pixie, vmath, windy
-import ../[awmcourtyard, awmpost, paths]
+# `post` names the post-processor below, so the module goes by another name.
+import ../src/scene/courtyard, ../src/scene/post as postfx, ../src/paths
 
 const Width = 640
 const Height = 400

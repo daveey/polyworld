@@ -2325,6 +2325,7 @@ proc runGraphics*() =
 
   while not window.closeRequested:
     pollEvents()
+    waitForDisplay()
 
   if not run.replayMode:
     saveRecording()

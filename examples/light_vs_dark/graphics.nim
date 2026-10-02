@@ -1587,6 +1587,7 @@ proc runGraphics*() =
 
   while not window.closeRequested:
     pollEvents()
+    waitForDisplay()
   saveRecording()
   clickMarks.closeClickMarks()
   worldShapes.closeShapeRenderer()

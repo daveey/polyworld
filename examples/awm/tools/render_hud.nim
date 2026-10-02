@@ -2,21 +2,9 @@
 ## nim c -r --out:build/render-hud tools/render_hud.nim
 import std/[math, os, strformat, tables]
 import chroma, opengl, pixie, silky, vmath, windy
-import ../[awmsim, paths]
+import ../src/core/sim, ../src/paths, ../src/ui/hud
 import polyworld/[assets, chrome, viewers]
 
-const
-  PlayerPanelWidth = 680'f32
-  PlayerPanelHeight = 140'f32
-type UiRect = object
-  origin, size: Vec2
-proc contains(rect: UiRect, point: Vec2): bool =
-  point.x >= rect.origin.x and point.y >= rect.origin.y and
-    point.x <= rect.origin.x + rect.size.x and point.y <= rect.origin.y + rect.size.y
-proc hudScale(window: Window): float32 =
-  min(1'f32, min(window.size.x.float32 / 2400, window.size.y.float32 / 1500))
-proc hudSize(window: Window): Vec2 = window.size.vec2 / max(hudScale(window), 0.01'f32)
-include ../awmhud
 
 let
   root = currentSourcePath().parentDir.parentDir

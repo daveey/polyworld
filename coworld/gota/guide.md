@@ -2,11 +2,12 @@
 
 **New GotA week: everyone needs to update their bot.** Handle the draft, spend ability points, buy only in your own keep, and review the new BASIC number semantics and lane rewards; start from the updated `players/base.bas`.
 
-Two teams of five BASIC heroes battle to slay the enemy god. The ladder uses
-**Emmett's Glory**: each winning hero's lifetime XP divided by elapsed simulated
-minutes, rounded down to whole points. Fractional minutes and drafting time
-count. Losing teams, draws, and timeouts score zero. There is no fixed XP
-penalty per minute. Zero-duration games score zero.
+Two teams of five BASIC heroes battle to slay the enemy god. The Softmax ladder
+uses team win/loss MMR and matchmaking that favors nearby ratings. Game results
+also report **Emmett's Glory**: each winning hero's lifetime XP divided by
+elapsed simulated minutes, rounded down to whole points. Fractional minutes
+and drafting time count. Losing teams, draws, and timeouts score zero.
+There is no fixed XP penalty per minute. Zero-duration games score zero.
 
 Destroying the enemy god grants every hero on your team a flat 1,000 XP,
 including dead heroes and heroes elsewhere on the map, regardless of who lands
@@ -143,6 +144,10 @@ The match setting `draft_mode` selects the hero availability rules:
 | Unique Draft (default) | `unique` | Each hero class once across both teams. |
 | Team Draft | `team` | Each hero class once per team. Enemy teams may mirror picks. |
 | Open Draft | `open` | Any duplicates, including ten players using the same hero. |
+
+The Softmax Competition league uses Open Draft. Every player may pick any
+hero, including a hero already picked by a teammate or an opponent. Local
+games keep Unique Draft unless a different mode is selected.
 
 Local games accept `--draft-mode team` or `--draft-mode open`. The web
 player accepts `?draft-mode=team` or `?draft-mode=open`. JSON configs use
@@ -479,24 +484,27 @@ BASIC `PRINT` output, compiler diagnostics, runtime errors, and VM lifecycle mes
 
 Battles run up to 28,800 deterministic ticks (20 simulated minutes), plus drafting time, without real-time pacing. Replays run entirely in the browser with playback, seeking, speed, and loop controls. The server exposes `/healthz`; legacy clients are static stubs.
 
-The Competition league schedules 24 games per round with random matchups,
+The Competition league schedules 24 games per round with MMR-based matchups,
 on a 32-minute interval. Each match uses ten distinct policies when at least
 ten are eligible: five different policies on Red and five on Blue, with
 one hero per policy. The scheduler uses `team_n`, `team_count: 2`,
-`team_layout: "blocks"`, `matchmaking: "random"`, and
+`team_layout: "blocks"`, `matchmaking: "elo_softmax"`,
+`matchmaking_temperature: 100`, and
 `distinct_teammates: true`. Preserve these settings when updating the league.
 Separate baseline filler policies complete short rosters and are not ranked
 entrants. A policy controlling multiple heroes in a short-roster game receives
-their average score, so extra seats do not multiply it.
+their average game score, so extra seats do not multiply it.
 
-Each player's round score is the arithmetic average of their game scores.
-Standings use an exponential moving average: 15% of the new round score plus
-85% of the previous standing. The first scored round sets the initial standing.
-Higher standings rank first. Opponent ratings and win/loss Elo do not affect
-either standings or matchmaking. For example, a winning hero with 3,000
-lifetime XP after 10.5 simulated minutes scores 285. A losing hero scores zero
-regardless of XP. A previous standing of 800 followed by a round average of
-1,000 becomes 830.
+Standings use Elo MMR with an initial rating of 1,500 and K=32. Each match
+counts as a team win, loss, or draw. All rated players on a team receive the
+same rating change, based on the two teams' average MMR and the match result.
+XP and the size of an Emmett's Glory score do not affect MMR. Draws and
+timeouts count as draws. Higher MMR ranks first.
+
+Matchmaking favors players near the rating of the selected lobby's first
+player, with a scale of 100 MMR points, and balances the two teams'
+ratings. Players with fewer appearances get priority. This reduces large
+rating mismatches while still allowing them when the roster is small.
 
 ## BASIC numbers and coordinates
 

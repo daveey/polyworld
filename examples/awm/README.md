@@ -2,14 +2,39 @@
 
 Card-game prototype in Nim + Polyworld. Native and browser.
 
+## Layout
+
+```
+src/awm.nim          reads the command line and starts a game mode
+src/app.nim          what every mode shares: window, renderers, heroes
+src/play.nim         playing on a table: targeting, attacks, bots, beats
+src/core/            the game itself: no window, no graphics
+  core.nim           cards, rules and the rules DSL
+  sim.nim            the match: players, turns, effects, deaths
+  baseset.nim        the cards and decks
+  sessions.nim       saved games and the built-in bot
+  bots.nim           BASIC bot scripts
+src/modes/           game modes, clients of the core
+  duel.nim           two players
+  multiplayer.nim    three to seven players around the ring
+src/scene/           the 3D world: cards and piles, the courtyard and the
+                     ring, heroes, camera placements, post-processing
+src/vfx/             card and combat effects
+src/ui/              the HUD, card faces, and developer panels
+src/net/             the browser server and its client side
+```
+
+`nim c src/awm.nim` writes `./awm` (see `config.nims`), next to `players/`
+and `web/`.
+
 ## Native
 
 ```sh
-nim c -o:awm awm.nim
+nim c src/awm.nim                            # builds ./awm
 ./awm                                        # bot vs bot, random classes
 ./awm --human --class warrior --opponent mage # play against a bot
 ./awm --seed 42                              # fixed deal
-./awm --players=4                            # multiplayer battlefield preview
+./awm --players=4 --human                    # multiplayer: you and 3 bots
 ```
 
 | Flag | Default |
@@ -23,15 +48,22 @@ nim c -o:awm awm.nim
 
 Bot vs bot ignores `--class`/`--opponent` and picks randomly.
 
-`--players=3` (or `--players 3`) and larger counts open the multiplayer scene
-harness: a small circular center surrounded by one modular balcony per player.
-Each balcony has its own hero, deck, cards in play, discard pile and hand. The
-camera fits all balconies in the view. This is a visual preview; multiplayer
-turns and card interaction are not implemented yet. Omitting `--players`, or
+Hero Select presents the animated Polyworld characters on stone podiums,
+with class banners, lanterns and the battlefield's starry sky and materials.
+In human mode, click a character or its button, or press 1, 2 or 3 for Archer,
+Warrior or Mage. The camera and hit areas adapt to the viewport. The same
+selection screen is used for duels and multiplayer; bot selection stays automatic.
+
+`--players=3` (or `--players 3`) and larger counts play a multiplayer match:
+a small circular center surrounded by one modular balcony per player. Each
+balcony has its own hero, deck, cards in play, discard pile and hand. The
+camera fits all balconies in the view. With `--human` you pick your class on
+screen and play seat 1; bots with random classes play the others, and the last
+player alive wins. Without it, bots play every seat. Omitting `--players`, or
 using `--players=2`, keeps the existing two-player game. Counts below two and
 invalid counts are rejected. F8 toggles the same screen effects as the game.
 
-Balcony zones and the camera fit live in `awmmultiplayer.nim`. The stone floor,
+Balcony zones and the camera fit live in `src/scene/ring.nim`. The stone floor,
 fascia, parapet and end pieces are built in separate curved courses; the ring
 expands with player count while preserving card sizes and usable balcony depth.
 Lanterns, ivy and hanging banners use the original courtyard materials and props.
@@ -45,7 +77,7 @@ it left and right, and Enter prints the values to paste back as defaults.
 
 ### Screen effects
 
-`awmpost.nim` renders the 3D scene offscreen and adds screen-space ambient
+`src/scene/post.nim` renders the 3D scene offscreen and adds screen-space ambient
 occlusion (before the VFX), bloom from the light the VFX add, FXAA, a light
 grade and a vignette. The HUD is not affected. F8 toggles all of it.
 
@@ -65,7 +97,7 @@ source, 0 bloom. `AWM_POST_LAYER=N` starts on layer N (for screenshots).
 Build with `-d:awmPostPanel` for a draggable tuning window with every setting,
 grouped by layer (F9 shows or hides it; with `-d:awmPostLayers` it also picks
 the layer). "Print settings" writes the values as Nim for
-`defaultPostSettings` in `awmpost.nim`. Clicks over the window don't reach
+`defaultPostSettings` in `src/scene/post.nim`. Clicks over the window don't reach
 the board.
 
 ### Night courtyard materials
@@ -112,20 +144,68 @@ repeatable material comparisons without the card inspector.
 AWM_SKIP_WEB_BUILD=1 ./tools/serve.sh       # serve existing build
 ```
 
-- Spectator: <http://127.0.0.1:8080/client/global>
-- Player: <http://127.0.0.1:8080/client/player?class=warrior&opponent=mage&seed=42>
+The browser loader uses a flat Polyworld-style night courtyard and an AWM
+shield logo, spelling out **Archers Warriors Mages**. Its brass progress bar reports
+asset download progress, then shows preparation until the first game frame
+is ready. Loading assets are staged separately from the game pack so they
+can appear immediately. Source mappings are in `web/loading/README.md`.
 
-| Server flag | Default |
+With Playwright and Chrome available, run `node tests/test_hero_select.cjs`
+against the server to check hero and button selection, keyboard shortcuts,
+duel/multiplayer, portrait/Retina layouts, and loader progress/error states.
+
+The page takes the native flags as URL parameters:
+
+- Bots: <http://127.0.0.1:8080/awm.html>
+- Duel: <http://127.0.0.1:8080/awm.html?human=1&class=warrior&opponent=mage&seed=42>
+- Multiplayer, bots: <http://127.0.0.1:8080/awm.html?players=5>
+- Multiplayer, you and 3 bots: <http://127.0.0.1:8080/awm.html?players=4&human=1>
+
+| Parameter | Native flag |
 |---|---|
-| `--host ADDRESS` | `127.0.0.1` |
-| `--port PORT` | `8080` |
-| `--step-ms MS` | `2500` |
-| `--max-turns N` | `60` |
-| `--seed INTEGER` | `20260910` |
-| `--player0 human\|bot` | `human` |
-| `--player1 human\|bot` | `bot` |
-| `--class CLASS` | chosen at connect |
-| `--opponent CLASS` | chosen at connect |
+| `human=1` | `--human` |
+| `class`, `opponent` | `--class`, `--opponent` |
+| `players` | `--players` |
+| `seed` | `--seed` |
+| `bot=URL` (repeatable) | `--bot` |
+
+## Online: Coworld
+
+AWM runs online on Coworld the way Polyworld's other games do: the platform
+stages one BASIC player per seat, the game plays the match headless, then
+publishes the results and a replay that plays in the browser. Two seats play
+a duel; three to seven play the multiplayer ring. The package (manifest,
+Compose file, guide, baseline player and replay viewer build hook) is in
+[`coworld/awm`](../../coworld/awm); the shared runtime contract is in
+[`coworld/integration.md`](../../coworld/integration.md).
+
+```sh
+export POLYWORLD_DEPS="$PWD/../../tmp/coworld/deps"   # pinned dependencies
+(cd ../.. && nim r coworld/tools/sync_dependencies.nim)
+nim c -d:coworld -o:../../tmp/coworld/awm src/awm.nim  # the Coworld server
+(cd ../.. && nim r coworld/tools/test_runtime.nim awm)  # its contract tests
+coworld build --project ../../coworld/awm --version VERSION
+```
+
+The config takes `players` and `tokens` (2 to 7 each), `seed`, `max_ticks`,
+and an optional `classes` array (one of `archer`, `warrior`, `mage` per seat;
+otherwise drawn from the seed). One tick is one game action. The winner
+scores 1, everyone else 0; a draw or a timeout scores 0 for all.
+
+### Headless matches and replays
+
+```sh
+nim c -d:headless -o:build/awm-headless src/awm.nim
+./build/awm-headless --bot players/base.bas:5 --seed 9 --record build/m.replay
+./build/awm-headless --replay build/m.replay  # checks every tick's hash
+./awm --replay build/m.replay                 # watch it on the table
+```
+
+`--classes archer,mage,...` fixes the classes and `--ticks N` limits the
+match. The replay viewer has the shared Polyworld transport: play/pause
+(Space), step, seek, loop and 1x-16x speed. Its browser build is
+`AWM_WEB_DIR=build/replay ./tools/build_web.sh -d:replayViewer`; open
+`awm.html?replay=URL` from the same server.
 
 ## Tests
 
@@ -133,7 +213,7 @@ AWM_SKIP_WEB_BUILD=1 ./tools/serve.sh       # serve existing build
 nim r -d:headless --out:build/test_awm tests/test_awm.nim
 nim r -d:headless --out:build/test_sessions tests/test_sessions.nim
 nim r -d:headless --out:build/test_multiplayer tests/test_multiplayer.nim
-python3 tests/test_server.py
+nim r -d:headless --out:build/test_match tests/test_match.nim
 ```
 
 ## Rules

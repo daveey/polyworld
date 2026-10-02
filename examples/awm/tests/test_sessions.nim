@@ -1,5 +1,5 @@
 import std/[json, options, unittest]
-import ../awmsessions
+import ../src/core/sessions
 
 suite "session options":
   test "defaults":
@@ -257,7 +257,7 @@ suite "owned game snapshots":
     check game.players[0].board.len == 5
 
 import std/os
-import ../awmbots
+import ../src/core/bots
 
 suite "bots and two-target cards":
   proc duelGame(): (GameState, int) =

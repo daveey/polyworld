@@ -14,7 +14,7 @@ import
   polyworld/neural,
   std/algorithm,
   bassy,
-  polyworld/[llms, mailboxes, bodies, metrics, profiles],
+  polyworld/[policyhosts, llms, mailboxes, bodies, metrics, profiles],
   content, maps,
   sim
 
@@ -323,7 +323,7 @@ proc sendChat*(
     if game.inboxes[recipient].push(id, text):
       inc result
 
-proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
+proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil, policySlot = -1): Host =
   ## Builds the complete world-query and command interface for one player.
   ##
   ## The same builder makes both the compile-time schema and each player's
@@ -335,7 +335,7 @@ proc buildOverlordHost*(playerId: int32, llm: LlmClient = nil): Host =
   ## then rounded to something memorable. Commands that queue a path search
   ## cost far more than their own cycles, so a script's budget prices its
   ## demand on the simulation rather than only its own arithmetic.
-  result = initHost()
+  result = initPolicyHost(policySlot)
   let services = if llm == nil: newLlmClient(0, LlmConfig()) else: llm
   services.addFunctions(result)
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
@@ -696,7 +696,7 @@ proc loadBots*(
       else:
         compile(source, schema, limits)
     game.brains[player] = OverlordVm(
-      runtime: initRuntime(program, buildOverlordHost(player, llm), limits),
+      runtime: initRuntime(program, buildOverlordHost(player, llm, int(player)), limits),
       ready: true,
       prepareDecision: llm.decisionCallback(),
       pollRequests: llm.requestPoller()

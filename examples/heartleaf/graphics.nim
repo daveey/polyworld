@@ -799,5 +799,6 @@ proc runGraphics*() =
 
   while not window.closeRequested:
     pollEvents()
+    waitForDisplay()
   saveRecording()
   finishGameProfile()

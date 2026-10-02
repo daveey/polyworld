@@ -11,7 +11,7 @@
 import
   polyworld/neural,
   bassy,
-  polyworld/[bodies, profiles],
+  polyworld/[policyhosts, bodies, profiles],
   content,
   sim
 
@@ -131,13 +131,13 @@ proc nearestWinnableGarden*(w: World, slot: int32): int32 =
       best = distance
       result = garden
 
-proc buildVillagerHost*(slot: int32): Host =
+proc buildVillagerHost*(slot: int32, policySlot = -1): Host =
   ## Builds the complete world-query and command interface for one villager.
   ##
   ## The same builder makes both the compile-time schema and each villager's
   ## live instance, because `initRuntime` validates every binding's arity
   ## and work cost against what the program was compiled with.
-  result = initHost()
+  result = initPolicyHost(policySlot)
   result.addNeuralFunctions()
   for name in VillagerDataNames:
     discard result.addData(name)
@@ -352,7 +352,7 @@ proc loadBots*(game: Game, sources: openArray[string]) =
       continue
     let program = compile(sources[slot], schema, limits)
     game.brains[slot] = VillagerVm(
-      runtime: initRuntime(program, buildVillagerHost(slot), limits),
+      runtime: initRuntime(program, buildVillagerHost(slot, int(slot)), limits),
       ready: true
     )
     if not bound:

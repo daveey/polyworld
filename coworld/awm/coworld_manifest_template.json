@@ -1,0 +1,237 @@
+{
+  "tags": [
+    "strategy",
+    "basic",
+    "polyworld",
+    "cards"
+  ],
+  "game": {
+    "name": "Archers Warriors Mages",
+    "description": "Two to seven BASIC heroes play a class card game: a duel, or a free-for-all around a ring of balconies. The last hero standing scores one win; draws and timeouts score zero.",
+    "owner": "treeform",
+    "player_runtime": "game-hosted",
+    "runnable": {
+      "type": "game",
+      "image": "{{GAME_IMAGE}}",
+      "source_url": "https://github.com/Metta-AI/polyworld/tree/main/examples/awm"
+    },
+    "config_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tokens",
+        "players",
+        "seed",
+        "max_ticks"
+      ],
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 7,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "players": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "max_ticks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 28800
+        },
+        "classes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 7,
+          "items": {
+            "type": "string",
+            "enum": [
+              "archer",
+              "warrior",
+              "mage"
+            ]
+          },
+          "description": "One hero class per slot. Omitted, each slot's class is drawn from the seed."
+        }
+      }
+    },
+    "results_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scores",
+        "ticks",
+        "seed",
+        "outcome"
+      ],
+      "properties": {
+        "scores": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          }
+        },
+        "ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 28800
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "banked_gold": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "returned": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "replay_viewer": {
+      "bundle": "replay-viewer",
+      "replay_compression": "gzip"
+    },
+    "protocols": {
+      "player": {
+        "type": "text",
+        "value": "Each zero-based slot commands one hero. Supply a raw BASIC file. The script runs once per decision on its hero's turn and plays at most one card; a decision that plays nothing ends the turn after the hero's ready minions attack. The existing Polyworld BASIC host API runs with bounded source, memory, work, and instruction limits. PRINT is private. See the game guide and bundled base.bas for a complete working player."
+      },
+      "global": {
+        "type": "text",
+        "value": "GET /client/global returns a static status page. /global sends one JSON status message after WebSocket upgrade and echoes Ping frames with Pong. No gameplay traffic uses WebSockets. Other legacy endpoints return explicit stubs."
+      }
+    },
+    "docs": {
+      "readme": {
+        "type": "text",
+        "value": "# Archers Warriors Mages\n\nTwo to seven BASIC heroes play a card game around a courtyard. Each hero has a\nclass (Archer, Warrior, or Mage), 20 life, and a 40-card class deck. The last\nhero standing scores one win; everyone else, and every hero in a draw or a\ntimeout, scores zero.\n\nTwo players play a duel. Three to seven play a free-for-all around a ring of\nbalconies, in seat order. Each slot commands one hero. Platform slots are\nzero-based. Classes come from the optional `classes` config (one per slot), or\nare drawn from the seed. Upload a `.bas` file containing BASIC source. The game\nreads the staged file directly, with no player container or network\nconnection.\n\nStart with the bundled `players/base.bas`, which lists the game's values and calls.\nThe same source is available under `examples/awm/src/core/bots.nim`, and the\ncards are in `examples/awm/src/core/baseset.nim` and `examples/awm/README.md`.\n\n## Turns\n\nEach turn the hero gains one energy, refills it, and draws a card (the first\nplayer skips their first draw). Drawing from an empty deck loses. Your script\nruns once per decision on your turn and may play at most one card. A decision\nthat plays a card is followed by another; one that plays nothing ends the\nturn. Then every ready minion attacks the next living player's hero, and the\nturn passes. A turn also ends after 30 cards. Discards and trigger targets are\nchosen for you by the built-in bot.\n\nThe script's `enemyPlayer` is the next living player. `selfPlayer` is your\nslot. Globals and arrays keep their values between decisions.\n\n## Ticks\n\nOne tick is one game action: a card played, one minion's attack, a discard or\ntrigger answered, or a turn ended. `max_ticks` bounds the match; a match that\nreaches it is a timeout. Replays store one action and one state hash per tick\nand play back in the browser with seeking, speed, and loop controls.\n\n## Logs and failures\n\nBASIC `PRINT` output, compiler diagnostics, runtime errors, and VM lifecycle\nmessages go to the owning player's private log. Each log is limited to 10 MiB.\nA runtime error, including an instruction limit, disables that VM: its hero\npasses every later turn and its minions stop attacking. Other seats continue.\nInvalid BASIC syntax fails the episode with a player failure diagnostic.\nPublic game logs and action replays contain no BASIC source or private print\noutput. The server exposes `/healthz`; legacy clients are static stubs.\n\n## Mailboxes\n\nEach player has an inbox. `sendChat(-2, text$)` reaches every player,\nincluding the sender; `sendChat(slot, text$)` reaches one player. AWM has no\nteams. `pullMailbox$()`, `mailboxId()`, `mailboxCount()`, `mailboxSelf()`, and\n`mailboxPlayers()` work as in the other Polyworld games. Messages are read\nwhen your script next runs, which is on your turn.\n\n## BASIC numbers\n\nBASIC uses [Bassy](https://github.com/treeform/bassy) with\n[Fixxy](https://github.com/treeform/fixxy) Q16.16 decimals enabled. `/`\nperforms decimal division; `\\` performs integer division. Hand indexes,\nchoice indexes, and slots require exact integers.\n"
+      }
+    }
+  },
+  "player": [
+    {
+      "id": "baseline",
+      "name": "Baseline",
+      "type": "player",
+      "file": "players/base.bas",
+      "description": "AWM BASIC baseline: plays the first affordable card in hand, aiming at the enemy hero, then an enemy minion; two-target cards go on its own minion when the rule helps it."
+    }
+  ],
+  "variants": [
+    {
+      "id": "duel",
+      "name": "Duel",
+      "game_config": {
+        "players": [
+          {
+            "name": "Baseline 0"
+          },
+          {
+            "name": "Baseline 1"
+          }
+        ],
+        "seed": 2026,
+        "max_ticks": 28800
+      },
+      "description": "Full-length deterministic two-player duel."
+    },
+    {
+      "id": "competition",
+      "name": "Competition",
+      "game_config": {
+        "players": [
+          {
+            "name": "Baseline 0"
+          },
+          {
+            "name": "Baseline 1"
+          },
+          {
+            "name": "Baseline 2"
+          },
+          {
+            "name": "Baseline 3"
+          },
+          {
+            "name": "Baseline 4"
+          }
+        ],
+        "seed": 2026,
+        "max_ticks": 28800
+      },
+      "description": "Full-length deterministic five-player free-for-all."
+    }
+  ],
+  "certification": {
+    "game_config": {
+      "players": [
+        {
+          "name": "Baseline 0"
+        },
+        {
+          "name": "Baseline 1"
+        },
+        {
+          "name": "Baseline 2"
+        },
+        {
+          "name": "Baseline 3"
+        }
+      ],
+      "seed": 2026,
+      "max_ticks": 28800
+    },
+    "players": [
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      },
+      {
+        "player_id": "baseline"
+      }
+    ]
+  }
+}

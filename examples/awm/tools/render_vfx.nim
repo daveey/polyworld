@@ -2,7 +2,7 @@
 ## nim c -r --out:build/render-vfx tools/render_vfx.nim [--sequence]
 import std/[os, strformat]
 import opengl, pixie, vmath, windy
-import ../[awmcore, paths, vfxrenderer]
+import ../src/core/core, ../src/paths, ../src/vfx/vfxrenderer
 
 const
   Width = 1536

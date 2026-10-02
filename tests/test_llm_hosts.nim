@@ -16,6 +16,8 @@ import ../examples/gods_of_the_arena/replays as gotaReplays
 import ../examples/gods_of_the_arena/sim as gotaSim
 
 const Program = """
+annotationResult = ANNOTATE(123, "intent", "test", "{}")
+annotationMessage$ = ANNOTATE_ERROR$()
 remoteAvailable = llmAvailable()
 quoted$ = jsonQuote$("hello")
 text$ = jsonGet$(quoted$, "")
@@ -73,6 +75,9 @@ template testHost(kind: static[string]) =
       for vm in vms:
         doAssert vm != nil and not vm.failed, vm.lastError
         doAssert vm.runtime.getGlobal("remoteAvailable") == 0
+        doAssert vm.runtime.getGlobal("annotationResult") == 1
+        doAssert vm.runtime.getString(vm.runtime.getGlobalValue("annotationMessage$")) ==
+          "No annotation destination"
         doAssert vm.runtime.getGlobal("sent") == vms.len
         doAssert vm.runtime.getGlobal("from") == -2
         doAssert vm.runtime.getString(vm.runtime.getGlobalValue("message$")) ==

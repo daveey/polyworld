@@ -1,0 +1,283 @@
+{
+  "date": "2026-10-01",
+  "version": "2026.10.1.3",
+  "source_commit": "1b2b552164e01b1fe26b5010e62ab66077b93f46",
+  "source_tree": "369156caac7331155db9fa404563ca678a1d86cd",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "max_instructions": 5000000,
+  "max_work_units": 5000000,
+  "max_memory_bytes": 67108864,
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+  "manifest_hash": "sha256:30e8188ca22ee88091e2e150622c5f79ae66a711cc9e5d3e0169b80089a6851d",
+  "canonical": true,
+  "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+  "league_url": "https://softmax.com/archers-warriors-mages",
+  "watch_url": "https://softmax.com/archers-warriors-mages?e=09490113-4804-4e66-aca0-7da36913bf3f",
+  "changes": [
+    "Raise BASIC instruction and work budgets from 500,000 to 5,000,000 per decision.",
+    "Keep BASIC memory at 64 MiB and restore default allocation limits."
+  ],
+  "local_certification": {
+    "steps_passed": 10,
+    "native_replay_verified": true
+  },
+  "hosted_certification": {
+    "state": "certified",
+    "contract_version": "main-36db91e05907",
+    "steps": [
+      {
+        "id": "matriculate",
+        "status": "pass"
+      },
+      {
+        "id": "source-resolves",
+        "status": "pass"
+      },
+      {
+        "id": "images-reachable",
+        "status": "pass"
+      },
+      {
+        "id": "fixture-conforms",
+        "status": "pass"
+      },
+      {
+        "id": "smoke-episode",
+        "status": "pass"
+      },
+      {
+        "id": "results-conform",
+        "status": "pass"
+      },
+      {
+        "id": "replay-present",
+        "status": "pass"
+      },
+      {
+        "id": "replay-loadable",
+        "status": "pass"
+      },
+      {
+        "id": "players-run",
+        "status": "pass"
+      },
+      {
+        "id": "supporting-roles",
+        "status": "pass"
+      }
+    ]
+  },
+  "hosted_smoke": [
+    {
+      "id": "ereq_26315508-da38-4b4f-9e5a-a7a4c05c8276",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_49f0db7b-7cec-487b-941a-92e42e09d5cc",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_a4d0c272-49f1-4e80-93f1-7e6fef312779",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_af454010-fdc6-4e79-909d-58af9e3542ce",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "id": "ereq_e32dd39e-4086-4ddd-adc7-e1490bf8398c",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "forced_round": {
+    "id": "round_f4a07f61-ae9f-43df-9efb-2839850dc10f",
+    "round_number": 19,
+    "status": "completed",
+    "trigger": {
+      "kind": "platform",
+      "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+      "workflow_id": "ladder-league_ad6dc809-4696-46f5-99a5-fc2b1c58d082"
+    },
+    "episodes": [
+      {
+        "episode_request_id": "ereq_566926f4-dbc0-4671-bf29-999fc5123a8b",
+        "episode_id": "09490113-4804-4e66-aca0-7da36913bf3f",
+        "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+        "scores": [
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "ticks": 147,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_8791c3cd-fcd7-4f0d-a59e-2dd4252d9264",
+        "episode_id": "cbc0f24a-8fd0-472c-8d61-319dcb48503b",
+        "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 129,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_4e24ea84-f468-408c-b54e-61f992265a76",
+        "episode_id": "7047ef2e-5264-4953-800f-dbd8bb87c45f",
+        "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 122,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_eca7f145-e1bb-4032-b8c5-437b10363447",
+        "episode_id": "7cda5e52-773b-42e7-b4aa-ee83acba3824",
+        "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "ticks": 130,
+        "status": "completed"
+      },
+      {
+        "episode_request_id": "ereq_e14e04bf-bce7-47bb-87a0-d6a5dae2ef68",
+        "episode_id": "41ed7e79-d764-4b2a-a443-e0e1e713b333",
+        "coworld_id": "cow_8ac280ae-4b9d-4add-a869-4d1d684a14a0",
+        "scores": [
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 127,
+        "status": "completed"
+      }
+    ]
+  },
+  "verification": {
+    "native_replay_verified": true,
+    "replay_sha256": "73827a70d9e094a55f752d4550b8d66de6358c23c3520494957a66960f41a2d6",
+    "session": {
+      "viewer_url": "https://d1kovwradqjymp.cloudfront.net/bundles/34026558dd01989830399ba90e0742bfa844954384b555eea4cba76cab71132c/cd954103d9da408e974505434467448f/index.html?v=2#replay=https%3A%2F%2Fd1kovwradqjymp.cloudfront.net%2Freplays%2F5c78aa8a-1b5e-4d64-9910-cd1b09b1e2d6.replay",
+      "ready": true
+    },
+    "viewer_assets": {
+      "js": {
+        "bytes": 294973,
+        "sha256": "ac9d9dccc7e4380b6ff74a5b7cc05d4bc93a2466775ab4df3639705a136bdcd8"
+      },
+      "wasm": {
+        "bytes": 4445002,
+        "sha256": "2aafe533838dd8ad35527d23106a2783f6873dadf00639d38d00a7ed3c8e331c"
+      },
+      "data": {
+        "bytes": 64732179,
+        "sha256": "f7d0cea1193788a8f406e019c37f4587f67f427ae21391145d1e5d92fc6b4416"
+      }
+    },
+    "verified_at": "2026-10-01T22:21:40.125296+00:00"
+  },
+  "browser_verification": {
+    "rendered": true,
+    "round_number": 19,
+    "episode_number": 1,
+    "console_errors": []
+  },
+  "league_settings": {
+    "scratchpads_enabled": false,
+    "ladder": {
+      "enabled": true,
+      "scheduler": {
+        "strategy": "random_fill",
+        "insufficient_players": "filler_policy",
+        "entrant_preferences_field": null,
+        "num_episodes": 5,
+        "min_episodes_per_entrant": null,
+        "mirrored_seats": null,
+        "neighbor_window": null,
+        "seat_count_min": null,
+        "seat_count_max": null,
+        "seat_count_weights": null,
+        "roster_partition": null,
+        "seat_rungs": null,
+        "rotate_seat_rungs": null,
+        "episodes_per_round": null,
+        "roster_overflow": null,
+        "overflow_episodes_per_table": null,
+        "variant_rotation_by_seat_count": null,
+        "seat_count": null,
+        "episodes_per_entrant": null,
+        "clone_score_aggregation": null,
+        "team_count": null,
+        "matchmaking": null,
+        "matchmaking_temperature": null,
+        "allied_teams": null,
+        "team_layout": null,
+        "variant_rotation": null,
+        "distinct_teammates": null
+      },
+      "fulfillment": {
+        "allowed_failures": 0.0,
+        "retry_times": 2
+      },
+      "ranking": {
+        "algorithm": "elo",
+        "initial_rating": 1500.0,
+        "k_factor": 32.0,
+        "round_scoring_rule": "mean",
+        "margin_scale": null
+      },
+      "leader_slot_config": null,
+      "handicap_config": null,
+      "qualification": null,
+      "persistent": null,
+      "divisions": [
+        {
+          "division_id": "div_4d48d8bd-0a9c-40a8-be80-d02cdbba132f",
+          "name": "Competition",
+          "promotion": null,
+          "relegation": null,
+          "disqualify_after_consecutive_failures": 3
+        }
+      ],
+      "players_per_user": null
+    },
+    "campaign": null,
+    "landscape": null,
+    "counterfactual_eval": null,
+    "episodes_per_round": null,
+    "round_interval_minutes": 15,
+    "idle_after_minutes": null,
+    "idle_round_interval_minutes": null,
+    "episode_player_pod_llm_spend_limit_usd": null,
+    "llm": null,
+    "leaderboard": null,
+    "logs": null,
+    "achievements": null,
+    "rewards": null,
+    "tournament_sim_visibility": null
+  }
+}

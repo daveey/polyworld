@@ -71,6 +71,9 @@ proc setupEmscripten*(exampleDir: string, game = "") =
     --define:flatty64
     when not defined(debug):
       --define:release
+      # Release -O3 only reaches the compile step. emcc also needs it at link
+      # time, or Binaryen leaves the wasm and Asyncify unoptimized.
+      switch("passL", "-O3")
     switch(
       "passL",
       (&"""

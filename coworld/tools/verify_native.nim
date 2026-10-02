@@ -40,6 +40,8 @@ proc main() =
     echo game.name,
       ": desktop, headless, Coworld, recordings and full replay passed"
   run(["nim", "check", "tests/tests.nim"], logs / "tests-check.log")
+  run(["nim", "r", "-d:coworld", "tests/test_annotations.nim"],
+    logs / "annotations.log")
   run(["nim", "r", "tests/tests.nim"], logs / "tests.log")
 
 runTool(main)

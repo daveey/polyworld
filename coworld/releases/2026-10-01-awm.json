@@ -1,0 +1,914 @@
+{
+  "date": "2026-10-01",
+  "version": "2026.10.1.1",
+  "coworld_id": "cow_ca2284e3-a47d-411e-8f5e-a9bcbc535a77",
+  "canonical": true,
+  "league_url": "https://softmax.com/archers-warriors-mages",
+  "watch_url": "https://softmax.com/archers-warriors-mages?e=6fa80081-db91-4ea9-9e87-7d32966d7b27",
+  "source_commit": "4dbf9b2799562c60cde5bfd4c10479442db55296",
+  "source_tree": "8f610042c9a79d2f66eebb574423996875ea6c58",
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "dependency_changes": "diff --git a/coworld/dependencies.lock b/coworld/dependencies.lock\nindex 9149165..b96327b 100644\n--- a/coworld/dependencies.lock\n+++ b/coworld/dependencies.lock\n@@ -1,27 +1,27 @@\n bassy 0.1.0 https://github.com/treeform/bassy 907b69f2d0d4f32186d72947883f5bdac159ce9d\n-curly 1.1.1 https://github.com/guzba/curly 4f36f01ac6ca881fff4bbf0f8daa362d4b9f0668\n-libcurl 1.0.0 https://github.com/Araq/libcurl 7a420498f60a31d99fc8513886ce36c4e8c3a4ae\n+curly 1.1.1 https://github.com/guzba/curly 29558e2d2b76244a2c65fea08e9f4efff16c1997\n+libcurl 1.0.0 https://github.com/Araq/libcurl eecbfc31e17ae2f09f0b6d2aaefcfb970c7d2be4\n fixxy 0.1.0 https://github.com/treeform/fixxy 05e5446dffb70093056cebb0c57721a60deaf52a\n-silky 0.2.0 https://github.com/treeform/silky fb9b13910edd66cf1751056784c2f7d2932a59fc\n-pixie 6.1.0 https://github.com/treeform/pixie 87cecced5c4c6f311c658a5f3ca0c9b43edb6aa7\n-vmath 3.0.0 https://github.com/treeform/vmath 1b6080f4dc8114d2becaeb5f0944694f7e45794f\n+silky 0.2.0 https://github.com/treeform/silky b7f59fb7670a42bfe4302b327ec55ed11d76d0d4\n+pixie 6.1.0 https://github.com/treeform/pixie 30bb510877f02cbf9643e4f904e33d1c90f7910f\n+vmath 3.0.0 https://github.com/treeform/vmath bc260143102153b76328783e1c76c96e52c52a4b\n chroma 1.0.0 https://github.com/treeform/chroma 08b0d65590221bb964544fd9badf29a146b9091a\n-zippy 0.10.20 https://github.com/guzba/zippy cd562ba43ae8904a4d1ba55611b8a521ef4a179e\n+zippy 0.10.20 https://github.com/guzba/zippy e41dfa36a19d739a2be7493211decadbe451031d\n flatty 0.4.0 https://github.com/treeform/flatty 9c3f14cc287890b742196b4f0f74f0b9faab29cb\n-nimsimd 1.3.2 https://github.com/guzba/nimsimd ba71ac4e2927ba61e6d1bf75d0d124eacc714d1c\n+nimsimd 1.3.2 https://github.com/guzba/nimsimd dd27017fbfd1c6c00d37776a8f5d322bf6c5a83b\n bumpy 1.1.3 https://github.com/treeform/bumpy 93583f6f8056a6259aaa96c89f4c143ba55bc6f0\n crunchy 0.1.11 https://github.com/guzba/crunchy 98eb6526982bb8aae8eec6e8781f4539fa19e049\n-shady 0.1.5 https://github.com/treeform/shady b7999005f024504ebb86b00917c24c3a53554844\n+shady 0.1.5 https://github.com/treeform/shady c899f7cd17dbe7021d6e3aa2908e6de6549c47f1\n windy 0.5.0 https://github.com/treeform/windy c9e19887b0ff143f382f5e99a0720ee01f9a9f51\n opengl 1.2.9 https://github.com/nim-lang/opengl 8e2e098f82dc5eefd874488c37b5830233cd18f4\n urlly 1.1.1 https://github.com/treeform/urlly 99784779f05649df25fd9c33003d8ef6de027345\n ws 0.6.0 https://github.com/treeform/ws c9c0c7b51e2e83cc9305a895a0b144a297b4bea8\n dx12 0.1.0 https://github.com/treeform/dx12 65049f4e2ec1acbbf1987bfa79817d472650c15e\n-vk14 0.1.0 https://github.com/treeform/vk14 0bd91f6a841dfca3cefcdbab4dd7efd0574b3329\n+vk14 0.1.0 https://github.com/treeform/vk14 183cf440d6460d97c6b35d6346079d9982f8cd57\n metal4 0.1.0 https://github.com/treeform/metal4 e9ef085d38cdc7abf3d89670f3eae1754595b9f9\n jsony 1.1.6 https://github.com/treeform/jsony c5874fb71435e3ced8ee0025822e15f5d0e8e622\n fluffy 1.0.0 https://github.com/treeform/fluffy 535c5f234b41cd097b762203b5c216da1f4aeb1c\n-gltf 0.2.0 https://github.com/treeform/gltf 00a49474dc84b1e6992c6650fc37f50acf30b9f2\n+gltf 0.2.0 https://github.com/treeform/gltf adbf72a1dbfe797e5b87136cf9c1ad6665b222d9\n webby 0.2.1 https://github.com/treeform/webby fe515be4ab5d02695289f88fca0d27f703a05599\n noisy 0.4.5 https://github.com/guzba/noisy 9625ee0a9dbdae44c427df95a4f8de006c061150\n benchy 0.1.0 https://github.com/treeform/benchy 6425417b578dc54008285aad020625b4b4f61f7b\ndiff --git a/nimby.lock b/nimby.lock\nindex 9149165..b96327b 100644\n--- a/nimby.lock\n+++ b/nimby.lock\n@@ -1,27 +1,27 @@\n bassy 0.1.0 https://github.com/treeform/bassy 907b69f2d0d4f32186d72947883f5bdac159ce9d\n-curly 1.1.1 https://github.com/guzba/curly 4f36f01ac6ca881fff4bbf0f8daa362d4b9f0668\n-libcurl 1.0.0 https://github.com/Araq/libcurl 7a420498f60a31d99fc8513886ce36c4e8c3a4ae\n+curly 1.1.1 https://github.com/guzba/curly 29558e2d2b76244a2c65fea08e9f4efff16c1997\n+libcurl 1.0.0 https://github.com/Araq/libcurl eecbfc31e17ae2f09f0b6d2aaefcfb970c7d2be4\n fixxy 0.1.0 https://github.com/treeform/fixxy 05e5446dffb70093056cebb0c57721a60deaf52a\n-silky 0.2.0 https://github.com/treeform/silky fb9b13910edd66cf1751056784c2f7d2932a59fc\n-pixie 6.1.0 https://github.com/treeform/pixie 87cecced5c4c6f311c658a5f3ca0c9b43edb6aa7\n-vmath 3.0.0 https://github.com/treeform/vmath 1b6080f4dc8114d2becaeb5f0944694f7e45794f\n+silky 0.2.0 https://github.com/treeform/silky b7f59fb7670a42bfe4302b327ec55ed11d76d0d4\n+pixie 6.1.0 https://github.com/treeform/pixie 30bb510877f02cbf9643e4f904e33d1c90f7910f\n+vmath 3.0.0 https://github.com/treeform/vmath bc260143102153b76328783e1c76c96e52c52a4b\n chroma 1.0.0 https://github.com/treeform/chroma 08b0d65590221bb964544fd9badf29a146b9091a\n-zippy 0.10.20 https://github.com/guzba/zippy cd562ba43ae8904a4d1ba55611b8a521ef4a179e\n+zippy 0.10.20 https://github.com/guzba/zippy e41dfa36a19d739a2be7493211decadbe451031d\n flatty 0.4.0 https://github.com/treeform/flatty 9c3f14cc287890b742196b4f0f74f0b9faab29cb\n-nimsimd 1.3.2 https://github.com/guzba/nimsimd ba71ac4e2927ba61e6d1bf75d0d124eacc714d1c\n+nimsimd 1.3.2 https://github.com/guzba/nimsimd dd27017fbfd1c6c00d37776a8f5d322bf6c5a83b\n bumpy 1.1.3 https://github.com/treeform/bumpy 93583f6f8056a6259aaa96c89f4c143ba55bc6f0\n crunchy 0.1.11 https://github.com/guzba/crunchy 98eb6526982bb8aae8eec6e8781f4539fa19e049\n-shady 0.1.5 https://github.com/treeform/shady b7999005f024504ebb86b00917c24c3a53554844\n+shady 0.1.5 https://github.com/treeform/shady c899f7cd17dbe7021d6e3aa2908e6de6549c47f1\n windy 0.5.0 https://github.com/treeform/windy c9e19887b0ff143f382f5e99a0720ee01f9a9f51\n opengl 1.2.9 https://github.com/nim-lang/opengl 8e2e098f82dc5eefd874488c37b5830233cd18f4\n urlly 1.1.1 https://github.com/treeform/urlly 99784779f05649df25fd9c33003d8ef6de027345\n ws 0.6.0 https://github.com/treeform/ws c9c0c7b51e2e83cc9305a895a0b144a297b4bea8\n dx12 0.1.0 https://github.com/treeform/dx12 65049f4e2ec1acbbf1987bfa79817d472650c15e\n-vk14 0.1.0 https://github.com/treeform/vk14 0bd91f6a841dfca3cefcdbab4dd7efd0574b3329\n+vk14 0.1.0 https://github.com/treeform/vk14 183cf440d6460d97c6b35d6346079d9982f8cd57\n metal4 0.1.0 https://github.com/treeform/metal4 e9ef085d38cdc7abf3d89670f3eae1754595b9f9\n jsony 1.1.6 https://github.com/treeform/jsony c5874fb71435e3ced8ee0025822e15f5d0e8e622\n fluffy 1.0.0 https://github.com/treeform/fluffy 535c5f234b41cd097b762203b5c216da1f4aeb1c\n-gltf 0.2.0 https://github.com/treeform/gltf 00a49474dc84b1e6992c6650fc37f50acf30b9f2\n+gltf 0.2.0 https://github.com/treeform/gltf adbf72a1dbfe797e5b87136cf9c1ad6665b222d9\n webby 0.2.1 https://github.com/treeform/webby fe515be4ab5d02695289f88fca0d27f703a05599\n noisy 0.4.5 https://github.com/guzba/noisy 9625ee0a9dbdae44c427df95a4f8de006c061150\n benchy 0.1.0 https://github.com/treeform/benchy 6425417b578dc54008285aad020625b4b4f61f7b\n",
+  "dependencies": {
+    "verified_at": "2026-10-01T17:44:34.795246+00:00",
+    "dependencies": [
+      {
+        "name": "bassy",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/bassy",
+        "revision": "907b69f2d0d4f32186d72947883f5bdac159ce9d"
+      },
+      {
+        "name": "curly",
+        "version": "1.1.1",
+        "url": "https://github.com/guzba/curly",
+        "revision": "29558e2d2b76244a2c65fea08e9f4efff16c1997"
+      },
+      {
+        "name": "libcurl",
+        "version": "1.0.0",
+        "url": "https://github.com/Araq/libcurl",
+        "revision": "eecbfc31e17ae2f09f0b6d2aaefcfb970c7d2be4"
+      },
+      {
+        "name": "fixxy",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/fixxy",
+        "revision": "05e5446dffb70093056cebb0c57721a60deaf52a"
+      },
+      {
+        "name": "silky",
+        "version": "0.2.0",
+        "url": "https://github.com/treeform/silky",
+        "revision": "b7f59fb7670a42bfe4302b327ec55ed11d76d0d4"
+      },
+      {
+        "name": "pixie",
+        "version": "6.1.0",
+        "url": "https://github.com/treeform/pixie",
+        "revision": "30bb510877f02cbf9643e4f904e33d1c90f7910f"
+      },
+      {
+        "name": "vmath",
+        "version": "3.0.0",
+        "url": "https://github.com/treeform/vmath",
+        "revision": "bc260143102153b76328783e1c76c96e52c52a4b"
+      },
+      {
+        "name": "chroma",
+        "version": "1.0.0",
+        "url": "https://github.com/treeform/chroma",
+        "revision": "08b0d65590221bb964544fd9badf29a146b9091a"
+      },
+      {
+        "name": "zippy",
+        "version": "0.10.20",
+        "url": "https://github.com/guzba/zippy",
+        "revision": "e41dfa36a19d739a2be7493211decadbe451031d"
+      },
+      {
+        "name": "flatty",
+        "version": "0.4.0",
+        "url": "https://github.com/treeform/flatty",
+        "revision": "9c3f14cc287890b742196b4f0f74f0b9faab29cb"
+      },
+      {
+        "name": "nimsimd",
+        "version": "1.3.2",
+        "url": "https://github.com/guzba/nimsimd",
+        "revision": "dd27017fbfd1c6c00d37776a8f5d322bf6c5a83b"
+      },
+      {
+        "name": "bumpy",
+        "version": "1.1.3",
+        "url": "https://github.com/treeform/bumpy",
+        "revision": "93583f6f8056a6259aaa96c89f4c143ba55bc6f0"
+      },
+      {
+        "name": "crunchy",
+        "version": "0.1.11",
+        "url": "https://github.com/guzba/crunchy",
+        "revision": "98eb6526982bb8aae8eec6e8781f4539fa19e049"
+      },
+      {
+        "name": "shady",
+        "version": "0.1.5",
+        "url": "https://github.com/treeform/shady",
+        "revision": "c899f7cd17dbe7021d6e3aa2908e6de6549c47f1"
+      },
+      {
+        "name": "windy",
+        "version": "0.5.0",
+        "url": "https://github.com/treeform/windy",
+        "revision": "c9e19887b0ff143f382f5e99a0720ee01f9a9f51"
+      },
+      {
+        "name": "opengl",
+        "version": "1.2.9",
+        "url": "https://github.com/nim-lang/opengl",
+        "revision": "8e2e098f82dc5eefd874488c37b5830233cd18f4"
+      },
+      {
+        "name": "urlly",
+        "version": "1.1.1",
+        "url": "https://github.com/treeform/urlly",
+        "revision": "99784779f05649df25fd9c33003d8ef6de027345"
+      },
+      {
+        "name": "ws",
+        "version": "0.6.0",
+        "url": "https://github.com/treeform/ws",
+        "revision": "c9c0c7b51e2e83cc9305a895a0b144a297b4bea8"
+      },
+      {
+        "name": "dx12",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/dx12",
+        "revision": "65049f4e2ec1acbbf1987bfa79817d472650c15e"
+      },
+      {
+        "name": "vk14",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/vk14",
+        "revision": "183cf440d6460d97c6b35d6346079d9982f8cd57"
+      },
+      {
+        "name": "metal4",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/metal4",
+        "revision": "e9ef085d38cdc7abf3d89670f3eae1754595b9f9"
+      },
+      {
+        "name": "jsony",
+        "version": "1.1.6",
+        "url": "https://github.com/treeform/jsony",
+        "revision": "c5874fb71435e3ced8ee0025822e15f5d0e8e622"
+      },
+      {
+        "name": "fluffy",
+        "version": "1.0.0",
+        "url": "https://github.com/treeform/fluffy",
+        "revision": "535c5f234b41cd097b762203b5c216da1f4aeb1c"
+      },
+      {
+        "name": "gltf",
+        "version": "0.2.0",
+        "url": "https://github.com/treeform/gltf",
+        "revision": "adbf72a1dbfe797e5b87136cf9c1ad6665b222d9"
+      },
+      {
+        "name": "webby",
+        "version": "0.2.1",
+        "url": "https://github.com/treeform/webby",
+        "revision": "fe515be4ab5d02695289f88fca0d27f703a05599"
+      },
+      {
+        "name": "noisy",
+        "version": "0.4.5",
+        "url": "https://github.com/guzba/noisy",
+        "revision": "9625ee0a9dbdae44c427df95a4f8de006c061150"
+      },
+      {
+        "name": "benchy",
+        "version": "0.1.0",
+        "url": "https://github.com/treeform/benchy",
+        "revision": "6425417b578dc54008285aad020625b4b4f61f7b"
+      },
+      {
+        "name": "mummy",
+        "version": "0.4.8",
+        "url": "https://github.com/guzba/mummy",
+        "revision": "01deb1ff694988635c7bf0f24f6088a0bdf6db5d"
+      }
+    ]
+  },
+  "checks": [
+    "Nim checks, AWM simulation/session/multiplayer/gameover tests, and the full Polyworld test suite passed.",
+    "Native AWM file-player runtime checks passed for two and seven seats, including health, private logs, mailboxes, failures and log bounds.",
+    "All ten local and hosted certification checks passed; five hosted smoke games completed.",
+    "Explicit-release and league-targeted five-player acceptance experiences completed.",
+    "Three league rounds completed with 30 valid five-player games and four filler seats in each; rounds 2 and 3 were automatic.",
+    "Linux certification and league replays matched every tick on the native macOS verifier.",
+    "Published JavaScript, WASM and data hashes match the certified build.",
+    "The public league replay rendered and advanced without browser errors."
+  ],
+  "local_certification": {
+    "steps_passed": 10,
+    "artifacts": "/Users/me/p/metta-polyworld-coworld/tmp/coworld-cert-kxy4ycr6",
+    "results": {
+      "scores": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "ticks": 104,
+      "seed": 2026,
+      "outcome": "winner_0",
+      "banked_gold": [],
+      "returned": []
+    },
+    "replay_sha256": "816df738e6c126b76180cf3df153d8a592b91adc02ec7332a9df1cba597932bd",
+    "native_replay_verified": true
+  },
+  "hosted_certification": {
+    "coworld_id": "cow_ca2284e3-a47d-411e-8f5e-a9bcbc535a77",
+    "state": "certified",
+    "certified": true,
+    "contract_version": "main-4d62e199e638",
+    "certification_job_id": "13928ddf-035f-4d11-8fef-e9e46e29a6f6",
+    "failed_step": null,
+    "failure": null,
+    "transcript_summary": [
+      {
+        "id": "matriculate",
+        "status": "pass"
+      },
+      {
+        "id": "source-resolves",
+        "status": "pass"
+      },
+      {
+        "id": "images-reachable",
+        "status": "pass"
+      },
+      {
+        "id": "fixture-conforms",
+        "status": "pass"
+      },
+      {
+        "id": "smoke-episode",
+        "status": "pass"
+      },
+      {
+        "id": "results-conform",
+        "status": "pass"
+      },
+      {
+        "id": "replay-present",
+        "status": "pass"
+      },
+      {
+        "id": "replay-loadable",
+        "status": "pass"
+      },
+      {
+        "id": "players-run",
+        "status": "pass"
+      },
+      {
+        "id": "supporting-roles",
+        "status": "pass"
+      }
+    ],
+    "completed_at": "2026-10-01T17:53:46.198750Z"
+  },
+  "hosted_smoke": [
+    {
+      "id": "ereq_006f0235-e860-47a4-a789-6d89e3387872",
+      "status": "completed"
+    },
+    {
+      "id": "ereq_77fa2f0a-7dd0-4eba-b3e5-d006b6100c6d",
+      "status": "completed"
+    },
+    {
+      "id": "ereq_8a1a1fb4-ca3b-48e3-a0a6-90c7bdfcb969",
+      "status": "completed"
+    },
+    {
+      "id": "ereq_9a95134a-2959-4744-824f-989097fb3a0e",
+      "status": "completed"
+    },
+    {
+      "id": "ereq_af14c4d2-159a-4f7b-a147-52755c3d0802",
+      "status": "completed"
+    }
+  ],
+  "experiences": {
+    "explicit": {
+      "id": "xreq_2c49a07d-88a2-48a5-82d0-4811bc5501ca",
+      "status": "completed",
+      "episode_request_ids": [
+        "ereq_74193996-95f3-422f-a623-b029c2d01076"
+      ]
+    },
+    "league": {
+      "id": "xreq_98777c63-5da6-432d-b876-595fb153eed2",
+      "status": "completed",
+      "episode_request_ids": [
+        "ereq_bc065ae3-d003-4b72-877e-f6bab0e1cdff"
+      ]
+    }
+  },
+  "league": {
+    "id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+    "division_id": "div_4d48d8bd-0a9c-40a8-be80-d02cdbba132f",
+    "players_per_game": 5,
+    "public": true,
+    "hidden": false,
+    "round_interval_minutes": 30,
+    "rounds_paused": false,
+    "baseline_entrant_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+    "baseline_filler_version_id": "aeac1cb6-52d1-49f1-b9c8-6cac593a544e",
+    "ranked_entrants": 1,
+    "ranked_fillers": 0,
+    "settings": {
+      "ladder": {
+        "enabled": true,
+        "ranking": {
+          "k_factor": 32.0,
+          "algorithm": "elo",
+          "initial_rating": 1500.0,
+          "round_scoring_rule": "mean"
+        },
+        "divisions": [
+          {
+            "name": "Competition",
+            "division_id": "div_4d48d8bd-0a9c-40a8-be80-d02cdbba132f",
+            "disqualify_after_consecutive_failures": 3
+          }
+        ],
+        "scheduler": {
+          "strategy": "balanced_rotation",
+          "num_episodes": 10,
+          "insufficient_players": "filler_policy"
+        },
+        "fulfillment": {
+          "retry_times": 2,
+          "allowed_failures": 0.0
+        }
+      },
+      "scratchpads_enabled": false,
+      "round_interval_minutes": 30
+    },
+    "schedule_acceptance": {
+      "temporary_interval_minutes": 1,
+      "started_at": "2026-10-01T17:56:23.973849+00:00",
+      "restored_interval_minutes": 30,
+      "restored_at": "2026-10-01T18:00:30.836488+00:00"
+    }
+  },
+  "round_verification": {
+    "rounds": [
+      {
+        "id": "round_689309e8-4ec7-417c-af90-39e4adc39743",
+        "round_number": 1,
+        "status": "completed",
+        "scheduled_by": "ladder",
+        "created_at": "2026-10-01 17:56:03.418674+00:00",
+        "completed_at": "2026-10-01 17:57:08.174846+00:00",
+        "episodes": [
+          {
+            "id": "ereq_d0563785-b7c2-4a92-a134-58b8194a9aec",
+            "status": "completed",
+            "scores": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_853cd5bb-87d5-48fa-b1f6-783988e8f28e",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_61c8f507-3fc0-4650-851b-a40beaafcd4d",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_4370a6c4-6ad6-4920-bc46-080cfac093da",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_a9adf98f-ce04-4a2c-baef-83d747fba8d2",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_8299c9bc-0ff2-466b-93e2-01c163c854c5",
+            "status": "completed",
+            "scores": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_707b8d1d-068c-4e8f-a359-dd07661a485c",
+            "status": "completed",
+            "scores": [
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_40e9f63a-9a47-428d-81bb-97c5e649fa41",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "id": "ereq_af6b2e13-37da-4403-97c1-c1990b149260",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "id": "ereq_86216f4f-d363-4c9e-bfee-a27c360074bc",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          }
+        ]
+      },
+      {
+        "id": "round_00cde579-0d3d-49b9-b2f7-24214e0974b9",
+        "round_number": 2,
+        "status": "completed",
+        "scheduled_by": "ladder",
+        "created_at": "2026-10-01 17:57:08.754722+00:00",
+        "completed_at": "2026-10-01 17:58:31.772454+00:00",
+        "episodes": [
+          {
+            "id": "ereq_f5fa0be9-acfd-48f9-b244-389e34de5b2d",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_a099cc20-ce5c-4186-806a-d39e2d4a7d68",
+            "status": "completed",
+            "scores": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_f28b513f-4416-4f46-8e49-055ba7780cff",
+            "status": "completed",
+            "scores": [
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_a86cba1b-f374-45af-a683-c088797e9c9e",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_022f3023-248e-43d3-8286-8e7d5e4d453b",
+            "status": "completed",
+            "scores": [
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_c807045c-66ad-4ba0-8afe-f08ad0cdf88d",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_2a03497b-a2e8-458a-b39e-2bbf47ee5e10",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_920c4bcc-ebd3-4532-aa94-4057b5580a54",
+            "status": "completed",
+            "scores": [
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_4c6450e2-861b-40d6-9b02-11e54a7b00de",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "id": "ereq_a3d6f8d5-fcd6-4021-a4aa-9c40e5d1331d",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      {
+        "id": "round_6e464b13-6a28-4f03-a8a8-06c4c3059917",
+        "round_number": 3,
+        "status": "completed",
+        "scheduled_by": "ladder",
+        "created_at": "2026-10-01 17:58:50.215427+00:00",
+        "completed_at": "2026-10-01 18:00:03.999388+00:00",
+        "episodes": [
+          {
+            "id": "ereq_9bc1aca1-d806-4fed-9326-c78bc0db9cf0",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_a0d6e75b-86d1-4935-94f6-d1b90bb6c414",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "id": "ereq_2b4cf055-6399-46f1-b972-87b817e94294",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_2a8c3bca-c5e7-402c-a2b5-35acebae1f30",
+            "status": "completed",
+            "scores": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_43a2acf4-439f-4e13-b077-78e700212d46",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "id": "ereq_61a8b2ef-ce8f-4e6a-8cf0-61e69e65eb64",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_96c2e451-349b-4e74-8056-411d5105d250",
+            "status": "completed",
+            "scores": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_56172457-ba7d-417b-b470-12e00b462e03",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_d03e3581-28a4-4867-ae7a-0cfe82ee8aa0",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          {
+            "id": "ereq_06f7006f-c9fb-40d6-894e-0d6bec0948dd",
+            "status": "completed",
+            "scores": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ]
+          }
+        ]
+      }
+    ],
+    "automatic_rounds": [
+      2,
+      3
+    ],
+    "automatic_evidence": "Only round 1 was manually triggered; subsequent rounds came from the enabled ladder schedule.",
+    "ranked_entrants": 1,
+    "ranked_fillers": 0,
+    "verified_at": "2026-10-01T18:02:43.472911+00:00"
+  },
+  "hosted_verification": {
+    "version": "2026.10.1.1",
+    "coworld_id": "cow_ca2284e3-a47d-411e-8f5e-a9bcbc535a77",
+    "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+    "division_id": "div_4d48d8bd-0a9c-40a8-be80-d02cdbba132f",
+    "round_id": "round_689309e8-4ec7-417c-af90-39e4adc39743",
+    "round_number": 1,
+    "episodes": [
+      {
+        "episode_request_id": "ereq_d0563785-b7c2-4a92-a134-58b8194a9aec",
+        "ticks": 155,
+        "scores": [
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_853cd5bb-87d5-48fa-b1f6-783988e8f28e",
+        "ticks": 178,
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_61c8f507-3fc0-4650-851b-a40beaafcd4d",
+        "ticks": 105,
+        "scores": [
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_4370a6c4-6ad6-4920-bc46-080cfac093da",
+        "ticks": 164,
+        "scores": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_a9adf98f-ce04-4a2c-baef-83d747fba8d2",
+        "ticks": 386,
+        "scores": [
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_8299c9bc-0ff2-466b-93e2-01c163c854c5",
+        "ticks": 203,
+        "scores": [
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_707b8d1d-068c-4e8f-a359-dd07661a485c",
+        "ticks": 135,
+        "scores": [
+          0,
+          1,
+          0,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_40e9f63a-9a47-428d-81bb-97c5e649fa41",
+        "ticks": 188,
+        "scores": [
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_af6b2e13-37da-4403-97c1-c1990b149260",
+        "ticks": 194,
+        "scores": [
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "filler_seats": 4
+      },
+      {
+        "episode_request_id": "ereq_86216f4f-d363-4c9e-bfee-a27c360074bc",
+        "ticks": 287,
+        "scores": [
+          0,
+          0,
+          1,
+          0,
+          0
+        ],
+        "filler_seats": 4
+      }
+    ],
+    "native_replay_verified": true,
+    "replay_sha256": "3857935d897ed598b7b9bae10ae50f9aea800540f9a447174d504786b70be214",
+    "game_log_bytes": 22584,
+    "player_logs": [
+      {
+        "slot": 0,
+        "bytes": 49
+      },
+      {
+        "slot": 1,
+        "bytes": 49
+      },
+      {
+        "slot": 2,
+        "bytes": 49
+      },
+      {
+        "slot": 3,
+        "bytes": 49
+      },
+      {
+        "slot": 4,
+        "bytes": 49
+      }
+    ],
+    "viewer_assets": {
+      "js": {
+        "bytes": 294784,
+        "sha256": "cb9db23bf787ee97bc6f529dd01729306929e45423865b67bea4c94fce9e3ef6"
+      },
+      "wasm": {
+        "bytes": 4439556,
+        "sha256": "a7ec1c173c34c1cfae8b9dec4518eee90edcb484d81db7f24d7381624c74e72c"
+      },
+      "data": {
+        "bytes": 64732179,
+        "sha256": "f7d0cea1193788a8f406e019c37f4587f67f427ae21391145d1e5d92fc6b4416"
+      }
+    },
+    "episode_id": "6fa80081-db91-4ea9-9e87-7d32966d7b27",
+    "episode_request_id": "ereq_d0563785-b7c2-4a92-a134-58b8194a9aec",
+    "league_url": "https://softmax.com/archers-warriors-mages",
+    "watch_url": "https://softmax.com/archers-warriors-mages?e=6fa80081-db91-4ea9-9e87-7d32966d7b27",
+    "verified_at": "2026-10-01T17:57:58.086943+00:00"
+  },
+  "browser_verification": {
+    "coworld_id": "cow_ca2284e3-a47d-411e-8f5e-a9bcbc535a77",
+    "episode_id": "6fa80081-db91-4ea9-9e87-7d32966d7b27",
+    "episode_request_id": "ereq_d0563785-b7c2-4a92-a134-58b8194a9aec",
+    "watch_url": "https://softmax.com/archers-warriors-mages?e=6fa80081-db91-4ea9-9e87-7d32966d7b27",
+    "rendered": true,
+    "public_page_verified": true,
+    "browser_errors": [],
+    "method": "Opened the public league replay. Loading overlays closed; the five-player board and controls rendered. Replay advanced from tick 8 to 28 of 155 with no browser errors.",
+    "verified_at": "2026-10-01T18:00:01.410207+00:00"
+  },
+  "limitations": [
+    "The local Softmax stack was not running. Docker-local certification and hosted Softmax certification were both completed."
+  ],
+  "recorded_at": "2026-10-01T18:03:28.584536+00:00"
+}

@@ -1,7 +1,8 @@
 ## The multiplayer preview is a scene harness: these checks need no window.
 import std/[math, random, unittest]
 import vmath
-import ../[awmcourtyard, awmmultiplayermode, awmsim, awmsessions, awmbots]
+import ../src/scene/courtyard, ../src/modes/multiplayer, ../src/core/sim,
+  ../src/core/sessions, ../src/core/bots
 
 const Tolerance = 0.0002'f32
 
@@ -904,3 +905,32 @@ suite "An opponent, each opponent, and turn triggers":
     let action = match.game.nextBotAction()
     check action.kind == PlayCardAction
     check action.choices == @[heroChoice(2)]
+
+suite "Failing bot scripts":
+  const
+    ReferenceBot = staticRead("../players/base.bas")
+    BrokenBot = "this is not a BASIC program ((("
+    RunawayBot = "i = 0\nWHILE i < 1\n  j = j + 1\nWEND\n"
+
+  test "a script that doesn't compile holds its seat and fails every turn":
+    var match = newMultiplayerMatch([Archer, Mage, Warrior],
+      humanSeat = -1, seed = 3, botSources = [BrokenBot, ReferenceBot])
+    check match.bots[0].failed
+    check match.bots[0].lastError.len > 0
+    check not match.bots[1].failed
+    while match.current != 0:
+      check match.endTurn()
+    check match.bots[0].runDecision(match.game) == BotFailed
+    # The table passes its turn; the match goes on.
+    check match.endTurn()
+    check match.current == 1
+
+  test "a script that fails mid-decision runs again next time":
+    var match = newMultiplayerMatch([Archer, Mage, Warrior],
+      humanSeat = -1, seed = 3, botSources = [RunawayBot])
+    check not match.bots[match.current].failed
+    let hand = match.seats[match.current].hand.len
+    check match.bots[match.current].runDecision(match.game) == BotFailed
+    check match.bots[match.current].lastError.len > 0
+    check match.seats[match.current].hand.len == hand  # Nothing was played.
+    check match.bots[match.current].runDecision(match.game) == BotFailed

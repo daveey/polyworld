@@ -1,7 +1,7 @@
 import
   std/os,
   pixie,
-  ../[baseset, cardfaces, paths]
+  ../src/core/baseset, ../src/ui/cardfaces, ../src/paths
 
 proc testAssets() =
   ## Render cards and decode VFX using data assets from another directory.
