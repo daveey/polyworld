@@ -44,7 +44,8 @@ proc mapFingerprint(): uint64 =
   ## Hashes the packed map and its derived walkability in stable sequence order.
   var hash = HashySeed
   hash.addHashy(layers.len)
-  for layerIndex, layer in layers:
+  for layerIndex in 0 ..< layers.len:
+    let layer {.cursor.} = layers[layerIndex]
     hash.addHashy(layer.originX)
     hash.addHashy(layer.originZ)
     hash.addHashy(layer.width)

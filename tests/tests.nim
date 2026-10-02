@@ -2,6 +2,7 @@
 
 {.warning[UnusedImport]: off.}
 import
+  test_neural,
   test_assetpacks,
   test_actioncam,
   test_animblend_controls,

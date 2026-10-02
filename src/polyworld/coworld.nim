@@ -125,6 +125,14 @@ proc readPlayerSource*(path: string): string =
       input.close()
     result = newString(256 * 1024 + 1)
     result.setLen(input.readBuffer(result[0].addr, result.len))
+    if result.len > 4 and result[0 .. 3] == "PK\x03\x04":
+      # Neural packages (ZIP: manifest, policy.bas, model.bin) may reach
+      # 16 MiB; the game validates them completely before use.
+      let size = int(getFileSize(input))
+      if size <= 16 * 1024 * 1024:
+        input.setFilePos(0)
+        result = newString(size)
+        result.setLen(input.readBuffer(result[0].addr, size))
   except IOError, OSError:
     raise newException(CoworldError,
       "Cannot read staged player: " & getCurrentExceptionMsg())

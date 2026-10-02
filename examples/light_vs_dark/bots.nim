@@ -11,6 +11,7 @@
 ## kill things, and it is where fog of war is applied.
 
 import
+  polyworld/neural,
   bassy,
   polyworld/[mailboxes, bodies, metrics, profiles],
   content,
@@ -299,6 +300,7 @@ proc buildOverlordHost*(playerId: int32): Host =
   ## cost far more than their own cycles, so a script's budget prices its
   ## demand on the simulation rather than only its own arithmetic.
   result = initHost()
+  result.addNeuralFunctions()
   let sendChatProc: NumericHostProc = proc(args: openArray[Value]): Value =
     ## Sends script text through the game's routing rules.
     let player = int(playerId)

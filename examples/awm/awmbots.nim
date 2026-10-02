@@ -3,6 +3,7 @@
 ## Each invocation plays at most one card; the game loop calls repeatedly
 ## until the bot ends its turn.
 import bassy
+import polyworld/neural
 import awmsim
 
 type
@@ -56,6 +57,7 @@ proc botLimits(): Limits =
 
 proc buildBotHost(playerId: int32): Host =
   result = initHost()
+  result.addNeuralFunctions()
   for name in DataSlotNames:
     discard result.addData(name)
 
