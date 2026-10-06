@@ -391,6 +391,49 @@ block:
   doAssert enemy.hp == 10_000
   doAssert corpse.hp == 0 and corpse.state == Dying
 
+echo "Testing Druid spells heal allies and damage enemies in one area"
+for slot in [PrimaryAbility, SecondaryAbility]:
+  for rank in [1'i32, 4'i32]:
+    for aim in 0 .. 2:
+      let
+        game = spellGame(DruidWarden)
+        hero = game.world.heroes[0]
+        ally = game.target(1, WorldScale, true)
+        enemy = game.target(5, WorldScale)
+        outside = game.target(6, 5 * WorldScale)
+        spec = heroAbility(DruidWarden, slot).abilitySpec(rank)
+      hero.abilityLevels[slot] = rank
+      hero.hp -= 100
+      var creep = Footman(id: 1000, team: enemy.team, hp: 1000)
+      creep.controls[StunControl].ends = 100_000
+      creep.place(enemy.position)
+      game.world.footmen.add creep
+      game.step()
+      let
+        hp = hero.hp
+        allyHp = ally.hp
+        enemyHp = enemy.hp
+        mana = hero.mana
+      if aim == 0:
+        doAssert activatePlayerAbility(
+          game.world, hero.id, slot.ord.int32, enemy.id, 0, 0
+        )
+        flushPlayerCommands(game)
+      elif aim == 1:
+        doAssert game.world.applyCastTarget(hero.id, slot.ord.int32, ally.id)
+      else:
+        doAssert game.ground(slot, 1)
+      doAssert hero.mana == mana - spec.manaCost
+      game.step(spec.castTicks.int)
+      doAssert hero.hp == min(hero.maxHp, hp + spec.heal)
+      doAssert ally.hp == allyHp + spec.heal
+      doAssert enemy.hp == enemyHp - spec.damage
+      doAssert game.world.footmen[0].hp == 1000 - spec.damage
+      doAssert outside.hp == 10_000
+      game.step()
+      doAssert enemy.hp == enemyHp - spec.damage
+      doAssert ally.hp == allyHp + spec.heal
+
 echo "Testing explicit target commands release delayed map casts"
 block:
   let

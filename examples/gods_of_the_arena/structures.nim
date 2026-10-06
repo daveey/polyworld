@@ -321,7 +321,7 @@ proc loadSpells(view: ArrayView, state: StructureLoader, field: int) =
       of arrayField("spells.hostile"):
         scalar(world.heroById(spell.heroId).team != team)
       of arrayField("spells.support"):
-        scalar(spell.ability.abilitySpec.kind != Strike)
+        scalar(spell.ability.abilitySpec.damage == 0)
       else:
         raise newException(BasicError, "Unknown structured spell field")
     inc count

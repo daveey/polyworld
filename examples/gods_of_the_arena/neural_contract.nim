@@ -174,7 +174,7 @@ type
     attackable*, castable*: array[ObjectSlots, bool]
       ## david.bas nnChoose's per-slot rules from the observation cells: attackTarget / castTarget allowed.
     selfOrHelpAbility*: bool
-      ## some ability is self-cast or not a Strike (castTarget allowed without a target).
+      ## some ability is self-cast or can target an ally (castTarget allowed without a target; v67: spec.canTarget(true)).
   Heads* = array[ActionHeads, int32]
 
 template side(team: Team): int32 = (if team == RedTeam: 1'i32 else: -1'i32)
@@ -311,7 +311,7 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
   frame.selfPos = hero.position
   for slot in HeroAbilitySlot:
     let spec = heroAbility(hero.class, slot).abilitySpec(hero.abilityLevels[slot])
-    if spec.casting == SelfCast or spec.kind != Strike:
+    if spec.casting == SelfCast or spec.canTarget(true):
       frame.selfOrHelpAbility = true
   var f {.noinit.}: array[ObservationSize, Fixed]
   for i in 0 ..< ObservationSize:
@@ -595,7 +595,7 @@ proc buildObservation*(world: World, heroIndex: int, goal: openArray[float32],
     clampAt(b+3, fixxy.sqrt(warnDist[s]), 0, 8)
     clampAt(b+4, fdiv(warnTick[s] - snapshot.tick, fixed(72)), 0, 4)
     f[b+5] = fbool(caster < 0 or world.heroes[caster].team != team)
-    f[b+6] = fbool(w.ability.abilitySpec.kind != Strike)
+    f[b+6] = fbool(w.ability.abilitySpec.damage == 0)   # v67: upstream spells.support moved off kind == Strike the same way
     f[b+7] = fdiv(int32(w.ability.ord), fixed(40))
   # Summary.
   p = ObsSummaryOffset
@@ -744,8 +744,7 @@ proc actionMask*(world: World, heroIndex: int, frame: DecisionFrame): ActionMask
       world.visible(hero.team, target.position)
     for a in 0 ..< 4:
       let ok = specs[a].casting == SelfCast or (usable and
-        (if specs[a].kind == Strike: target.faction != hero.team.ord.int32
-         else: target.faction == hero.team.ord.int32))
+        specs[a].canTarget(target.faction == hero.team.ord.int32))   # v67 targeting rule (sim.nim / controls.nim)
       if ok:
         result[MaskTarget + (1 + a) * ObjectSlots + s] = 1
   for v in [1, 2, 6]:

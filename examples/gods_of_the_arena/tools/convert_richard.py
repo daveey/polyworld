@@ -101,8 +101,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
+    parser.add_argument("--tensors", action="store_true",
+                        help="Write a BASIC-defined packed tensor architecture")
     args = parser.parse_args()
     source, resources = convert(args.source.read_text())
+    if args.tensors:
+        from tensor_packages import tensorize
+        source, resources = tensorize(source, resources)
     with zipfile.ZipFile(args.destination, "w", zipfile.ZIP_DEFLATED) as package:
         package.writestr("policy.bas", source)
         for name, data in resources.items():

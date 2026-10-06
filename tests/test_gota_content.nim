@@ -48,10 +48,10 @@ block:
 
 echo "Testing spell ranks clamp to the declared slot limit"
 block:
-  doAssert FirebrandSword.abilitySpec(4).damage == 100
+  doAssert FirebrandSword.abilitySpec(4).damage == 102
   doAssert FirebrandSword.abilitySpec(int32.high) ==
     FirebrandSword.abilitySpec(4)
-  doAssert BlazingBlade.abilitySpec(3).damage == 144
+  doAssert BlazingBlade.abilitySpec(3).damage == 408
   doAssert BlazingBlade.abilitySpec(4) == BlazingBlade.abilitySpec(3)
   doAssert BlazingBlade.abilitySpec(int32.high) == BlazingBlade.abilitySpec(3)
 
@@ -84,6 +84,8 @@ block:
   for class in HeroClass:
     doAssert heroMaxHp(class, 2) > heroMaxHp(class, 1)
     doAssert heroMaxMana(class, 2) >= heroMaxMana(class, 1)
+    doAssert heroMaxMana(class, 1) == class.heroSpec.baseMana
+    doAssert heroMaxMana(class, HeroMaxLevel) == class.heroSpec.maxLevelMana
     doAssert heroDamage(class, 2) > heroDamage(class, 1)
     doAssert heroMovePerTick(class, 2) > heroMovePerTick(class, 1)
     doAssert heroAttackRange(class) == class.heroSpec.attackRange
@@ -91,6 +93,48 @@ block:
     doAssert heroAbility(class, PrimaryAbility) ==
       class.heroSpec.abilities[PrimaryAbility]
     doAssert abilityIconKey(heroAbility(class, PassiveAbility)).len > 8
+
+echo "Testing carries stay fragile early and retain late health"
+block:
+  for class in [Ranger, Crossbowman]:
+    doAssert class.heroMaxHp(3) < Arcanist.heroMaxHp(3)
+    doAssert class.heroMaxHp(5) < 400
+    doAssert class.heroMaxHp(10) < 800
+    doAssert class.heroMaxHp(20) in 1900 .. 2100
+    doAssert class.heroMaxHp(0) == class.heroMaxHp(1)
+    doAssert class.heroMaxHp(21) == class.heroMaxHp(20)
+    var previousGain = 0'i32
+    for level in 2 .. HeroMaxLevel:
+      let gain = class.heroMaxHp(level) - class.heroMaxHp(level - 1)
+      doAssert gain > previousGain
+      previousGain = gain
+  for class in [VanguardKnight, DeathKnight]:
+    doAssert class.heroMaxHp(1) >= 425
+    doAssert class.heroMaxHp(20) >= 2400
+    for level in 1 .. HeroMaxLevel:
+      doAssert class.heroMaxHp(level) > Ranger.heroMaxHp(level)
+      doAssert class.heroMaxHp(level) > Crossbowman.heroMaxHp(level)
+
+echo "Testing carry spells delay damage without losing their final power"
+block:
+  for (ability, finalDamage) in [
+    (DragonSight, 47'i32), (VerdantArrow, 122'i32),
+    (RicochetDisc, 165'i32), (StormEagle, 442'i32),
+    (FinalMeasure, 52'i32), (SiegeScarab, 130'i32),
+    (LodestoneSurge, 175'i32), (ClockworkCharge, 470'i32)
+  ]:
+    let slot = ability.abilitySpec.slot
+    doAssert ability.abilitySpec(0).damage == 0
+    doAssert ability.abilitySpec(1).damage == ability.abilitySpec.damage
+    doAssert ability.abilitySpec(slot.abilityMaxLevel).damage == finalDamage
+    doAssert ability.abilitySpec(int32.high).damage == finalDamage
+    for rank in 2'i32 .. slot.abilityMaxLevel:
+      doAssert ability.abilitySpec(rank).damage >
+        ability.abilitySpec(rank - 1).damage
+  doAssert RicochetDisc.abilitySpec(1).damage == 35
+  doAssert LodestoneSurge.abilitySpec(1).damage == 35
+  doAssert StormEagle.abilitySpec(1).damage < 120
+  doAssert ClockworkCharge.abilitySpec(1).damage < 120
 
 echo "Testing the shop catalog has distinct usable items"
 block:

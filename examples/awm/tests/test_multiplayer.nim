@@ -411,7 +411,14 @@ suite "Turns and the spectator camera":
     check spectating.turnLabel ==
       "PLAYER " & $(spectating.current + 1) & "'S TURN"
     check spectating.turnStatus == "Watching bot match..."
-
+    let names = @["Andrew B", "Andre H", "Rodrigo"]
+    check spectating.turnLabel(names) ==
+      names[spectating.current] & "'s turn"
+    check human.turnLabel(names) == names[human.current] & "'s turn"
+    var finished = spectating
+    finished.game.winner = 1
+    finished.game.gameOver = true
+    check finished.turnStatus(names) == "Andre H is the last one standing."
 
 suite "Playing cards in a multiplayer match":
   proc humanMatch(heroClass: HeroClass): MultiplayerMatch =
@@ -687,29 +694,21 @@ suite "Bots in a multiplayer match":
   const ReferenceBot = staticRead("../players/base.bas")
 
   proc botTurn(match: var MultiplayerMatch): tuple[plays, attacks: int] =
-    ## What the table does for the current bot seat, without the table:
-    ## answer waiting choices, play until it stops, attack, end the turn.
+    ## Runs the same explicitly selected actions as the table and server.
     let seat = match.current
-    for _ in 0 ..< 20:
-      while match.game.waitingChoice:
-        check match.game.applyBotAction(match.game.nextBotAction())
-      if match.game.gameOver: return
-      case match.bots[seat].runDecision(match.game)
+    for _ in 0 ..< 200:
+      if match.game.gameOver or match.current != seat:
+        return
+      let owner = match.game.actingPlayer()
+      case match.bots[owner].runDecision(match.game)
       of BotPlayedCard: inc result.plays
-      of BotEndedTurn: break
+      of BotAttacked: inc result.attacks
+      of BotResolvedTrigger, BotTossed: discard
+      of BotEndedTurn: return
       of BotFailed:
-        checkpoint match.bots[seat].lastError
+        checkpoint match.bots[owner].lastError
         fail()
         return
-    while match.game.waitingChoice:
-      check match.game.applyBotAction(match.game.nextBotAction())
-    for attacker in match.game.eligibleAttackers():
-      if match.game.attack(attacker,
-          heroChoice(match.game.nextPlayer(seat))):
-        inc result.attacks
-      while match.game.waitingChoice:
-        check match.game.applyBotAction(match.game.nextBotAction())
-    discard match.endTurn()
 
   test "every seat but the human's gets a bot":
     let match = newMultiplayerMatch([Archer, Mage, Warrior, Mage],
@@ -763,7 +762,7 @@ suite "Bots in a multiplayer match":
     check match.game.attack(bear, heroChoice(2))
     while match.game.waitingChoice:
       check match.game.actingPlayer() == 2
-      check match.game.applyBotAction(match.game.nextBotAction())
+      check match.bots[2].runDecision(match.game) == BotResolvedTrigger
     check match.seats[0].hand[^1].name == "Bear"
 
 
@@ -934,3 +933,13 @@ suite "Failing bot scripts":
     check match.bots[match.current].lastError.len > 0
     check match.seats[match.current].hand.len == hand  # Nothing was played.
     check match.bots[match.current].runDecision(match.game) == BotFailed
+
+echo "Multiplayer bots choose their class while preserving the human's choice"
+block:
+  let match = newMultiplayerMatch(@[Mage, Archer, Warrior], 0, 23,
+    @["if selectingClass then\npickClass(1)\nend\nend if\nendTurn()"],
+    pickClasses = true)
+  doAssert match.game.players[0].heroClass == Mage
+  doAssert match.game.players[1].heroClass == Warrior
+  doAssert match.game.players[2].heroClass == Warrior
+  doAssert match.bots[0] == nil

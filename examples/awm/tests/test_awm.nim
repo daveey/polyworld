@@ -7,17 +7,20 @@ suite "AWM base set":
     check DeckSize == 40
     let deck = Mage.baseDeck()
     check deck.len == DeckSize
-    var bouncers, oozifications, plans, studies, primordials, shields: int
+    var bouncers, oozifications, plans, studies, summons, shields: int
     for card in deck:
       check card.class == some(Mage)
       if card == baseCard("bouncer-1"): inc bouncers
       elif card == baseCard("oozification-4"): inc oozifications
       elif card == baseCard("plan-3"): inc plans
       elif card == baseCard("study-2"): inc studies
-      elif card == baseCard("primordial-8"): inc primordials
+      elif card == baseCard("summon-primordial-8"): inc summons
       elif card == baseCard("bubble-shield-2"): inc shields
+      # Summoned-only cards never sit in the deck.
       check card != baseCard("bubble-0")
-    check (bouncers, oozifications, plans, studies, primordials, shields) ==
+      check card != baseCard("primordial-8")
+      check card != baseCard("ooze-0")
+    check (bouncers, oozifications, plans, studies, summons, shields) ==
       (16, 4, 7, 7, 2, 4)
 
   test "the Warrior deck is forty cards of every Warrior card":
@@ -1868,46 +1871,110 @@ suite "AWM selections and Primordial":
       "Deal the number of other friendly cards damage to a hero."
     check not compiles(rules(damage(1, game.board.choose({color: Minion}))))
 
-  test "Primordial returns every other card to its owner's hand":
-    let primordial = baseCard("Primordial", 8)
-    check primordial.kind == Minion
-    check primordial.class == some(Mage)
-    check primordial.power == 10
-    check primordial.toughness == 10
-    check not primordial.needsChoice()
-    check primordial.ruleText() ==
+  test "a query's owner filter is a pick, and reads as the hero itself":
+    check printed(rules(bounce(game.board.choose({owner: target({Hero})})))) ==
+      "Return all cards a hero controls to their owner's hand."
+    check printed(rules(destroy(
+      game.board.choose({kind: Minion, owner: target({Opponent})})))) ==
+      "Destroy all minions an opponent controls."
+    # One owner keeps the possessive singular; several keep it plural.
+    check printed(rules(bounce(game.board.choose({kind: Minion, owner: You})))) ==
+      "Return all friendly minions to their owner's hand."
+    check printed(rules(bounce(game.board.choose({self: false})))) ==
       "Return all other cards to their owners' hands."
+    # A picked card still names its owner; only players speak for themselves.
+    check printed(rules(bounce(target({Minion})),
+      damage(1, game.board.choose({owner: getTarget().owner})))) ==
+      "Return a minion to its owner's hand.\n" &
+      "Deal 1 damage to all cards the target's owner controls."
+
+  test "Summon Primordial asks for a hero, clears its board and summons":
+    let spell = baseCard("summon-primordial-8")
+    check spell.kind == Spell
+    check spell.class == some(Mage)
+    check spell.ruleText() ==
+      "Return all cards a hero controls to their owner's hand.\n" &
+      "Summon a Primordial."
+    check spell.needsChoice()
+    check spell.targetCount() == 1
+    check spell.targetPrompt(0).choose == "Choose a hero."
     var game = newGame(Mage, Warrior, 1401)
     let
       me = game.currentPlayer
       enemy = 1 - me
-    game.players[me].board = @[readyMinion(me, 1, Warrior.classCard()),
-      MinionState(id: 2, owner: me, card: baseCard("Plan", 3),
-        enteredTurn: game.turnNumber)]
-    game.players[enemy].board = @[readyMinion(enemy, 3, baseCard("Sniper", 2)),
-      readyMinion(enemy, 4, Warrior.classCard())]
-    game.nextMinionId = 5
-    game.players[me].hand = @[primordial]
-    game.players[me].energy = 10
+    game.players[me].board = @[readyMinion(me, 1, Mage.classCard())]
+    game.players[enemy].board = @[readyMinion(enemy, 2, baseCard("Sniper", 2)),
+      MinionState(id: 3, owner: enemy, card: Warrior.classCard(),
+        currentToughness: 2, enteredTurn: game.turnNumber)]
+    game.nextMinionId = 4
+    game.players[me].hand = @[spell]
+    game.players[me].energy = 8
+    let aimed = game.availableChoices(0)
+    check aimed.len == 2
+    check heroChoice(me) in aimed
+    check heroChoice(enemy) in aimed
     let enemyHand = game.players[enemy].hand.len
-    check game.playCard(0)
-    check game.players[me].board.len == 1
-    check game.players[me].board[0].card == primordial
+    check game.playCard(0, heroChoice(enemy))
+    # The enemy board goes home; mine keeps its minion and gains Primordial.
     check game.players[enemy].board.len == 0
-    check game.players[me].hand == @[Warrior.classCard(), baseCard("Plan", 3)]
     check game.players[enemy].hand.len == enemyHand + 2
     check game.players[enemy].hand[^2 .. ^1] ==
       @[baseCard("Sniper", 2), Warrior.classCard()]
-    var bubbles, bounces: seq[int]
+    check game.players[me].board.len == 2
+    check game.players[me].board[0].card == Mage.classCard()
+    let primordial = game.players[me].board[1]
+    check primordial.card == baseCard("primordial-8")
+    check primordial.power == 10
+    check primordial.currentToughness == 10
+    check not primordial.canAttack
+    var bubbles, bounces, summons: int
     for event in game.takeVisualEvents():
       case event.kind
-      of BubbleVfx: bubbles.add event.beat
-      of BounceVfx: bounces.add event.beat
+      of BubbleVfx: inc bubbles
+      of BounceVfx: inc bounces
+      of SummonVfx: inc summons
       else: discard
-    check bubbles.len == 4
-    check bounces.len == 4
-    for beat in bubbles & bounces:
-      check beat == bubbles[0]
+    check (bubbles, bounces, summons) == (2, 2, 1)
+
+  test "Summon Primordial aimed at your own hero clears your side first":
+    let spell = baseCard("summon-primordial-8")
+    var game = newGame(Mage, Warrior, 1402)
+    let
+      me = game.currentPlayer
+      enemy = 1 - me
+    game.players[me].board = @[readyMinion(me, 1, Mage.classCard()),
+      MinionState(id: 2, owner: me, card: baseCard("Plan", 3),
+        enteredTurn: game.turnNumber)]
+    game.players[enemy].board = @[readyMinion(enemy, 3, Warrior.classCard())]
+    game.nextMinionId = 4
+    game.players[me].hand = @[spell]
+    game.players[me].energy = 8
+    check game.playCard(0, heroChoice(me))
+    check game.players[me].hand ==
+      @[Mage.classCard(), baseCard("Plan", 3)]
+    check game.players[me].board.len == 1
+    check game.players[me].board[0].card == baseCard("primordial-8")
+    check game.players[enemy].board.len == 1
+
+  test "canceling the hero pick pays nothing and summons nothing":
+    var game = newGame(Mage, Warrior, 1403)
+    let me = game.currentPlayer
+    game.players[me].hand = @[baseCard("summon-primordial-8")]
+    game.players[me].energy = 8
+    check not game.playCard(0, Canceled)
+    check game.players[me].energy == 8
+    check game.players[me].hand.len == 1
+    check game.players[me].board.len == 0
+    check game.takeVisualEvents().len == 0
+
+  test "Primordial itself is a vanilla 10/10 that only Summon Primordial makes":
+    let primordial = baseCard("primordial-8")
+    check primordial.kind == Minion
+    check primordial.class == some(Mage)
+    check (primordial.power, primordial.toughness) == (10, 10)
+    check primordial.rules.len == 0
+    check primordial.ruleText() == ""
+    check not primordial.needsChoice()
 
   test "query forms act on every match, and a spell has no self to skip":
     let sweep = Card(name: "Sweep", energyCost: 0, kind: Spell, rules: rules(

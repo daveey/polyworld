@@ -262,7 +262,8 @@ nim r -d:headless --out:build/test_match tests/test_match.nim
 | Warrior | Commander | 4 | 5 | Minion | 2/3 | Summons 2 Footsoldiers |
 | Warrior | Rally | 3 | 5 | Spell | — | Summons 2 Footsoldiers, then friendly minions get +1/+0 |
 | Mage | Bouncer | 16 | 1 | Minion | 1/1 | Return a minion to owner's hand |
-| Mage | Primordial | 2 | 8 | Minion | 10/10 | Return all other cards to their owners' hands |
+| Mage | Summon Primordial | 2 | 8 | Spell | — | Return all cards a hero controls to their owner's hand, then summon a Primordial |
+| Mage | Primordial | — | 8 | Minion | 10/10 | — (only summoned, by Summon Primordial) |
 | Mage | Study | 7 | 2 | Spell | — | Draw 2 cards, then discard 1 card of your choice |
 | Mage | Plan | 7 | 3 | Trinket | — | Draw 1 card; at the start of your next turn, draw 1 card and destroy Plan |
 | Mage | Oozification | 4 | 4 | Spell | — | Destroy a minion; its owner gets Oozes equal to its current toughness |

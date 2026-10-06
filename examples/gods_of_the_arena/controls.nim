@@ -158,9 +158,8 @@ proc activatePlayerAbility*(
     if not world.spellTarget(id, target) or not target.alive or
       not world.visible(hero.team, target.position):
         continue
-    if (spec.kind == Strike and target.team == hero.team) or
-      (spec.kind != Strike and target.team != hero.team):
-        continue
+    if not spec.canTarget(target.faction == hero.team.ord.int32):
+      continue
     if spec.casting == MeleeCast and
       not within(hero.position, target.position, spec.range):
         mapX = mapCoordinate(target.position.x)

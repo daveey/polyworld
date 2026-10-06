@@ -7,8 +7,14 @@ export fxshapes
 
 const
   InventorySlots* = 6
+  HeroMaxLevel* = 20
   MeleeCreepsPerBarracks* = 3
   CreepsPerBarracks* = MeleeCreepsPerBarracks + 1
+  ## Normalized accelerating health growth avoids runtime floating point.
+  CarryHealthGrowth: array[HeroMaxLevel, int32] = [
+    0, 90, 273, 522, 827, 1181, 1581, 2024, 2506, 3025,
+    3581, 4171, 4794, 5449, 6135, 6851, 7596, 8370, 9171, 10000
+  ]
   TickRate* = SharedTickRate
     ## Simulation ticks per second.
   DraftPickTicks* = 10 * TickRate
@@ -58,14 +64,18 @@ type
     started*, ends*: int32
   CastKind* = enum
     SelfCast, MeleeCast, ProjectileCast, AreaCast
+  HealthGrowth* = enum
+    SteadyGrowth, DelayedGrowth
   HeroSpec* = object
     name*: string
     role*: string
     attackStyle*: HeroAttackStyle
     baseHitPoints*: int32
     hitPointsPerLevel*: int32
+      ## Average HP gain, distributed according to the selected growth curve.
+    healthGrowth*: HealthGrowth
     baseMana*: int32
-    manaPerLevel*: int32
+    maxLevelMana*: int32
     baseDamage*: int32
     damagePerLevel*: int32
     baseMovePerTick*: int32
@@ -90,6 +100,7 @@ type
     manaCost*: int32
     range*: int32
     damage*: int32
+    damageRanks*: array[4, int32]
     heal*: int32
     restore*: int32
     control*: ControlEffect
@@ -164,14 +175,14 @@ const
       name: "Vanguard Knight",
       role: "Frontline protector",
       attackStyle: MeleeAttack,
-      baseHitPoints: 330,
-      hitPointsPerLevel: 88,
-      baseMana: 110,
-      manaPerLevel: 8,
-      baseDamage: 25,
-      damagePerLevel: 5,
-      baseMovePerTick: 5_800,
-      movePerLevel: 60,
+      baseHitPoints: 451,
+      hitPointsPerLevel: 113,
+      baseMana: 107,
+      maxLevelMana: 254,
+      baseDamage: 33,
+      damagePerLevel: 6,
+      baseMovePerTick: 5_665,
+      movePerLevel: 40,
       attackRange: 70_000,
       attackTicks: 27,
       abilities: [
@@ -182,16 +193,17 @@ const
       name: "Ranger",
       role: "Mobile ranged carry",
       attackStyle: RangedAttack,
-      baseHitPoints: 25,
-      hitPointsPerLevel: 1,
-      baseMana: 110,
-      manaPerLevel: 8,
-      baseDamage: 31,
-      damagePerLevel: 6,
-      baseMovePerTick: 6_900,
-      movePerLevel: 90,
+      baseHitPoints: 218,
+      hitPointsPerLevel: 90,
+      healthGrowth: DelayedGrowth,
+      baseMana: 52,
+      maxLevelMana: 361,
+      baseDamage: 21,
+      damagePerLevel: 12,
+      baseMovePerTick: 5_610,
+      movePerLevel: 174,
       attackRange: 330_000,
-      attackTicks: 18,
+      attackTicks: 30,
       abilities: [
         DragonSight, VerdantArrow, RicochetDisc, StormEagle
       ]
@@ -200,14 +212,14 @@ const
       name: "Arcanist",
       role: "Burst mage",
       attackStyle: MagicAttack,
-      baseHitPoints: 190,
-      hitPointsPerLevel: 25,
-      baseMana: 180,
-      manaPerLevel: 15,
-      baseDamage: 38,
-      damagePerLevel: 8,
-      baseMovePerTick: 6_200,
-      movePerLevel: 70,
+      baseHitPoints: 288,
+      hitPointsPerLevel: 19,
+      baseMana: 185,
+      maxLevelMana: 479,
+      baseDamage: 26,
+      damagePerLevel: 5,
+      baseMovePerTick: 6_324,
+      movePerLevel: 71,
       attackRange: 300_000,
       attackTicks: 30,
       abilities: [
@@ -218,14 +230,14 @@ const
       name: "Druid Warden",
       role: "Durable support",
       attackStyle: MagicAttack,
-      baseHitPoints: 250,
-      hitPointsPerLevel: 48,
-      baseMana: 170,
-      manaPerLevel: 14,
-      baseDamage: 21,
-      damagePerLevel: 4,
-      baseMovePerTick: 6_400,
-      movePerLevel: 70,
+      baseHitPoints: 306,
+      hitPointsPerLevel: 20,
+      baseMana: 167,
+      maxLevelMana: 427,
+      baseDamage: 24,
+      damagePerLevel: 2,
+      baseMovePerTick: 6_592,
+      movePerLevel: 72,
       attackRange: 240_000,
       attackTicks: 30,
       abilities: [
@@ -236,14 +248,14 @@ const
       name: "Demon Hunter",
       role: "Melee assassin",
       attackStyle: MeleeAttack,
-      baseHitPoints: 220,
-      hitPointsPerLevel: 36,
-      baseMana: 90,
-      manaPerLevel: 7,
-      baseDamage: 32,
-      damagePerLevel: 7,
-      baseMovePerTick: 10094,
-      movePerLevel: 120,
+      baseHitPoints: 335,
+      hitPointsPerLevel: 67,
+      baseMana: 93,
+      maxLevelMana: 230,
+      baseDamage: 29,
+      damagePerLevel: 5,
+      baseMovePerTick: 6_125,
+      movePerLevel: 168,
       attackRange: 75_000,
       attackTicks: 15,
       abilities: [
@@ -254,14 +266,14 @@ const
       name: "Death Knight",
       role: "Sustaining bruiser",
       attackStyle: MeleeAttack,
-      baseHitPoints: 350,
-      hitPointsPerLevel: 62,
-      baseMana: 90,
-      manaPerLevel: 8,
-      baseDamage: 30,
+      baseHitPoints: 425,
+      hitPointsPerLevel: 105,
+      baseMana: 93,
+      maxLevelMana: 249,
+      baseDamage: 36,
       damagePerLevel: 6,
-      baseMovePerTick: 5_700,
-      movePerLevel: 60,
+      baseMovePerTick: 5_335,
+      movePerLevel: 38,
       attackRange: 76_000,
       attackTicks: 28,
       abilities: [
@@ -272,16 +284,17 @@ const
       name: "Crossbowman",
       role: "Heavy ranged carry",
       attackStyle: RangedAttack,
-      baseHitPoints: 230,
-      hitPointsPerLevel: 42,
-      baseMana: 60,
-      manaPerLevel: 6,
-      baseDamage: 58,
-      damagePerLevel: 9,
-      baseMovePerTick: 6_000,
-      movePerLevel: 60,
+      baseHitPoints: 232,
+      hitPointsPerLevel: 96,
+      healthGrowth: DelayedGrowth,
+      baseMana: 49,
+      maxLevelMana: 340,
+      baseDamage: 19,
+      damagePerLevel: 12,
+      baseMovePerTick: 5_390,
+      movePerLevel: 168,
       attackRange: 390_000,
-      attackTicks: 126,
+      attackTicks: 30,
       abilities: [
         FinalMeasure, SiegeScarab, LodestoneSurge, ClockworkCharge
       ]
@@ -290,16 +303,16 @@ const
       name: "Lich",
       role: "Control mage",
       attackStyle: MagicAttack,
-      baseHitPoints: 185,
-      hitPointsPerLevel: 18,
-      baseMana: 210,
-      manaPerLevel: 17,
-      baseDamage: 36,
-      damagePerLevel: 8,
-      baseMovePerTick: 6_000,
-      movePerLevel: 60,
+      baseHitPoints: 312,
+      hitPointsPerLevel: 21,
+      baseMana: 204,
+      maxLevelMana: 517,
+      baseDamage: 24,
+      damagePerLevel: 5,
+      baseMovePerTick: 5_880,
+      movePerLevel: 59,
       attackRange: 330_000,
-      attackTicks: 32,
+      attackTicks: 30,
       abilities: [
         FrostSigil, IceSpear, BoneMarionette, BoundVoid
       ]
@@ -308,16 +321,16 @@ const
       name: "Warlock",
       role: "Utility summoner",
       attackStyle: MagicAttack,
-      baseHitPoints: 240,
-      hitPointsPerLevel: 46,
-      baseMana: 190,
-      manaPerLevel: 16,
-      baseDamage: 21,
-      damagePerLevel: 5,
-      baseMovePerTick: 6_200,
-      movePerLevel: 70,
+      baseHitPoints: 294,
+      hitPointsPerLevel: 20,
+      baseMana: 194,
+      maxLevelMana: 504,
+      baseDamage: 26,
+      damagePerLevel: 2,
+      baseMovePerTick: 6_014,
+      movePerLevel: 68,
       attackRange: 270_000,
-      attackTicks: 28,
+      attackTicks: 30,
       abilities: [
         AetherSiphon, MothHex, DreadTotem, VoidPortal
       ]
@@ -326,14 +339,14 @@ const
       name: "Berserker",
       role: "Aggressive melee carry",
       attackStyle: MeleeAttack,
-      baseHitPoints: 300,
-      hitPointsPerLevel: 55,
-      baseMana: 40,
-      manaPerLevel: 4,
-      baseDamage: 53,
-      damagePerLevel: 8,
-      baseMovePerTick: 5976,
-      movePerLevel: 90,
+      baseHitPoints: 315,
+      hitPointsPerLevel: 63,
+      baseMana: 87,
+      maxLevelMana: 216,
+      baseDamage: 41,
+      damagePerLevel: 7,
+      baseMovePerTick: 6_375,
+      movePerLevel: 174,
       attackRange: 80_000,
       attackTicks: 20,
       abilities: [
@@ -351,7 +364,7 @@ const
       slot: PrimaryAbility,
       name: "Firebrand Sword", icon: "firebrand_sword",
       kind: Strike, cooldownTicks: 96, manaCost: 20,
-      range: 90_000, damage: 40
+      range: 90_000, damage: 41
     ),
     InfernoAegis: AbilitySpec(
       slot: SecondaryAbility,
@@ -362,32 +375,36 @@ const
       slot: UltimateAbility,
       name: "Blazing Blade", icon: "blazing_blade",
       kind: Strike, cooldownTicks: 480, manaCost: 70,
-      range: 110_000, damage: 72,
+      range: 110_000, damage: 204,
       control: StunControl, controlTicks: TickRate
     ),
     DragonSight: AbilitySpec(
       slot: PassiveAbility,
       name: "Dragon Sight", icon: "dragon_sight",
       kind: Strike, cooldownTicks: 216,
-      range: 420_000, damage: 16
+      range: 420_000, damage: 10,
+      damageRanks: [10, 19, 33, 47]
     ),
     VerdantArrow: AbilitySpec(
       slot: PrimaryAbility,
       name: "Verdant Arrow", icon: "verdant_arrow",
       kind: Strike, cooldownTicks: 72, manaCost: 18,
-      range: 360_000, damage: 32
+      range: 360_000, damage: 25,
+      damageRanks: [25, 49, 85, 122]
     ),
     RicochetDisc: AbilitySpec(
       slot: SecondaryAbility,
       name: "Ricochet Disc", icon: "ricochet_disc",
       kind: Strike, cooldownTicks: 192, manaCost: 32,
-      range: 390_000, damage: 48
+      range: 390_000, damage: 35,
+      damageRanks: [35, 66, 115, 165]
     ),
     StormEagle: AbilitySpec(
       slot: UltimateAbility,
       name: "Storm Eagle", icon: "storm_eagle",
       kind: Strike, cooldownTicks: 576, manaCost: 80,
-      range: 480_000, damage: 95
+      range: 480_000, damage: 110,
+      damageRanks: [110, 250, 442, 0]
     ),
     ManaCrystal: AbilitySpec(
       slot: PassiveAbility,
@@ -398,19 +415,19 @@ const
       slot: PrimaryAbility,
       name: "Frost Lance", icon: "frost_lance",
       kind: Strike, cooldownTicks: 96, manaCost: 28,
-      range: 330_000, damage: 42
+      range: 330_000, damage: 41
     ),
     MeteorStrike: AbilitySpec(
       slot: SecondaryAbility,
       name: "Meteor Strike", icon: "meteor_strike",
       kind: Strike, cooldownTicks: 216, manaCost: 53,
-      range: 360_000, damage: 70
+      range: 360_000, damage: 69
     ),
     ArcaneMeteor: AbilitySpec(
       slot: UltimateAbility,
       name: "Arcane Meteor", icon: "arcane_meteor",
       kind: Strike, cooldownTicks: 600, manaCost: 100,
-      range: 420_000, damage: 270
+      range: 420_000, damage: 255
     ),
     NatureTalisman: AbilitySpec(
       slot: PassiveAbility,
@@ -420,18 +437,18 @@ const
     HealingBloom: AbilitySpec(
       slot: PrimaryAbility,
       name: "Healing Bloom", icon: "healing_bloom",
-      kind: Heal, cooldownTicks: 168, manaCost: 30, heal: 76
+      kind: Heal, cooldownTicks: 168, manaCost: 30, heal: 76, damage: 37
     ),
     KindredWisps: AbilitySpec(
       slot: SecondaryAbility,
       name: "Kindred Wisps", icon: "kindred_wisps",
-      kind: Heal, cooldownTicks: 288, manaCost: 45, heal: 80
+      kind: Heal, cooldownTicks: 288, manaCost: 45, heal: 80, damage: 88
     ),
     GolemSeed: AbilitySpec(
       slot: UltimateAbility,
       name: "Golem Seed", icon: "golem_seed",
       kind: Strike, cooldownTicks: 528, manaCost: 75,
-      range: 200_000, damage: 68,
+      range: 200_000, damage: 49,
       control: RootControl, controlTicks: 2 * TickRate
     ),
     ShadowCloak: AbilitySpec(
@@ -443,19 +460,19 @@ const
       slot: PrimaryAbility,
       name: "Void Blade", icon: "void_blade",
       kind: Strike, cooldownTicks: 80, manaCost: 16,
-      range: 90_000, damage: 38
+      range: 90_000, damage: 39
     ),
     GaleSlash: AbilitySpec(
       slot: SecondaryAbility,
       name: "Gale Slash", icon: "gale_slash",
       kind: Strike, cooldownTicks: 168, manaCost: 28,
-      range: 120_000, damage: 65
+      range: 120_000, damage: 67
     ),
     ShadowComet: AbilitySpec(
       slot: UltimateAbility,
       name: "Shadow Comet", icon: "shadow_comet",
       kind: Strike, cooldownTicks: 504, manaCost: 65,
-      range: 300_000, damage: 100
+      range: 300_000, damage: 177
     ),
     SanguineChalice: AbilitySpec(
       slot: PassiveAbility,
@@ -466,43 +483,47 @@ const
       slot: PrimaryAbility,
       name: "Afterlight Sickle", icon: "afterlight_sickle",
       kind: Strike, cooldownTicks: 108, manaCost: 18,
-      range: 90_000, damage: 42
+      range: 90_000, damage: 41
     ),
     WitheringIdol: AbilitySpec(
       slot: SecondaryAbility,
       name: "Withering Idol", icon: "withering_idol",
       kind: Strike, cooldownTicks: 216, manaCost: 36,
-      range: 160_000, damage: 60
+      range: 160_000, damage: 59
     ),
     DarkEclipse: AbilitySpec(
       slot: UltimateAbility,
       name: "Dark Eclipse", icon: "dark_eclipse",
       kind: Strike, cooldownTicks: 624, manaCost: 80,
-      range: 140_000, damage: 110
+      range: 140_000, damage: 121
     ),
     FinalMeasure: AbilitySpec(
       slot: PassiveAbility,
       name: "Final Measure", icon: "final_measure",
       kind: Strike, cooldownTicks: 216,
-      range: 420_000, damage: 20
+      range: 420_000, damage: 10,
+      damageRanks: [10, 21, 36, 52]
     ),
     SiegeScarab: AbilitySpec(
       slot: PrimaryAbility,
       name: "Siege Scarab", icon: "siege_scarab",
       kind: Strike, cooldownTicks: 120, manaCost: 22,
-      range: 400_000, damage: 50
+      range: 400_000, damage: 26,
+      damageRanks: [26, 52, 91, 130]
     ),
     LodestoneSurge: AbilitySpec(
       slot: SecondaryAbility,
       name: "Lodestone Surge", icon: "lodestone_surge",
       kind: Strike, cooldownTicks: 240, manaCost: 40,
-      range: 360_000, damage: 68
+      range: 360_000, damage: 35,
+      damageRanks: [35, 70, 122, 175]
     ),
     ClockworkCharge: AbilitySpec(
       slot: UltimateAbility,
       name: "Clockwork Charge", icon: "clockwork_charge",
       kind: Strike, cooldownTicks: 552, manaCost: 70,
-      range: 450_000, damage: 115
+      range: 450_000, damage: 118,
+      damageRanks: [118, 267, 470, 0]
     ),
     FrostSigil: AbilitySpec(
       slot: PassiveAbility,
@@ -514,20 +535,20 @@ const
       slot: PrimaryAbility,
       name: "Ice Spear", icon: "ice_spear",
       kind: Strike, cooldownTicks: 96, manaCost: 30,
-      range: 400_000, damage: 48
+      range: 400_000, damage: 49
     ),
     BoneMarionette: AbilitySpec(
       slot: SecondaryAbility,
       name: "Bone Marionette", icon: "bone_marionette",
       kind: Strike, cooldownTicks: 216, manaCost: 48,
-      range: 300_000, damage: 53,
+      range: 300_000, damage: 54,
       control: RootControl, controlTicks: 25
     ),
     BoundVoid: AbilitySpec(
       slot: UltimateAbility,
       name: "Bound Void", icon: "bound_void",
       kind: Strike, cooldownTicks: 648, manaCost: 110,
-      range: 390_000, damage: 125
+      range: 390_000, damage: 262
     ),
     AetherSiphon: AbilitySpec(
       slot: PassiveAbility,
@@ -538,20 +559,20 @@ const
       slot: PrimaryAbility,
       name: "Moth Hex", icon: "moth_hex",
       kind: Strike, cooldownTicks: 96, manaCost: 24,
-      range: 280_000, damage: 36
+      range: 280_000, damage: 35
     ),
     DreadTotem: AbilitySpec(
       slot: SecondaryAbility,
       name: "Dread Totem", icon: "dread_totem",
       kind: Strike, cooldownTicks: 216, manaCost: 42,
-      range: 240_000, damage: 86,
+      range: 240_000, damage: 84,
       control: SilenceControl, controlTicks: 2 * TickRate
     ),
     VoidPortal: AbilitySpec(
       slot: UltimateAbility,
       name: "Void Portal", icon: "void_portal",
       kind: Strike, cooldownTicks: 576, manaCost: 90,
-      range: 300_000, damage: 105
+      range: 300_000, damage: 47
     ),
     RageCrucible: AbilitySpec(
       slot: PassiveAbility,
@@ -562,19 +583,19 @@ const
       slot: PrimaryAbility,
       name: "Molten Fist", icon: "molten_fist",
       kind: Strike, cooldownTicks: 84, manaCost: 8,
-      range: 90_000, damage: 45
+      range: 90_000, damage: 44
     ),
     WingedBoot: AbilitySpec(
       slot: SecondaryAbility,
       name: "Winged Boot", icon: "winged_boot",
       kind: Strike, cooldownTicks: 192, manaCost: 12,
-      range: 150_000, damage: 40
+      range: 150_000, damage: 39
     ),
     VolcanicEruption: AbilitySpec(
       slot: UltimateAbility,
       name: "Volcanic Eruption", icon: "volcanic_eruption",
       kind: Strike, cooldownTicks: 480, manaCost: 24,
-      range: 130_000, damage: 100
+      range: 130_000, damage: 188
     )
   ]
   ItemSpecs*: array[Item, ItemSpec] = [
@@ -824,6 +845,13 @@ proc heroAbility*(class: HeroClass, slot: HeroAbilitySlot): Ability =
   ## Returns the ability bound to one class slot.
   class.heroSpec.abilities[slot]
 
+proc canTarget*(spec: AbilitySpec, allied: bool): bool {.raises: [].} =
+  ## Returns whether a spell can affect an ally or an enemy.
+  if allied:
+    spec.heal > 0 or spec.restore > 0
+  else:
+    spec.damage > 0
+
 proc abilityMaxLevel*(slot: HeroAbilitySlot): int32 =
   ## Returns the number of learnable ranks for an ability slot.
   if slot == UltimateAbility: 3 else: 4
@@ -840,7 +868,14 @@ proc abilitySpec*(ability: Ability, rank: int32): AbilitySpec =
   let
     level = clamp(rank, 0'i32, result.slot.abilityMaxLevel)
     scale = if level == 0: 0'i32 else: level + 1
-  result.damage = result.damage * scale div 2
+  if result.damageRanks[0] > 0:
+    result.damage =
+      if level == 0:
+        0
+      else:
+        result.damageRanks[level - 1]
+  else:
+    result.damage = result.damage * scale div 2
   result.heal = result.heal * scale div 2
   result.restore = result.restore * scale div 2
   if level == 0:
@@ -869,14 +904,22 @@ proc itemIconKey*(item: Item): string =
   "item_" & $item
 
 proc heroMaxHp*(class: HeroClass, level: int): int32 =
-  ## Returns class hit points at one level.
-  let spec = class.heroSpec
-  spec.baseHitPoints + int32(level - 1) * spec.hitPointsPerLevel
+  ## Returns class hit points using its declared deterministic growth curve.
+  let
+    spec = class.heroSpec
+    level = clamp(level, 1, HeroMaxLevel)
+  case spec.healthGrowth
+  of SteadyGrowth:
+    spec.baseHitPoints + int32(level - 1) * spec.hitPointsPerLevel
+  of DelayedGrowth:
+    spec.baseHitPoints + int32(HeroMaxLevel - 1) *
+      spec.hitPointsPerLevel * CarryHealthGrowth[level - 1] div 10_000
 
 proc heroMaxMana*(class: HeroClass, level: int): int32 =
-  ## Returns class mana at one level.
+  ## Interpolates maximum mana between the first and final hero levels.
   let spec = class.heroSpec
-  spec.baseMana + int32(level - 1) * spec.manaPerLevel
+  spec.baseMana + int32(level - 1) *
+    (spec.maxLevelMana - spec.baseMana) div int32(HeroMaxLevel - 1)
 
 proc heroDamage*(class: HeroClass, level: int): int32 =
   ## Returns class basic-attack damage at one level.

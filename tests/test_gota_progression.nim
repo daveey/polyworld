@@ -192,7 +192,9 @@ for class in HeroClass:
       case spec.kind
       of Strike:
         doAssert target.hp == targetHp - spec.damage, $ability
-        doAssert spec.damage == base.damage * (rank + 1) div 2
+        if base.damageRanks[0] == 0:
+          doAssert spec.damage == base.damage * (rank + 1) div 2
+        doAssert spec.damage > ability.abilitySpec(rank - 1).damage
       of Heal:
         if spec.casting == SelfCast:
           doAssert hero.hp == min(hero.maxHp, hp + spec.heal), $ability

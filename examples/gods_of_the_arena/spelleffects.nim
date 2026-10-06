@@ -359,7 +359,7 @@ proc drawSpells*(
       color = ability.spellColor
       light = mix(color, vec3(1), 0.7)
       teamColor =
-        if spec.kind != Strike: vec3(0.3, 1.0, 0.5)
+        if spec.damage == 0: vec3(0.3, 1.0, 0.5)
         elif caster.team == RedTeam: vec3(1.0, 0.3, 0.12)
         else: vec3(0.2, 0.65, 1.0)
     var

@@ -29,11 +29,11 @@ proc turnNumber*(match: MultiplayerMatch): int =
   match.game.turnNumber
 
 proc newMultiplayerMatch*(classes: openArray[HeroClass], humanSeat: int,
-    seed: int64, botSources: openArray[string] = []): MultiplayerMatch =
+    seed: int64, botSources: openArray[string] = [],
+    pickClasses = false): MultiplayerMatch =
   ## One seat per class, dealt by the core. The last seat standing wins.
   ## Every seat but the human's runs a bot script, taken from `botSources`
   ## in turn (repeating); with none, those seats don't act.
-  result.game = newGame(classes, seed)
   result.humanSeat = humanSeat
   var sources = newSeq[string](classes.len)
   if botSources.len > 0:
@@ -43,6 +43,14 @@ proc newMultiplayerMatch*(classes: openArray[HeroClass], humanSeat: int,
         sources[seat] = botSources[next mod botSources.len]
         inc next
   result.bots = loadBots(sources)
+  var selected = @classes
+  if pickClasses:
+    for seat in 0 ..< selected.len:
+      if seat != humanSeat:
+        selected[seat] = result.bots[seat].chooseClass(selected.len, seed)
+  for bot in result.bots:
+    bot.ensureSeed(seed)
+  result.game = newGame(selected, seed)
 
 proc humanTurn*(match: MultiplayerMatch): bool =
   ## The living human's turn: the dead can't act.
@@ -62,22 +70,28 @@ proc viewedSeat*(match: MultiplayerMatch): int =
   ## is when we spectate.
   if match.humanSeat >= 0: match.humanSeat else: match.current
 
-proc turnLabel*(match: MultiplayerMatch): string =
+proc turnLabel*(match: MultiplayerMatch,
+    names: openArray[string] = []): string =
   ## Whose turn it is, in the duel's words.
   if match.game.gameOver: "MATCH COMPLETE"
+  elif match.current in 0 ..< names.len:
+    match.game.playerName(match.current, names) & "'s turn"
   elif match.humanTurn: "YOUR TURN"
   else: "PLAYER " & $(match.current + 1) & "'S TURN"
 
-proc turnStatus*(match: MultiplayerMatch): string =
+proc turnStatus*(match: MultiplayerMatch,
+    names: openArray[string] = []): string =
+  ## Describes the current turn or winner with the public seat name.
   if match.game.gameOver:
     if match.game.winner == match.humanSeat: "You are the last one standing."
-    else: "Player " & $(match.game.winner + 1) & " is the last one standing."
+    else: match.game.playerName(match.game.winner, names) &
+      " is the last one standing."
   elif match.humanSeat in 0 ..< match.game.playerCount and
       match.game.dead(match.humanSeat):
     "You are dead. Watching the match..."
   elif match.humanSeat < 0: "Watching bot match..."
   elif match.humanTurn: "Your turn. Select a card to play."
-  else: "Player " & $(match.current + 1) & " is thinking..."
+  else: match.game.playerName(match.current, names) & " is thinking..."
 
 proc endTurn*(match: var MultiplayerMatch): bool =
   ## The core's turn change: the next seat gains energy, draws, and its
@@ -190,7 +204,9 @@ when not defined(headless):
     ## spectate and the balconies turn around the static center to bring
     ## whoever's turn it is in front of the camera.
     bindApp(app)
-    let layout = buildMultiplayerLayout(sessionOptions.playerCount)
+    let
+      layout = buildMultiplayerLayout(sessionOptions.playerCount)
+      names = if app.replay != nil: app.replay.playerNames() else: @[]
     var
       previewTime = 0.0'f32
       hudTime = 0.0'f
@@ -217,24 +233,23 @@ when not defined(headless):
       window.buttonPressed[button] and not uiCapturesMouse
     proc startMatch(humanClass: Option[HeroClass]) =
       var classes = newSeq[HeroClass](layout.playerCount)
-      for seat in 0 ..< layout.playerCount:
-        classes[seat] = seatRng.rand(HeroClass)
       if humanClass.isSome:
         classes[0] = humanClass.get
       choosingClasses = false
       match = newMultiplayerMatch(classes,
         humanSeat = if humanClass.isSome: 0 else: -1,
-        seed = seatRng.rand(high(int)).int64, botSources = botSources)
+        seed = seatRng.rand(high(int)).int64, botSources = botSources,
+        pickClasses = true)
       botClock = initBotClock()
       orbit = initSeatOrbit(layout.balconies[match.viewedSeat].yaw)
       play.resetTable()
       play.animations.setLen(0)
-      play.statusMessage = match.turnStatus
+      play.statusMessage = match.turnStatus(names)
       # As in the duel, every seat's hand is dealt card by card.
       openingDraw = true
     proc turnPassed() =
       orbit.aimAt(layout.balconies[match.viewedSeat].yaw)
-      play.statusMessage = match.turnStatus
+      play.statusMessage = match.turnStatus(names)
     for path in sessionOptions.botPaths:
       botSources.add readFile(path)
     if botSources.len == 0 and fileExists(appDir / "players" / "base.bas"):
@@ -306,7 +321,7 @@ when not defined(headless):
         # The bots play their seats, the same way they play the duel.
         if play.updateBots(match.game, table, match.bots, botClock,
             proc(): bool = match.humanActs, previewDt,
-            proc(player: int): string = "Player " & $(player + 1)):
+            proc(player: int): string = match.game.playerName(player, names)):
           # The status shows whose turn it is now, unless a script just
           # failed: its error line stays up.
           let message = play.statusMessage
@@ -586,15 +601,23 @@ when not defined(headless):
             inspected.power, inspected.toughness, inspected.lost)
         else:
           sk.drawPlayerPanelColumn(window, match.seats, match.current,
-            match.humanSeat, panelsBottom, hudTime)
+            match.humanSeat, panelsBottom, hudTime, names)
         # The turn header and prompts center on the space left of the
         # panels.
         let
           columnX = playerPanelColumnX(window)
           centerX = columnX * 0.5'f32
-        sk.drawTurnHeader(centerX, min(920'f32, columnX - 104),
-          match.turnNumber, match.turnLabel, match.humanTurn,
-          if match.game.gameOver: match.turnStatus else: play.statusMessage)
+        sk.drawTurnHeader(
+          centerX,
+          min(920'f32, columnX - 104),
+          match.turnNumber,
+          match.turnLabel(names),
+          match.humanTurn,
+          if match.game.gameOver:
+            match.turnStatus(names)
+          else:
+            play.statusMessage
+        )
         sk.drawTossPrompt(window, play, match.game, centerX)
         sk.drawTargetPrompt(window, play, match.game, centerX)
         sk.drawCombatPrompt(window, play, match.game, centerX)
@@ -602,7 +625,7 @@ when not defined(headless):
           play, table), stageVp)
         if not play.attackActive:
           sk.drawMatchResult(window, play, match.game, match.humanSeat,
-            centerX)
+            centerX, names)
         if app.replay == nil:
           sk.drawLabel(play.playHelp(match.humanSeat >= 0),
             vec2(32, hudSize(window).y - 66), vec2(820, 42), HudMuted,
@@ -634,9 +657,14 @@ when not defined(headless):
            else: play.statusMessage)
         if not choosingClasses:
           template game: untyped = match.game
-          summary.add &" Turn {match.turnNumber}. Active player {match.current + 1}."
+          summary.add &" Turn {match.turnNumber}. " &
+            (if names.len > 0:
+              "Active " & game.playerName(match.current, names)
+            else:
+              "Active player " & $(match.current + 1)) & "."
           for seat, player in game.players:
-            summary.add &" Player {seat + 1} {player.heroClass.className()}" &
+            summary.add " " & game.playerName(seat, names) &
+              " " & player.heroClass.className() &
               (if game.dead(seat): ": dead." else:
                 &": life {player.life}, energy {player.energy}/{player.totalEnergy}, hand {player.hand.len}, board {player.board.len}, deck {player.deck.len}, discard {player.discardPile.len}.")
           if match.humanTurn and not play.pendingTargeting and

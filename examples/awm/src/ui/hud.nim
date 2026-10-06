@@ -146,8 +146,12 @@ proc drawPlayerPanel*(sk: Silky, origin: Vec2, player: PlayerState,
     tint = shade, flipX = mirrored)
   sk.hudSprite(HudClassIcon[player.heroClass], origin + vec2(panelX(14, 90), 4),
     vec2(90, 124), tint = shade)
-  sk.drawLabel(name, origin + vec2(panelX(124, 176), 19), vec2(176, 43),
-    if player.dead: HudMuted else: HudIvory, "Heading", alignment)
+  let nameFont =
+    if sk.getTextSize("Heading", name).x <= 176: "Heading"
+    else: "Small"
+  sk.drawLabel(sk.fittedLabel(name, 176, nameFont),
+    origin + vec2(panelX(124, 176), 19), vec2(176, 43),
+    if player.dead: HudMuted else: HudIvory, nameFont, alignment)
   if player.dead:
     sk.drawLabel("Dead", origin + vec2(panelX(124, 176), 66),
       vec2(176, 42), HudMuted, "Class", alignment)
@@ -175,13 +179,16 @@ proc drawPlayerPanel*(sk: Silky, origin: Vec2, player: PlayerState,
       sk.hudSprite(sprite, dot, vec2(18))
 
 proc drawPlayerPanel*(sk: Silky, window: Window, game: GameState,
-    playerIndex: int, human: bool, time: float32) =
+    playerIndex: int, human: bool, time: float32,
+    names: openArray[string] = []) =
   ## The duel's two panels, in the top corners.
   sk.drawPlayerPanel(
     vec2(if playerIndex == 0: 24'f32
       else: hudSize(window).x - PlayerPanelWidth - 24, 18),
     game.players[playerIndex],
-    if human: (if playerIndex == 0: "YOU" else: "OPPONENT")
+    if playerIndex in 0 ..< names.len and names[playerIndex].len > 0:
+        names[playerIndex]
+      elif human: (if playerIndex == 0: "YOU" else: "OPPONENT")
       else: "PLAYER " & $(playerIndex + 1),
     playerIndex == game.currentPlayer, playerIndex == 1, time)
 
@@ -217,13 +224,14 @@ proc cardReadingColumnRect*(window: Window, bottom: float32): UiRect =
 
 proc drawPlayerPanelColumn*(sk: Silky, window: Window,
     players: openArray[PlayerState], current, human: int, bottom: float32,
-    time: float32) =
+    time: float32, names: openArray[string] = []) =
   ## Any number of players, in the right-hand version of the panel, down the
   ## right edge of the screen. `human` is the seat labeled YOU, or -1.
   for i, player in players:
     sk.drawPlayerPanel(
       playerPanelColumnRect(window, players.len, i, bottom).origin, player,
-      if i == human: "YOU" else: "PLAYER " & $(i + 1),
+      if i in 0 ..< names.len and names[i].len > 0: names[i]
+        elif i == human: "YOU" else: "PLAYER " & $(i + 1),
       i == current, true, time)
 
 proc drawTurnHeader*(sk: Silky, centerX, statusWidth: float32,
@@ -236,9 +244,13 @@ proc drawTurnHeader*(sk: Silky, centerX, statusWidth: float32,
     vec2(624, 114), HudIvory, "Display", CenterAlign)
   sk.hudSprite(if active: "turn-active" else: "turn-waiting",
     origin + vec2(72, 144), vec2(584, 86))
-  sk.drawLabel(label, origin + vec2(100, 144), vec2(528, 86),
+  let labelFont =
+    if sk.getTextSize("TurnState", label).x <= 528: "TurnState"
+    else: "Prompt"
+  sk.drawLabel(sk.fittedLabel(label, 528, labelFont),
+    origin + vec2(100, 144), vec2(528, 86),
     if active: rgbx(42, 32, 18, 255) else: HudGold,
-    "TurnState", CenterAlign)
+    labelFont, CenterAlign)
   if status.len > 0:
     sk.hudSprite("status-line",
       vec2(centerX - statusWidth * 0.5'f32 - 16, 258),
@@ -248,13 +260,15 @@ proc drawTurnHeader*(sk: Silky, centerX, statusWidth: float32,
     vec2(statusWidth, 34), HudIvory, "Small", CenterAlign)
 
 proc drawTurnHeader*(sk: Silky, window: Window, game: GameState,
-    human: bool, status: string) =
+    human: bool, status: string, names: openArray[string] = []) =
   ## The duel's header, centered between its two corner panels.
   let yourTurn = human and game.currentPlayer == 0
   sk.drawTurnHeader(hudSize(window).x * 0.5'f32,
     min(920'f32, hudSize(window).x - (PlayerPanelWidth + 52) * 2),
     game.turnNumber,
     if game.gameOver: "MATCH COMPLETE"
+      elif game.currentPlayer in 0 ..< names.len:
+        game.playerName(game.currentPlayer, names) & "'s turn"
       elif human: (if yourTurn: "YOUR TURN" else: "OPPONENT'S TURN")
       else: "PLAYER " & $(game.currentPlayer + 1) & "'S TURN",
     yourTurn and not game.gameOver, status)
@@ -382,7 +396,8 @@ proc drawCombatPrompt*(sk: Silky, window: Window, play: TablePlay,
 
 proc drawMatchResult*(sk: Silky, window: Window, play: TablePlay,
     game: GameState, humanSeat: int,
-    centerX = hudSize(window).x * 0.5'f32) =
+    centerX = hudSize(window).x * 0.5'f32,
+    names: openArray[string] = []) =
   ## Who won, once the match is over and the table has settled. `humanSeat`
   ## is the player reading it as "you", or -1.
   if not game.gameOver or not play.presentationIdle(game):
@@ -391,30 +406,37 @@ proc drawMatchResult*(sk: Silky, window: Window, play: TablePlay,
     winnerAccent =
       game.players[game.winner].heroClass.classUiColor()
     winnerText =
-      if humanSeat >= 0:
+      if game.winner in 0 ..< names.len:
+        game.playerName(game.winner, names) & " WINS!"
+      elif humanSeat >= 0:
         (if game.winner == humanSeat: "YOU WIN!" else: "YOU LOSE!")
       else:
         &"PLAYER {game.winner + 1} WINS!"
     winnerDetail =
       &"Turn {game.turnNumber}: " &
-      game.players[game.winner].heroClass.className() &
-      " is victorious."
+      (if game.winner in 0 ..< names.len:
+        game.playerName(game.winner, names) & " is victorious."
+      else:
+        game.players[game.winner].heroClass.className() & " is victorious.")
     overlay = UiRect(
       origin: vec2(
         centerX - 380,
         hudSize(window).y * 0.5'f32 - 80),
       size: vec2(760, 160))
+  let winnerFont =
+    if sk.getTextSize("H1", winnerText).x <= overlay.size.x: "H1"
+    else: "Heading"
   sk.drawHudNotice(overlay)
   sk.drawLabel(
-    winnerText,
+    sk.fittedLabel(winnerText, overlay.size.x, winnerFont),
     overlay.origin + vec2(0, 18),
     vec2(overlay.size.x, 70),
     winnerAccent,
-    "H1",
+    winnerFont,
     CenterAlign
   )
   sk.drawLabel(
-    winnerDetail,
+    sk.fittedLabel(winnerDetail, overlay.size.x, "Default"),
     overlay.origin + vec2(0, 100),
     vec2(overlay.size.x, 40),
     rgbx(205, 209, 219, 255),

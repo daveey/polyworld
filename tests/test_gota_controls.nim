@@ -42,10 +42,10 @@ proc step(game: Game, ticks = 1'i32) =
 echo "Testing crowd control damage, fixed durations, and hostile impacts"
 for team in Team:
   for (class, slot, effect, duration, damage) in [
-    (VanguardKnight, UltimateAbility, StunControl, TickRate, 72'i32),
-    (Warlock, SecondaryAbility, SilenceControl, 2 * TickRate, 86'i32),
-    (DruidWarden, UltimateAbility, RootControl, 2 * TickRate, 68'i32),
-    (Lich, SecondaryAbility, RootControl, 25'i32, 53'i32)
+    (VanguardKnight, UltimateAbility, StunControl, TickRate, 204'i32),
+    (Warlock, SecondaryAbility, SilenceControl, 2 * TickRate, 84'i32),
+    (DruidWarden, UltimateAbility, RootControl, 2 * TickRate, 49'i32),
+    (Lich, SecondaryAbility, RootControl, 25'i32, 54'i32)
   ]:
     let
       game = controlGame(class, team)

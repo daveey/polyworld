@@ -1716,8 +1716,7 @@ proc runGraphics*() =
       if spec.casting == SelfCast:
         queueCastTarget(heroId, armedAbility, heroId)
       elif picked != 0 and
-        ((spec.kind == Strike and objectTeam(picked) != objectTeam(heroId)) or
-        (spec.kind != Strike and objectTeam(picked) == objectTeam(heroId))):
+        spec.canTarget(objectTeam(picked) == objectTeam(heroId)):
           queueCastTarget(heroId, armedAbility, picked)
       else:
         let

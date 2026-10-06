@@ -1,0 +1,60 @@
+dim tensorShape(0)
+sub tensorFlyInitialize()
+  tfOffsets = tensorLoad("offsets")
+  tfSources = tensorLoad("sources")
+  tfWeights = tensorLoad("weights")
+  tfBias = tensorLoad("bias")
+  tfDriveNeurons = tensorLoad("driveNeurons")
+  tfDriveWeights = tensorLoad("drive")
+  tfReadNeurons = tensorLoad("readNeurons")
+  tfReadout = tensorLoad("readout")
+  tfReadoutBias = tensorLoad("readoutBias")
+  tfLeak = tensorLoad("leak")
+  tfStepTensor = tensorLoad("steps")
+  tfSettings = tensorExport(tfStepTensor)
+  tfSteps = tfSettings(0)
+  tfNeurons = tensorSize(tfBias)
+  tensorShape(0) = tensorDim(tfDriveWeights, 1)
+  tfInput = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tensorSize(tfDriveNeurons)
+  tfDrive = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tfNeurons
+  tfExternal = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tfNeurons
+  tfState = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tfNeurons
+  tfRates = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tfNeurons
+  tfSum = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tensorSize(tfReadNeurons)
+  tfReadRates = tensorCreate("float32", tensorShape)
+  tensorShape(0) = tensorSize(tfReadoutBias)
+  tfLogits = tensorCreate("float32", tensorShape)
+  tfZero = tensorScalar("float32", "0")
+end sub
+
+sub tensorFlyReset()
+  tensorFill(tfState, tfZero)
+end sub
+
+sub tensorFlyStep()
+  tensorImport(tfInput, tfData)
+  tensorCopy(tfBias, tfExternal)
+  tensorDense(tfInput, tfDriveWeights, 0, tfDrive)
+  tensorScatterAdd(tfDrive, tfDriveNeurons, tfExternal)
+  for tfStep = 1 to tfSteps
+    tensorRelu(tfState, tfRates)
+    tensorTanh(tfRates, tfRates)
+    tensorCsr(tfRates, tfOffsets, tfSources, tfWeights, tfSum)
+    tensorAdd(tfSum, tfExternal, tfSum)
+    tensorSubtract(tfSum, tfState, tfSum)
+    tensorMultiply(tfLeak, tfSum, tfSum)
+    tensorAdd(tfState, tfSum, tfState)
+  next tfStep
+  tensorRelu(tfState, tfRates)
+  tensorTanh(tfRates, tfRates)
+  tensorGather(tfRates, tfReadNeurons, tfReadRates)
+  tensorDense(tfReadRates, tfReadout, 0, tfLogits)
+  tensorAdd(tfLogits, tfReadoutBias, tfLogits)
+  tfResult = tensorExport(tfLogits)
+end sub

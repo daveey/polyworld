@@ -82,15 +82,22 @@ def main():
     parser.add_argument("--layers", type=int)
     parser.add_argument("--action-ticks", type=int, default=24)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--tensors", action="store_true",
+                        help="Write a BASIC-defined packed tensor architecture")
     args = parser.parse_args()
     if args.source.stat().st_size > 64 * 1024 or args.weights.stat().st_size > MAX_BYTES:
         parser.error("Input policy or model exceeds the package limits")
     source, model = convert(args.source.read_text(), args.weights.read_bytes(),
                             args.hidden, args.layers, args.action_ticks,
                             args.temperature)
+    resources = {"weights.bin": model}
+    if args.tensors:
+        from tensor_packages import tensorize
+        source, resources = tensorize(source, resources)
     with zipfile.ZipFile(args.destination, "w", zipfile.ZIP_DEFLATED) as package:
         package.writestr("policy.bas", source)
-        package.writestr("weights.bin", model)
+        for name, data in resources.items():
+            package.writestr(name, data)
 
 
 if __name__ == "__main__":

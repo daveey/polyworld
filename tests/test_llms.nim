@@ -120,9 +120,9 @@ proc settle(client: LlmClient, id: int32, tick: int32) =
 echo "Testing the LLM endpoint allowlist before opening connections"
 block:
   let names = [
-    "COGAME_LLM", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "COGAME_LLM_BASE_URL",
+    "COGAME_LLM", "COWORLD_LLM_ENDPOINT", "COGAME_LLM_BASE_URL",
     "COGAME_LLM_KEY", "OPENROUTER_API_KEY", "COGAME_LLM_INTERVAL",
-    "COGAME_LLM_TIMEOUT_MS"
+    "COGAME_LLM_TIMEOUT_MS", "COWORLD_LLM_MODEL"
   ]
   var saved: seq[(string, bool, string)]
   for name in names:
@@ -141,12 +141,17 @@ block:
     "http://localhost:9100", "https://localhost:9100/api",
     "http://127.0.0.1:12345", "http://[::1]:9100"
   ]:
-    for name in ["COGAME_LLM_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"]:
+    for name in ["COGAME_LLM_BASE_URL", "COWORLD_LLM_ENDPOINT"]:
       putEnv(name, endpoint)
       let config = llmConfig()
       discard newLlmClient(0, config)
-      doAssert config.sidecar == (name == "AWS_ENDPOINT_URL_BEDROCK_RUNTIME")
+      doAssert config.sidecar == (name == "COWORLD_LLM_ENDPOINT")
       delEnv(name)
+  putEnv("COWORLD_LLM_ENDPOINT", "http://localhost:9100")
+  putEnv("COWORLD_LLM_MODEL", "anthropic/claude-sonnet-4.6")
+  doAssert llmConfig().model == "anthropic/claude-sonnet-4.6"
+  delEnv("COWORLD_LLM_ENDPOINT")
+  delEnv("COWORLD_LLM_MODEL")
   for endpoint in [
     "https://example.com/api", "https://openrouter.ai.evil.test/api",
     "https://evilopenrouter.ai/api", "https://localhost.evil.test",
@@ -158,7 +163,7 @@ block:
     "http://127.0.0.1:0", "http://localhost:65536", "http://localhost:abc",
     "http://192.168.1.1", "http://127.1", "http://2130706433"
   ]:
-    for name in ["COGAME_LLM_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"]:
+    for name in ["COGAME_LLM_BASE_URL", "COWORLD_LLM_ENDPOINT"]:
       putEnv(name, endpoint)
       var rejected = false
       try:
@@ -252,7 +257,7 @@ block:
       responder = currentSourcePath().parentDir /
         "../examples/inference/mailbox_llm.bas"
       settings = [
-        ("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", config.baseUrl),
+        ("COWORLD_LLM_ENDPOINT", config.baseUrl),
         ("COGAME_LLM", "on"),
         ("COGAME_LLM_MODEL", "test/model")
       ]
@@ -464,7 +469,7 @@ end if
   echo "Testing GotA's JEV bot follows strategy and lane advice periodically"
   block:
     let settings = [
-      ("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", config.baseUrl),
+      ("COWORLD_LLM_ENDPOINT", config.baseUrl),
       ("COGAME_LLM", "on"),
       ("COGAME_ORACLE", "on"),
       ("COGAME_LLM_INTERVAL", "1"),

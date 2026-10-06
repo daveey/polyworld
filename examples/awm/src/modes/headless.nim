@@ -1,7 +1,7 @@
 ## Matches with no window: the headless recorder and checker, and the
 ## Coworld server, which plays the platform's staged BASIC players and
 ## publishes their results and replay like the other Polyworld games.
-import std/[os, random, strutils]
+import std/[os, strutils]
 import polyworld/cli
 import ../core/[sim, sessions, bots, match, replays]
 
@@ -9,18 +9,12 @@ when defined(coworld):
   import jsony
   import polyworld/coworld
 
-proc seatClasses*(names: openArray[string], seats: int,
-    seed: int32): seq[HeroClass] =
-  ## The named classes, one per seat, or seeded random ones without names.
-  if names.len == 0:
-    var rng = initRand(seed.int64)
-    for _ in 0 ..< seats:
-      result.add rng.rand(HeroClass)
-  elif names.len != seats:
+proc seatClasses*(names: openArray[string], seats: int): seq[HeroClass] =
+  ## Parses an explicit class override with one entry per seat.
+  if names.len != seats:
     raise newException(ValueError, "classes must name one class per player")
-  else:
-    for name in names:
-      result.add parseHeroClass(name)
+  for name in names:
+    result.add parseHeroClass(name)
 
 proc matchSetup*(classes: openArray[HeroClass], seed: int32,
     maxTicks: int32): Setup =
@@ -83,12 +77,15 @@ proc runHeadless*() =
       sources.add readFile(group.path)
       players.add PlayerConfig(name: group.path.extractFilename)
   let
-    classes = seatClasses(classNames, seats, options.seed)
+    bots = loadBots(sources)
+    classes =
+      if classNames.len > 0: seatClasses(classNames, seats)
+      else: chooseBotClasses(bots, options.seed.int64)
     recorder = initReplayRecorder(
       matchSetup(classes, options.seed, options.maximumTicks),
       GameConfig(players: players, seed: options.seed,
         maxTicks: options.maximumTicks))
-  var played = initBotMatch(classes, options.seed.int64, loadBots(sources),
+  var played = initBotMatch(classes, options.seed.int64, bots,
     options.maximumTicks.uint32, recorder)
   played.scriptError = proc(player: int, message: string) =
     echo "player ", player, " BASIC error: ", message
@@ -117,10 +114,6 @@ when defined(coworld):
         except JsonError as error:
           raise newException(CoworldError,
             "Invalid Coworld configuration: " & error.msg)
-      classes =
-        try: seatClasses(names, seats, options.seed)
-        except ValueError as error:
-          raise newException(CoworldError, error.msg)
     resetInboxes(seats)
     var vms: seq[BotVm]
     for slot, group in options.botGroups:
@@ -128,12 +121,25 @@ when defined(coworld):
         policy = loadPlayerPolicy(readPlayerSource(group.path), slot)
         program = compilePlayer(policy.source, botSchema(), botLimits(), slot)
       vms.add newBotVm(program, slot.int32, playerPrinter(slot))
+    let classes =
+      if names.len > 0:
+        try: seatClasses(names, seats)
+        except ValueError as error:
+          raise newException(CoworldError, error.msg)
+      else:
+        var selected: seq[HeroClass]
+        for slot, vm in vms:
+          try:
+            selected.add vm.chooseClass(seats, options.seed.int64)
+          except BasicError as error:
+            rejectPlayer(slot, error.msg)
+        selected
     let recorder = initReplayRecorder(
       matchSetup(classes, options.seed, options.maximumTicks), coworld.config)
     var played = initBotMatch(classes, options.seed.int64, vms,
       options.maximumTicks.uint32, recorder)
     played.scriptError = proc(player: int, message: string) =
-      # A runtime error disables that script; its seat passes every turn.
+      # A failed decision stops the match without substituting an action.
       vms[player].failed = true
       playerError(player, message)
     played.run()

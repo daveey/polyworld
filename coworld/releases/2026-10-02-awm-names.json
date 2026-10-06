@@ -1,0 +1,331 @@
+{
+  "date": "2026-10-02",
+  "version": "2026.10.2.3",
+  "coworld_id": "cow_683924da-89f5-412e-8533-670ff65bda59",
+  "canonical": true,
+  "manifest_hash": "sha256:878a6cbfa9e6d8037e49999993ae662b6a3159cec7c046780460d6cd8f652cb4",
+  "source_commit": "2cfc51b0ab33641e7e4b1aa0c8f3c69f153981d0",
+  "source_tree": "ef6423c99c1503c1c19a4e54f4683bc9728f90ec",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "max_instructions": 5000000,
+  "max_work_units": 5000000,
+  "max_memory_bytes": 67108864,
+  "changes": [
+    "Use recorded public player names in panels, turn headers, status messages, target labels and winner banners.",
+    "Keep numbered names for unnamed local seats.",
+    "Fit long names to the existing HUD."
+  ],
+  "checks": [
+    "Nim check, multiplayer tests, replay tests and browser naming verification passed.",
+    "All ten local and hosted certification checks passed.",
+    "Five hosted baseline smoke games completed with one winner each.",
+    "One forced league round completed five games with no failures.",
+    "Every forced-round replay matched the native state hashes.",
+    "Deployed JavaScript, WASM and data hashes match the certified build."
+  ],
+  "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+  "round_id": "round_ab5d084d-3771-47b5-b847-96d5a2be8911",
+  "round_number": 110,
+  "round_status": "completed",
+  "completed_games": 5,
+  "failed_games": 0,
+  "episodes": [
+    {
+      "episode_request_id": "ereq_834ad37f-6d26-4982-b7fb-cbff1d99940b",
+      "episode_id": "01c0acb7-3e26-4ae0-8297-bfd1b92e155a",
+      "status": "completed",
+      "scores": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "ticks": 676,
+      "outcome": "winner_0",
+      "native_replay_verified": true,
+      "replay_sha256": "fc97065aaf34a42fcdccde485cac3f0f9f743cc4e0a6f5b083b01d3f1229fa54",
+      "participants": [
+        {
+          "policy": "radogost:v45",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "stilt:v6",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_041ffd34-4e58-47a4-9d86-f887ccc67477",
+      "episode_id": "ba332fc7-1cea-42e7-af28-b003586c56c8",
+      "status": "completed",
+      "scores": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "ticks": 519,
+      "outcome": "winner_1",
+      "native_replay_verified": true,
+      "replay_sha256": "faed12100d0d069d4cfc309959b11f4fb025e8f2300ee95682c452fdf3861092",
+      "participants": [
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "stilt:v6",
+          "is_filler": false
+        },
+        {
+          "policy": "radogost:v45",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_9856d69e-a195-4003-8321-35b3058ed9e4",
+      "episode_id": "8207002d-1cd1-48c4-a012-0a37fb80c450",
+      "status": "completed",
+      "scores": [
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "ticks": 531,
+      "outcome": "winner_2",
+      "native_replay_verified": true,
+      "replay_sha256": "664a066762dad05fde1118828023513628cd0db813eed91bfbdfbd2878c04c0b",
+      "participants": [
+        {
+          "policy": "stilt:v6",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "radogost:v45",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_02b9db1a-5c90-45c6-8d21-102b0a465fe5",
+      "episode_id": "16d2fad3-8a38-42ff-a72a-913c7056935b",
+      "status": "completed",
+      "scores": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "ticks": 763,
+      "outcome": "winner_0",
+      "native_replay_verified": true,
+      "replay_sha256": "0cf99108f22d35c24c08e52f5881c856ac59796a9871f8211851cec6e4bc7ff0",
+      "participants": [
+        {
+          "policy": "radogost:v45",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v6",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_9afffa7a-15f9-4b63-ab70-c00f07aaa534",
+      "episode_id": "6d907051-530c-4147-b274-66259bb2ce0f",
+      "status": "completed",
+      "scores": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "ticks": 489,
+      "outcome": "winner_0",
+      "native_replay_verified": true,
+      "replay_sha256": "a19ba88318f8b244ed640d6f1088d8a1585ed358a869cf143b6d0b7165398141",
+      "participants": [
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "radogost:v45",
+          "is_filler": false
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "AWM Explicit Baseline:v1",
+          "is_filler": true
+        },
+        {
+          "policy": "stilt:v6",
+          "is_filler": false
+        }
+      ]
+    }
+  ],
+  "hosted_smoke": [
+    {
+      "episode_request_id": "ereq_2b88c9cd-1ada-4c1c-858c-4c166b4a86eb",
+      "episode_id": "e405b988-7a42-4d7f-8726-7d59a9458ef1",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_7e258b2a-f4e9-4f0c-a0c6-1333a25344c0",
+      "episode_id": "4cc3ae38-3137-4c2e-b2db-e07bd8b8b029",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_7f7bb96c-f39a-4da7-9bc9-8fe2a43826e0",
+      "episode_id": "1286a63e-1508-413b-8565-2507388603ef",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_894c27b3-b52a-48c1-8e5e-7bfa57544393",
+      "episode_id": "c9766a8c-65aa-4b7e-ba6d-4083cc8eab9e",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_a93304e2-4673-4017-8d30-43f981d2a8fe",
+      "episode_id": "91318c90-e91f-442e-895c-f7de2bd0049d",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    }
+  ],
+  "viewer_sha256": {
+    "js": "35861f48f7748ec092951d47fdf278153ea041a6c940fa7ac74862be773b6b33",
+    "wasm": "b7b31458a02f793e4c07049b771f3d4e7d2e74042afcff958600592b2a88be12",
+    "data": "10d0cd2c5a9d778e70c691c1841325d2b11cf4f8f4b8299281c70cb5db76db43"
+  },
+  "watch_url": "https://softmax.com/archers-warriors-mages?e=01c0acb7-3e26-4ae0-8297-bfd1b92e155a",
+  "verified_at": "2026-10-02T20:51:55.393751+00:00",
+  "browser_verification": {
+    "rendered": true,
+    "coworld_id": "cow_683924da-89f5-412e-8533-670ff65bda59",
+    "episode_id": "01c0acb7-3e26-4ae0-8297-bfd1b92e155a",
+    "playback_speed": 16,
+    "final_tick": 676,
+    "total_ticks": 676,
+    "final_turn": 89,
+    "winner_name": "Andre von Auto (Andre H)",
+    "real_name_labels_verified": true,
+    "method": "Played the deployed round 110 replay from tick 1 to completion at 16x without seeking. Verified named panels, turn and status labels, and winner banner.",
+    "watch_url": "https://softmax.com/archers-warriors-mages?e=01c0acb7-3e26-4ae0-8297-bfd1b92e155a"
+  }
+}

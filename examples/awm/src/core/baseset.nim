@@ -143,11 +143,17 @@ let mage = [
     rules: rules(draw(2), toss(1))
   ),
   Card(
+    name: "Summon Primordial", energyCost: 8,
+    class: some(Mage), kind: Spell,
+    rules: rules(
+      bounce(game.board.choose({ owner: target({Hero}) }), vfx = BubbleVfx),
+      summon(1, "Primordial")
+    )
+  ),
+  Card(
     name: "Primordial", energyCost: 8,
     class: some(Mage), kind: Minion,
-    rules: rules(
-      bounce(game.board.choose({ self: false }), vfx = BubbleVfx)
-    ),
+    rules: rules(),
     power: 10, toughness: 10
   ),
   Card(
@@ -239,5 +245,5 @@ proc baseDeck*(heroClass: HeroClass): seq[Card] =
           ("Rally", 3)])
       of Mage:
         mage.deck([("Bouncer", 16), ("Oozification", 4), ("Plan", 7),
-          ("Study", 7), ("Primordial", 2), ("Bubble Shield", 4)])
+          ("Study", 7), ("Summon Primordial", 2), ("Bubble Shield", 4)])
   doAssert result.len == DeckSize

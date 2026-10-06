@@ -129,7 +129,7 @@ proc llmConfig*(): LlmConfig =
   ## Uses the platform sidecar first, or explicit local OpenRouter access.
   if not NativeRequests or getEnv("COGAME_LLM").toLowerAscii == "off":
     return
-  result.baseUrl = getEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME")
+  result.baseUrl = getEnv("COWORLD_LLM_ENDPOINT")
   result.sidecar = result.baseUrl.len > 0
   if not result.sidecar:
     result.key = getEnv("COGAME_LLM_KEY", getEnv("OPENROUTER_API_KEY"))
@@ -140,7 +140,9 @@ proc llmConfig*(): LlmConfig =
     return
   result.baseUrl = result.baseUrl.strip(trailing = true, chars = {'/'})
   validateBaseUrl(result.baseUrl)
-  result.model = getEnv("COGAME_LLM_MODEL")
+  result.model =
+    if result.sidecar: getEnv("COWORLD_LLM_MODEL", "anthropic/claude-haiku-4.5")
+    else: getEnv("COGAME_LLM_MODEL")
   result.oracleModel = getEnv("COGAME_ORACLE_MODEL", DefaultOracleModel)
   result.interval = int32(environmentInt("COGAME_LLM_INTERVAL", 1, 100000))
   result.timeoutMs = environmentInt("COGAME_LLM_TIMEOUT_MS", 30000, 120000)
@@ -287,7 +289,10 @@ proc ask*(client: LlmClient, verb, path, body: string): int32 =
 
 proc chat*(client: LlmClient, model, prompt: string): int32 =
   ## Sends one ordinary user message using a caller or host selected model.
-  let selected = if model.len > 0: model else: client.config.model
+  let selected =
+    if client.config.sidecar: client.config.model
+    elif model.len > 0: model
+    else: client.config.model
   if selected.len == 0:
     raise newException(LlmError, "LLM model is required")
   client.ask("POST", "/v1/chat/completions", $(%*{

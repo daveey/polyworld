@@ -46,8 +46,9 @@ bytes. The Bassy host interface is documented in its `docs/native-buffers.md`.
 
 GOTA allows **100,000 instructions and 250,000 work units per decision** so the
 BASIC observation and action glue can run. Existing BASIC storage and source
-limits remain in force. Each neural invocation costs one host work unit. There
-is no inference frequency or multiply/add budget. Package bytes, parsed models,
+limits remain in force. Each named-runner invocation costs one host work unit.
+Named runners have no inference frequency or multiply/add budget. The generic
+tensor API charges work by operation size. Package bytes, parsed models,
 state, returned arrays and reserved scratch share a separate **32 MiB logical
 native allowance per hero**. This is not a process RSS cap. Cache reservations
 survive full VM reset because immutable model caches remain alive.
@@ -366,3 +367,6 @@ each small Richard network was below one microsecond. Andre's width-12,
 one-layer model took about one microsecond; width 64 with three layers took
 approximately 25 microseconds. A fly model the size of the FlyWire cut
 (40,619 neurons, 1.06 million edges, four steps) took about 5 ms per call.
+
+BASIC-defined architectures can also use the [packed tensor API](neural-tensors.md).
+This keeps float32 inside neural computation and meters generic operations by size.

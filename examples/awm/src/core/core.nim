@@ -638,6 +638,8 @@ proc `-`*(a, b: RuleValue[int]): RuleValue[int] =
 proc value*(number: RuleValue[int], context: var RuleContext): int {.gcsafe.}
 proc value*(owner: RuleValue[Owner], context: var RuleContext): Owner {.gcsafe.}
 proc players*(owner: RuleValue[Owner], context: var RuleContext): seq[int] {.gcsafe.}
+proc resolvePlayers(owner: RuleValue[Owner], context: var RuleContext):
+  tuple[ok: bool, players: seq[int]] {.gcsafe.}
 proc value*(named: RuleValue[Card], context: var RuleContext): Card {.gcsafe.}
 proc text*(number: RuleValue[int], card: Card): string {.gcsafe.}
 proc text*(owner: RuleValue[Owner], card: Card): string {.gcsafe.}
@@ -751,15 +753,20 @@ proc text*(query: CardQuery, card: Card): string =
   ## "all enemy minions".
   "all " & query.subject(card)
 
-proc matches*(query: CardQuery, context: var RuleContext): seq[Choice] =
-  ## The query's cards in the live game, in board order.
+proc resolveMatches*(query: CardQuery, context: var RuleContext):
+    tuple[ok: bool, chosen: seq[Choice]] =
+  ## The query's cards in the live game, in board order. `ok` is false when
+  ## the `owner:` filter had to be picked and the pick was canceled.
   # A dead player's cards stay in play, and stay their opponents' enemies.
-  let
-    fixedOpponents = not query.anyOwner and query.owner.kind == FixedValue and
-      query.owner.fixed != You
-    wanted =
-      if query.anyOwner or fixedOpponents: newSeq[int]()
-      else: query.owner.players(context)
+  result.ok = true
+  let fixedOpponents = not query.anyOwner and query.owner.kind == FixedValue and
+    query.owner.fixed != You
+  var wanted: seq[int]
+  if not (query.anyOwner or fixedOpponents):
+    let owners = query.owner.resolvePlayers(context)
+    if not owners.ok:
+      return (false, newSeq[Choice]())
+    wanted = owners.players
   case query.zone
   of BoardZone:
     for entry in context.game.board:
@@ -770,7 +777,11 @@ proc matches*(query: CardQuery, context: var RuleContext): seq[Choice] =
       if entry.card.kind in query.kinds and
           (query.anyOwner or entry.choice.owner in wanted or
             (fixedOpponents and entry.choice.owner != context.sourcePlayer)):
-        result.add entry.choice
+        result.chosen.add entry.choice
+
+proc matches*(query: CardQuery, context: var RuleContext): seq[Choice] =
+  ## The query's cards, with a canceled owner pick matching nothing.
+  query.resolveMatches(context).chosen
 
 proc chosenEntry(
     target: Target,
@@ -852,6 +863,11 @@ proc picks(owner: RuleValue[Owner]): seq[Target] =
   if owner.kind == OwnerOf and owner.target.makesChoice():
     result.add owner.target
 
+proc picks(query: CardQuery): seq[Target] =
+  ## The target the query's `owner:` filter asks its card to pick.
+  if not query.anyOwner:
+    result = query.owner.picks()
+
 proc effectOwner(owner: RuleValue[Owner], rule: string): RuleValue[Owner] =
   ## An effect names you, a picked opponent, or all of them.
   doAssert owner.kind != FixedValue or owner.fixed != AnyOpponent,
@@ -901,7 +917,7 @@ proc text*(owner: RuleValue[Owner], card: Card): string =
   of OwnerOf:
     # A picked player is named as picked; a picked card, by its owner.
     if owner.target of ObjectTarget and
-        ObjectTarget(owner.target).kinds == {Opponent}:
+        ObjectTarget(owner.target).kinds <= {Hero, Opponent}:
       owner.target.targetText(card)
     else:
       owner.target.targetText(card) & "'s owner"
@@ -957,6 +973,16 @@ converter toSelection*(query: CardQuery): Selection =
 proc plural(what: Selection): bool =
   what.kind == SelectQuery
 
+proc oneOwner(what: Selection): bool =
+  ## Whether everything selected belongs to one player, so possessives stay
+  ## singular: one card does, and so does a query naming a single player.
+  case what.kind
+  of SelectTarget:
+    true
+  of SelectQuery:
+    not what.query.anyOwner and
+      (what.query.owner.kind != FixedValue or what.query.owner.fixed == You)
+
 proc text(what: Selection, card: Card): string =
   ## "a minion", "the target", "all other cards".
   case what.kind
@@ -964,12 +990,22 @@ proc text(what: Selection, card: Card): string =
   of SelectQuery: what.query.text(card)
 
 proc picks(what: Selection): seq[Target] =
-  if what.kind == SelectTarget and what.target.makesChoice():
-    result.add what.target
+  ## A query picks nothing itself, but its `owner:` filter may: the player
+  ## names a hero, and the query then matches what that hero controls.
+  case what.kind
+  of SelectTarget:
+    if what.target.makesChoice():
+      result.add what.target
+  of SelectQuery:
+    result.add what.query.picks()
 
 proc candidates(what: Selection, context: RuleContext): seq[Choice] =
-  if what.kind == SelectTarget:
+  case what.kind
+  of SelectTarget:
     result = what.target.candidates(context)
+  of SelectQuery:
+    for target in what.query.picks():
+      result.add target.candidates(context)
 
 proc resolve(
     what: Selection,
@@ -992,7 +1028,9 @@ proc resolve(
     of HeroChoice, CreatureChoice:
       result.chosen.add selected
   of SelectQuery:
-    result.chosen = what.query.matches(context)
+    let found = what.query.resolveMatches(context)
+    result.ok = found.ok
+    result.chosen = found.chosen
   if vfx != NoVfx:
     for choice in result.chosen:
       context.effects.add Effect(kind: TargetVfxEffect, targetVfx: vfx,
@@ -1055,10 +1093,14 @@ method run*(rule: StatsRule, card: Card, context: var RuleContext): bool =
   true
 
 method text*(rule: BounceRule, card: Card): string =
-  ## "Return a minion to its owner's hand.", "Return all other cards to
-  ## their owners' hands."
-  "Return " & rule.what.text(card) &
-    (if rule.what.plural: " to their owners' hands." else: " to its owner's hand.")
+  ## "Return a minion to its owner's hand.", "Return all cards a hero
+  ## controls to their owner's hand.", "Return all other cards to their
+  ## owners' hands."
+  let home =
+    if not rule.what.plural: " to its owner's hand."
+    elif rule.what.oneOwner: " to their owner's hand."
+    else: " to their owners' hands."
+  "Return " & rule.what.text(card) & home
 
 method choices*(rule: BounceRule, card: Card, context: RuleContext): seq[Choice] =
   discard card

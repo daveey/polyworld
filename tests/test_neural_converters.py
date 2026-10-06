@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
 import convert_david
 import convert_richard
 import convert_andre
+import tensor_packages
 
 
 def rejected(call):
@@ -41,6 +42,7 @@ def layer(hidden, outputs, fixed=False):
 
 source = "bestScore = -2147483647\n" + layer(16, 18) + layer(8, 19, True)
 converted, resources = convert_richard.convert(source)
+richard_source = converted
 assert converted.count("nn_richard(") == 2
 assert "bestScore = -32767.9999847412109375" in converted
 assert "nnCombatData(nnIndex) = f(nnIndex)" in converted
@@ -128,3 +130,20 @@ for options in [{"hidden": 3}, {"layers": 0}, {"action_ticks": 0},
     assert rejected(lambda: convert_andre.convert(source, weights, **options))
 
 print("Synthetic Richard, David and Andre converters passed")
+
+# Tensor export retains policy decisions and extracts both Richard variants.
+tensor_source, tensor_resources = tensor_packages.tensorize(richard_source, resources)
+assert "nn_richard(" not in tensor_source
+assert "tensorRichardCombatStep()" in tensor_source
+assert "tensorRichardResidualStep()" in tensor_source
+manifest = json.loads(tensor_resources["tensors.json"])
+assert len(manifest["tensors"]) == 8
+assert len({entry["name"] for entry in manifest["tensors"]}) == 8
+for entry in manifest["tensors"]:
+    assert entry["resource"] == "tensors.bin"
+    assert entry["offset"] % 4 == 0
+    assert entry["dtype"] in ("int32", "fixed")
+assert tensor_source.count("dim tensorShape(0)") == 1
+assert rejected(lambda: tensor_packages.tensorize("end", {"bad.bin": b"bad"}))
+assert rejected(lambda: tensor_packages.tensorize("end", {}))
+print("Packed tensor export and independent Richard networks passed")

@@ -174,7 +174,9 @@ proc drawCardReadingView(
     inspected.toughness, inspected.lost)
 
 proc runDuel*(app: App) =
+  ## Presents a duel using public replay names when they are available.
   bindApp(app)
+  let names = if app.replay != nil: app.replay.playerNames() else: @[]
   var
     phase = ChooseClasses
     game: GameState
@@ -477,17 +479,17 @@ proc runDuel*(app: App) =
         game.currentPlayer = 1
         play.statusMessage = "Demo: Bubble."
       if getEnv("AWM_DEMO_PRIMORDIAL") == "1":
-        # Primordial returns every other card, Plan included, to its
-        # owner's hand (see AWM_DEMO_ENEMY_BOARD for the other side).
+        # Summon Primordial returns every card the enemy hero controls,
+        # Plan included, to their hand, then summons a Primordial.
         play.animations.setLen(0)
         game.players[0].heroClass = Mage
         game.players[0].board.add MinionState(id: 5, owner: 0,
           card: baseCard("plan-3"), enteredTurn: game.turnNumber)
         game.nextMinionId = max(game.nextMinionId, 6)
-        game.players[0].hand = @[baseCard("primordial-8")]
+        game.players[0].hand = @[baseCard("summon-primordial-8")]
         game.players[0].energy = 10
         game.players[0].totalEnergy = 10
-        if game.playCard(0):
+        if game.playCard(0, heroChoice(1)):
           play.statusMessage = "Demo: Primordial."
       if getEnv("AWM_DEMO_SHARPSHOOTER_TARGET").len > 0:
         # Sharpshooter enters and shoots that enemy card.
@@ -548,14 +550,14 @@ proc runDuel*(app: App) =
       botClassWait -= dt
       if botClassWait <= 0:
         let
-          playerClass = play.visualRng.rand(HeroClass)
-          opponentClass = play.visualRng.rand(HeroClass)
-        game = newGame(playerClass, opponentClass, gameSeed())
+          seed = gameSeed()
+          playerClass = botVms[0].chooseClass(PlayerCount, seed)
+          opponentClass = botVms[1].chooseClass(PlayerCount, seed)
+        game = newGame(playerClass, opponentClass, seed)
         play.resetTable()
         phase = PlayGame
         play.addOpeningHands(game, duelLayout)
         botClock.wait = 1.2'f32
-        botClock.plays = 0
         play.statusMessage = "Watching bot match..."
 
     sk.uiScale = if phase == ChooseClasses: classSelectionScale()
@@ -778,25 +780,29 @@ proc runDuel*(app: App) =
     if phase == ChooseClasses:
       let picked = classSelection(viewProjection, sessionOptions.human, not uiCapturesMouse)
       if picked.isSome:
-        let heroClass = picked.get
+        let
+          heroClass = picked.get
+          seed = gameSeed()
         game = newGame(
           heroClass,
-          sessionOptions.opponentClass,
-          gameSeed()
+          botVms[1].chooseClass(PlayerCount, seed),
+          seed
         )
         play.resetTable()
         phase = PlayGame
         play.addOpeningHands(game, duelLayout)
         botClock.wait = 1.2'f32
-        botClock.plays = 0
         if game.currentPlayer == 0:
           play.statusMessage = "Your turn. Select a card to play."
         else:
           play.statusMessage = "Your opponent is thinking..."
     else:
-      drawPlayerPanel(sk, window, game, 0, sessionOptions.human, hudTime)
-      drawPlayerPanel(sk, window, game, 1, sessionOptions.human, hudTime)
-      drawTurnHeader(sk, window, game, sessionOptions.human, play.statusMessage)
+      drawPlayerPanel(sk, window, game, 0, sessionOptions.human,
+        hudTime, names)
+      drawPlayerPanel(sk, window, game, 1, sessionOptions.human,
+        hudTime, names)
+      drawTurnHeader(sk, window, game, sessionOptions.human,
+        play.statusMessage, names)
       let inspectingCard = drawCardReadingView(
         sk,
         window,
@@ -829,7 +835,6 @@ proc runDuel*(app: App) =
           play.selectedAttacker = 0
           game.finishTurn()
           botClock.wait = 1.2'f32
-          botClock.plays = 0
           play.statusMessage = "Your opponent is thinking..."
           play.pendingTargeting = false
           play.pendingCardIndex = -1
@@ -842,7 +847,7 @@ proc runDuel*(app: App) =
 
       if not play.attackActive:
         sk.drawMatchResult(window, play, game,
-          if sessionOptions.human: 0 else: -1)
+          if sessionOptions.human: 0 else: -1, names = names)
 
     when defined(emscripten):
       let role =
@@ -851,9 +856,17 @@ proc runDuel*(app: App) =
         else: "Bot match"
       var summary = role & ". " & play.statusMessage
       if phase == PlayGame:
-        summary.add &" Turn {game.turnNumber}. Active player {game.currentPlayer + 1}."
+        summary.add &" Turn {game.turnNumber}. " &
+          (if names.len > 0:
+            "Active " & game.playerName(game.currentPlayer, names)
+          else:
+            "Active player " & $(game.currentPlayer + 1)) & "."
         for owner, player in game.players:
-          summary.add &" Player {owner + 1} {player.heroClass.className()}: life {player.life}, energy {player.energy}/{player.totalEnergy}, hand {player.hand.len}, board {player.board.len}, deck {player.deck.len}, discard {player.discardPile.len}."
+          summary.add " " & game.playerName(owner, names) &
+            &" {player.heroClass.className()}: life {player.life}, " &
+            &"energy {player.energy}/{player.totalEnergy}, " &
+            &"hand {player.hand.len}, board {player.board.len}, " &
+            &"deck {player.deck.len}, discard {player.discardPile.len}."
         if humanTurn() and not play.pendingTargeting and
             play.presentationIdle(game):
           summary.add " Ready for your action."

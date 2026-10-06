@@ -15,6 +15,8 @@ import
   test_policy_hosts,
   test_tapes,
   test_policy_packages,
+  test_tensors,
+  test_tensor_matches,
   test_gota_neural,
   test_gota_andre,
   test_gota_fly,

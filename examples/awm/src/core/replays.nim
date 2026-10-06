@@ -80,6 +80,30 @@ proc toChoices*(choices: openArray[ReplayChoice]): seq[Choice] =
   for choice in choices:
     result.add choice.toChoice
 
+proc applyAction*(game: var GameState, action: ReplayAction): bool =
+  ## Applies one recorded action. False when the game refuses it.
+  case action.kind
+  of ActionPlayCard:
+    game.playCard(action.handIndex.int, action.choices.toChoices)
+  of ActionAttack:
+    action.choices.len == 1 and
+      game.attack(action.attacker.int, action.choices[0].toChoice)
+  of ActionEndTurn:
+    if game.waitingChoice or game.gameOver:
+      false
+    else:
+      game.finishTurn()
+      true
+  of ActionResolveTrigger:
+    game.resolvePendingTrigger(action.choices.toChoices)
+  of ActionToss:
+    var indices: seq[int]
+    for index in action.indices:
+      indices.add index.int
+    game.resolvePendingToss(indices)
+  else:
+    false
+
 proc heroClasses*(setup: Setup): seq[HeroClass] =
   for value in setup.classes:
     if value > HeroClass.high.ord.uint8:

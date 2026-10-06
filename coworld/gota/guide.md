@@ -2,9 +2,10 @@
 
 **New GotA week: everyone needs to update their bot.** Handle the draft, spend ability points, buy only in your own keep, and review the new BASIC number semantics and lane rewards; start from the updated `players/base.bas`.
 
-Two teams of five BASIC heroes battle to slay the enemy god. The Softmax ladder
-uses team win/loss MMR and matchmaking that favors nearby ratings. Game results
-also report **Emmett's Glory**: each winning hero's lifetime XP divided by
+Two teams of five BASIC heroes battle to slay the enemy god. The official
+Softmax ladder uses OpenSkill with rating-based matchmaking and a mean-score
+column. Open Draft allows duplicate hero picks. Game results report
+**Emmett's Glory**: each winning hero's lifetime XP divided by
 elapsed simulated minutes, rounded down to whole points. Fractional minutes
 and drafting time count. Losing teams, draws, and timeouts score zero.
 There is no fixed XP penalty per minute. Zero-duration games score zero.
@@ -131,6 +132,21 @@ the same decision snapshot and does not change instruction or work budgets.
 The baseline now uses these records. The legacy scalar variables, functions,
 math helpers, neural functions, and chat/LLM APIs remain available.
 
+## BASIC-defined neural networks
+
+Policies can implement their neural architecture in BASIC using packed int32,
+Q16.16 or float32 tensors loaded from their ZIP. Float32 stays inside tensors;
+BASIC scalar arithmetic keeps its existing deterministic behavior. Each player's
+VM owns its weights, scratch buffers and recurrent state.
+
+Generic operations include dense and sparse CSR multiplication, activations,
+elementwise math, slicing and gather/scatter. Richard, David, Andre and Fly
+architectures have BASIC implementations using these operations. Existing custom
+runners remain available. Example packages contain synthetic weights only.
+
+See the [tensor API and package format](https://github.com/Metta-AI/polyworld/blob/main/docs/neural-tensors.md)
+for all functions, resource limits and conversion commands.
+
 ## Drafting
 
 Every live match starts with a draft. A seeded random team picks first.
@@ -204,6 +220,20 @@ resumes drafting, including the countdown. Drafting has a separate budget
 of up to 100 simulation seconds for ten players. The configured `maxTicks`
 and CLI duration flags limit battle time only, starting after the last pick.
 
+## Hero balance, October 5, 2026
+
+Frontlines have the most health. Fighters have the next health tier.
+Mages and supports have flatter health growth. Carries start fragile, with
+accelerating health and spell damage growth, but retain their late power.
+Hero-specific differences stay close to each role's targets. Basic attacks,
+mana pools, movement speed, and spell damage have been rebalanced too.
+
+Healing Bloom and Kindred Wisps retain ally healing and damage enemies.
+A full lane wave has six melee creeps and two casters, with 480 combined HP
+and 252 sustained DPS before movement or interruptions. Every creep deals
+42 damage per basic attack. Gameplay replay version is 67; this client
+supports only that exact version.
+
 ## Ability progression
 
 Heroes start at level 1 with one ability point and all four abilities locked.
@@ -226,6 +256,11 @@ Ability use requires explicit `castTarget` or `castPoint` commands, including
 slot 0 and ultimates. Items require `useItem` or `useItemAt`. Custom policies
 can bank points, choose another upgrade order, and reserve any ability. At
 level 20, fully ranking all four abilities leaves five banked points.
+
+Healing Bloom and Kindred Wisps heal allied heroes and damage enemies in
+the same area. Either spell can target an ally, an enemy, or the ground.
+Their healing classification does not imply zero damage. The spell-warning
+`support` flag is 1 only for effects that deal no damage.
 
 | BASIC function | Meaning |
 | --- | --- |
@@ -495,16 +530,16 @@ Separate baseline filler policies complete short rosters and are not ranked
 entrants. A policy controlling multiple heroes in a short-roster game receives
 their average game score, so extra seats do not multiply it.
 
-Standings use Elo MMR with an initial rating of 1,500 and K=32. Each match
-counts as a team win, loss, or draw. All rated players on a team receive the
-same rating change, based on the two teams' average MMR and the match result.
-XP and the size of an Emmett's Glory score do not affect MMR. Draws and
-timeouts count as draws. Higher MMR ranks first.
+Standings use OpenSkill Plackett-Luce, starting with skill (`mu`) 25 and
+uncertainty (`sigma`) 25/3. The board shows conservative MMR (`mu - 3 * sigma`),
+skill, uncertainty, win rate, and mean game score. Teams are ranked by average
+game score. Rating updates use placements rather than the score margin.
+Matchmaking uses estimated skill (`mu`), including initial skill for new
+entrants, while the leaderboard uses conservative MMR.
 
-Matchmaking favors players near the rating of the selected lobby's first
-player, with a scale of 100 MMR points, and balances the two teams'
-ratings. Players with fewer appearances get priority. This reduces large
-rating mismatches while still allowing them when the roster is small.
+The former GotA OpenSkill league is retired. The student league,
+NeuralHub at Diablo Valley College, has independent settings and must remain
+unchanged when publishing game updates.
 
 ## BASIC numbers and coordinates
 

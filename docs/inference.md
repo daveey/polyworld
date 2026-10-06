@@ -64,7 +64,7 @@ nim r -d:headless examples/light_vs_dark/lvd.nim \
 Each active player gets a Curly worker on their first request. Submission and
 polling do not wait for HTTP responses. Polling happens at decision boundaries
 or inside the headless barrier. Curly owns the HTTP handles and buffers.
-The host prioritizes `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, the existing container
+The host prioritizes `COWORLD_LLM_ENDPOINT`, the existing container
 sidecar root, and sends `X-Coworld-Player-Slot` with the zero-based seat index.
 It does not send an API key to the sidecar. The sidecar remains responsible for
 provider authentication, model availability, spend limits, and accounting.

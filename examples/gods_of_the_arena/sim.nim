@@ -17,7 +17,7 @@ import
   maps,
   replays
 
-export events
+export events, HeroMaxLevel
 
 ## Deterministic animation slots shared by every backend.
 
@@ -518,7 +518,7 @@ proc initTowers(world: World, map: MapData) =
 
 const
   FootmanHp* = 60'i32
-  FootmanDamage* = 12'i32
+  FootmanDamage* = 42'i32
   FootmanMovePerTick* = 5_500'i32
   FootmanBodyRadius = 0.22'fx
   HeroBodyRadius = 0.28'fx
@@ -543,7 +543,6 @@ const
   HeroRespawnGrowthTicks = 5 * TickRate
   HeroMaxRespawnTicks = 60 * TickRate
   HeroBuybackGold = 100'i32
-  HeroMaxLevel* = 20
   FootmanGoldReward = 15
   HeroXpReward = 150
   HeroGoldReward = 100
@@ -4613,8 +4612,8 @@ proc hitSpellTarget(world: World, spell: SpellCast, id: int32) =
   if caster < 0 or not world.spellTarget(id, target) or not target.alive:
     return
   let hero = world.heroes[caster]
-  if spec.kind == Strike:
-    if target.faction == hero.team.ord.int32:
+  if target.faction != hero.team.ord.int32:
+    if spec.damage <= 0:
       return
     var fortIndex = -1
     for i, fort in world.forts:
@@ -4624,7 +4623,7 @@ proc hitSpellTarget(world: World, spell: SpellCast, id: int32) =
       hero, spec.damage, world.footmanIndex(id), world.heroIndex(id),
       world.buildingIndex(id), fortIndex, AbilityEffect, spell.ability.ord.int32
     )
-  elif target.faction == hero.team.ord.int32:
+  else:
     let index = world.heroIndex(id)
     if index >= 0:
       let ally = world.heroes[index]
@@ -4684,7 +4683,7 @@ proc resolveSpell(world: World, spell: var SpellCast) =
                 nearestPosition = position
   for hero in world.heroes:
     affect(hero.id, hero.position)
-  if spec.kind == Strike:
+  if spec.damage > 0:
     for footmanSlot in 0 ..< world.footmen.len:
       let footman {.cursor.} = world.footmen[footmanSlot]
       affect(footman.id, footman.position)
@@ -4830,9 +4829,8 @@ proc castAbility(
       if not world.spellTarget(selected, target) or not target.alive or
         not world.visible(hero.team, target.position):
           return ActionTargetUnavailable
-      if (spec.kind == Strike and target.faction == hero.team.ord.int32) or
-        (spec.kind != Strike and target.faction != hero.team.ord.int32):
-          return ActionTargetUnavailable
+      if not spec.canTarget(target.faction == hero.team.ord.int32):
+        return ActionTargetUnavailable
       point = target.position
       if not within(hero.position, point, spec.range):
         return ActionOutOfRange

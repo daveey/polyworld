@@ -63,10 +63,27 @@ let
   layout = buildMultiplayerLayout(data.header.setup.classes.len)
   view = layout.multiplayerView(16.0'f / 9)
 
+echo "Recorded names and unnamed seats share the same labels"
+block:
+  var namedData = data
+  namedData.config.players = @[
+    PlayerConfig(name: "Andrew B"), PlayerConfig(name: "")]
+  let
+    replay = newReplayer(namedData)
+    names = replay.playerNames()
+    game = replay.newReplayGame()
+  doAssert names == @["Andrew B", "Player 2", "Player 3", "Player 4",
+    "Player 5"]
+  doAssert game.playerName(0, names) == "Andrew B"
+  doAssert game.playerName(1, @["Andrew B", ""]) == "Player 2"
+  doAssert game.playerName(2) == "Player 3"
+  doAssert game.choiceLabel(heroChoice(0), names) == "Andrew B Warrior hero"
+  doAssert game.choiceLabel(heroChoice(1), names) == "Player 2 Mage hero"
+
 for seconds in [1.0'f / 60, 1.0'f / 30, 0.1'f, 0.25'f]:
-  echo "Playing once at 16x, frame seconds ", seconds
+  echo "Default looping at 16x, frame seconds ", seconds
   let replay = newReplayer(data)
-  doAssert not replay.transport.repeating
+  doAssert replay.transport.repeating
   replay.transport.setSpeed(3)
   var
     game = replay.newReplayGame()
@@ -74,6 +91,25 @@ for seconds in [1.0'f / 60, 1.0'f / 30, 0.1'f, 0.25'f]:
     time = 0.0'f
     finished = false
   play.addOpeningHands(game, layout.seatTable(view, game.currentPlayer, -1))
+  for i in 0 ..< 20_000:
+    replay.advance(play, game, layout, view, time, seconds)
+    if game.gameOver:
+      finished = true
+    if finished and replay.tick == 0:
+      break
+  doAssert finished
+  doAssert replay.tick == 0
+  doAssert replay.transport.playing
+  doAssert not game.gameOver
+  doAssert not play.attackActive
+  doAssert play.heroDeaths.len == 0
+  for seat in 0 ..< game.playerCount:
+    doAssert not game.dead(seat)
+    doAssert play.deathClock(game, seat, time) == -1
+
+  echo "Disabling looping plays once and stops"
+  replay.transport.repeating = false
+  finished = false
   for i in 0 ..< 20_000:
     replay.advance(play, game, layout, view, time, seconds)
     if not replay.transport.playing and play.presentationIdle(game) and
@@ -120,6 +156,7 @@ for seconds in [1.0'f / 60, 1.0'f / 30, 0.1'f, 0.25'f]:
 for forward in [false, true]:
   echo "Seeking during a lunge, forward = ", forward
   let replay = newReplayer(data)
+  replay.transport.repeating = false
   replay.transport.setSpeed(3)
   var
     game = replay.newReplayGame()
@@ -142,3 +179,42 @@ for forward in [false, true]:
   doAssert game.gameOver
 
 echo "Replay playback passed"
+
+echo "Live bot attack animation never ends a turn automatically"
+block:
+  var game = newGame(@[Mage, Warrior], 44)
+  let
+    player = game.currentPlayer
+    enemy = game.nextPlayer(player)
+    table = layout.seatTable(view, player, -1)
+    card = baseCardNamed("Primordial")
+    bots = loadBots(newSeqWith(2, """
+id = boardId(selfPlayer, 0)
+i = 0
+while i < attackChoiceCount(id)
+  if attackChoiceKind(id, i) = 2 then
+    if attack(id, i) then end
+  end if
+  i = i + 1
+wend
+endTurn()
+"""))
+  game.players[player].board = @[
+    MinionState(id: 1, owner: player, card: card,
+      currentToughness: card.toughness, canAttack: true)]
+  game.nextMinionId = 2
+  discard game.takeVisualEvents()
+  var
+    play = initTablePlay(1)
+    clock = initBotClock()
+  clock.wait = 0
+  doAssert not play.updateBots(game, table, bots, clock,
+    proc(): bool = false, 0.0'f)
+  doAssert play.attackActive
+  doAssert game.players[enemy].life == StartingLife
+  for i in 0 ..< 60:
+    discard play.advanceAttack(game, 1.0'f / 60)
+  doAssert not play.attackActive
+  doAssert game.players[enemy].life == StartingLife - 10
+  doAssert game.currentPlayer == player
+  doAssert game.players[player].board[0].hasAttacked

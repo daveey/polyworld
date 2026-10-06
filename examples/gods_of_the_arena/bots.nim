@@ -5,7 +5,7 @@ import
   std/[math, strutils],
   bassy, fixxy,
   polyworld/[policyhosts, llms, mailboxes, metrics, bodies, cli, controllers,
-    pathing, profiles, tapes],
+    pathing, profiles, tapes, tensors],
   neural/[common, richard, david, andre, fly],
   content,
   maps,
@@ -130,10 +130,11 @@ proc heroVmLimits(): Limits =
   result.maxSourceBytes = 64 * 1024
   result.maxCodeInstructions = 20_000
   result.maxArrays = 32
+  result.maxNativeBuffers = 256
   result.maxArrayElements = 4096
   result.maxGlobals = 256
   result.maxHostData = 128
-  result.maxHostFunctions = 128
+  result.maxHostFunctions = 256
   result.maxRoutines = 64
   result.maxParameters = 16
   result.maxRegisters = 256
@@ -476,7 +477,7 @@ proc infoFunctions(host: var Host, heroId: int32) =
       let caster = world.heroIndex(spell.heroId)
       toValue(caster < 0 or
         world.heroes[caster].team != world.heroById(heroId).team)
-    of 3: toValue(spell.ability.abilitySpec.kind != Strike)
+    of 3: toValue(spell.ability.abilitySpec.damage == 0)
     else: toValue(0)
   let matchInfo: HostProc = proc(args: openArray[int32]): int32 =
     ## Reads match timing and team-remembered structure counts under fog.
@@ -1039,6 +1040,7 @@ proc initHeroHost(
   discard result.addFunction("readTile", 3, readTile, 128)
   result.infoFunctions(heroId)
   let context = NeuralContext(policy: policy)
+  result.addTensorFunctions(policy)
   result.addNeuralFunctions(
     richardRunner(context), davidRunner(context), andreRunner(context),
     flyRunner(context)

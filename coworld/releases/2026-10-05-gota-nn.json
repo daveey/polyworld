@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-05",
+  "version": "2026.10.5.1",
+  "url": "https://softmax.com/gods-of-the-arena",
+  "coworld_id": "cow_748214fd-48a6-48f3-b067-521c60738e79",
+  "canonical": true,
+  "source_commit": "afae47bd7f430030a763ecfd864c669e9491a1e0",
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "bassy_commit": "a02e6dd5889310b13d21725c891bde8d01539f08",
+  "replay_version": 65,
+  "changes": [
+    "Publish generic BASIC tensor operations with int32, Q16.16 and float32 tensor storage; BASIC scalar arithmetic remains deterministic.",
+    "Include complete Richard, David, Andre and Fly architectures written in BASIC, preserving the existing custom runners.",
+    "Use the merged Bassy tensor-buffer dependency and publish the tensor API guide. Public example packages contain synthetic weights only."
+  ],
+  "checks": [
+    "Native Linux server and WASM replay viewer built using the locked dependencies.",
+    "All ten hosted certification checks and all five hosted smoke games passed.",
+    "All 24 requested main-ladder games completed with the new release, mixed teams and verified integer scores.",
+    "A completed round replay reproduced every simulation hash on native and WASM.",
+    "Production JavaScript, WASM and data bytes match the build.",
+    "The deployed browser viewer rendered terrain, characters and replay playback without browser errors or warnings."
+  ],
+  "league_settings_preserved": [
+    "Gods of the Arena",
+    "GotA OpenSkill",
+    "NeuralHub at Diablo Valley College"
+  ],
+  "verification_round": {
+    "round_id": "round_0466d1af-db53-4d7d-982e-91606cbd0e53",
+    "round_number": 1222,
+    "status": "completed",
+    "games": 24,
+    "completed_games": 24,
+    "failed_games": 0,
+    "failures": [],
+    "coworld_id": "cow_748214fd-48a6-48f3-b067-521c60738e79",
+    "version": "2026.10.5.1",
+    "integer_scores_verified": 240,
+    "mixed_team_games_verified": 24,
+    "replay_version": 65,
+    "replay_sha256": "dfac0560311e241c159d47637e6b1f33e2f6aa916ae6a8811e3d1aa8be45173a",
+    "watch_url": "https://softmax.com/gods-of-the-arena?e=4d95a315-5ad1-4801-9828-83768540b5dc",
+    "verified_at": "2026-10-05T20:32:46.847199+00:00",
+    "outcomes": {
+      "time_limit": 19,
+      "BlueTeam": 4,
+      "RedTeam": 1
+    }
+  },
+  "replay_verification": {
+    "ticks": 29137,
+    "native": true,
+    "wasm": true,
+    "sha256": "dfac0560311e241c159d47637e6b1f33e2f6aa916ae6a8811e3d1aa8be45173a"
+  },
+  "browser_verification": {
+    "coworld_id": "cow_748214fd-48a6-48f3-b067-521c60738e79",
+    "episode_id": "6579bf5a-1552-482f-9c4c-129a0df82c60",
+    "rendered": true,
+    "observed_tick": 129,
+    "end_tick": 28605,
+    "browser_errors": [],
+    "method": "Opened the deployed viewer for a completed round-1222 replay and observed terrain, characters, HUD and running playback. Browser error and warning logs were empty.",
+    "verified_at": "2026-10-05T20:31:52.900136+00:00"
+  },
+  "viewer_assets": {
+    "gota.js": {
+      "bytes": 347550,
+      "sha256": "7315314234782ae8b1dc9da6d55bde32e7b78d8389447ca3f36194162af389a3"
+    },
+    "gota.wasm": {
+      "bytes": 6099840,
+      "sha256": "7f0b86e17994ac8ffc922bc06d6a80d14794b6d03240d1afc8e2a265b553126f"
+    },
+    "gota.data": {
+      "bytes": 33451159,
+      "sha256": "6a1d07f38179cd0ce3498dbaefb725c634d74a7705426ded9a119a83dd98e3f0"
+    }
+  },
+  "manifest_hash": "sha256:c33abdfd74532efba26640ddc2cc7a9f700a136f3697be797b604dcf0f8ce781",
+  "verified_at": "2026-10-05T20:33:32.695885+00:00"
+}

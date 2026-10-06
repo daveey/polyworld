@@ -315,14 +315,24 @@ proc availableChoices*(
     game.players[game.currentPlayer].hand[cardIndex], picked
   )
 
-proc choiceLabel*(game: GameState, choice: Choice): string =
+proc playerName*(game: GameState, player: int,
+    names: openArray[string] = []): string =
+  ## Uses the public seat name, falling back to numbered local players.
+  if player in 0 ..< names.len and names[player].len > 0:
+    names[player]
+  else:
+    "Player " & $(player + 1)
+
+proc choiceLabel*(game: GameState, choice: Choice,
+    names: openArray[string] = []): string =
+  ## Labels a target using the same public names as the match HUD.
   case choice.kind
   of CanceledChoice:
     "Cancel"
   of NoTargetChoice:
     "No target"
   of HeroChoice:
-    "Player " & $(choice.owner + 1) & " " &
+    game.playerName(choice.owner, names) & " " &
       game.players[choice.owner].heroClass.className() & " hero"
   of CreatureChoice:
     let location = game.minionLocation(choice.creatureId)
@@ -332,7 +342,7 @@ proc choiceLabel*(game: GameState, choice: Choice): string =
     var stats = $minion.power & "/" & $minion.currentToughness
     for keyword in minion.lostKeywords:
       stats.add ", lost " & $keyword
-    "Player " & $(location.player + 1) & "'s " & minion.card.name &
+    game.playerName(location.player, names) & "'s " & minion.card.name &
       " (" & stats & ")"
 
 proc recordVisual(game: var GameState, kind: VfxKind, target: Choice,
@@ -708,10 +718,11 @@ proc playCard*(
     game.applyEffects(context.effects)
     game.players[playerIndex].discardPile.add card
   of Minion, Trinket:
-    let id = game.playMinion(cardIndex)
-    if id == 0:
+    var played = game.copyGameState()
+    let id = played.playMinion(cardIndex)
+    if id == 0 or not played.runMinionRules(card, choices, id):
       return false
-    discard game.runMinionRules(card, choices, id)
+    game = played
   true
 
 proc playCard*(

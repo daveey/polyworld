@@ -57,7 +57,7 @@ suite "bot matches":
     discard loaded.replayHashes()
 
   test "scripts that only end their turn still finish by decking out":
-    let (played, data) = recordMatch(2, 3, @["END\n", ""])
+    let (played, data) = recordMatch(2, 3, @["endTurn()\n", "endTurn()\n"])
     check played.outcome == MatchWon
     discard data.replayHashes()
 

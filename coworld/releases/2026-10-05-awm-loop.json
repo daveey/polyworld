@@ -1,0 +1,337 @@
+{
+  "date": "2026-10-05",
+  "version": "2026.10.5.1",
+  "coworld_id": "cow_3a7139a8-3736-41f7-be44-f308f5c83253",
+  "canonical": true,
+  "manifest_hash": "sha256:14774b7684e3a8669ef0a296d590a5d242082c635088ca9572c51ece07c7ae64",
+  "source_commit": "cb28d27a45a957f822aba86ecfa6d4b875fe55ba",
+  "source_tree": "69516347209cd82ac9b41df131e2dca23a72d266",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "max_instructions": 5000000,
+  "max_work_units": 5000000,
+  "max_memory_bytes": 67108864,
+  "changes": [
+    "Autoplay and loop AWM replays by default, clearing death and animation state between games.",
+    "Include Rodrigo's Summon Primordial spell, one-hero board clear and vanilla 10/10 Primordial.",
+    "Use the current reference script with helpful and harmful target preferences for league fillers.",
+    "Correct the hosted guide for the new card behavior and replay defaults."
+  ],
+  "checks": [
+    "Nim checks, gameplay and bot-action tests passed.",
+    "Native and replay-viewer tests passed, including default 16x looping, avatar resets and disabling repeat.",
+    "All ten local and hosted certification checks passed.",
+    "Five hosted smoke games completed with exactly one winner each.",
+    "One forced league round completed five games with no failures.",
+    "Every forced-round replay matched native state hashes.",
+    "Deployed JavaScript, WASM and data hashes match the certified build.",
+    "Browser replay started with looping enabled and automatically restarted with living avatars."
+  ],
+  "league_id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+  "round_id": "round_366374b1-7bac-476c-977e-d4374e1bfb46",
+  "round_number": 384,
+  "round_status": "completed",
+  "completed_games": 5,
+  "failed_games": 0,
+  "episodes": [
+    {
+      "episode_request_id": "ereq_511fc3bd-ed6c-47e2-a97a-51c1377eb6f3",
+      "episode_id": "10e52720-e24a-4710-bbfa-a9fee2cbc127",
+      "status": "completed",
+      "scores": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "ticks": 510,
+      "outcome": "winner_1",
+      "native_replay_verified": true,
+      "replay_sha256": "340c9ad7bf0be593b7c267173287197258fb8caeb4c501496099cb86070b3834",
+      "participants": [
+        {
+          "policy": "relh-awm-deckwarden:v11",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "radogost:v52",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v7",
+          "is_filler": false
+        },
+        {
+          "policy": "richard-awm-deckwarden:v1",
+          "is_filler": false
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_8d3a5c68-075b-4555-b5af-a667ac5656fa",
+      "episode_id": "44ea209d-1cde-46d4-995a-8e9f8840633d",
+      "status": "completed",
+      "scores": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "ticks": 1334,
+      "outcome": "winner_1",
+      "native_replay_verified": true,
+      "replay_sha256": "fe147f6bc266001d366f7456e664589bac8483a6dc890bfef9e93fc88b33a81e",
+      "participants": [
+        {
+          "policy": "radogost:v52",
+          "is_filler": false
+        },
+        {
+          "policy": "richard-awm-deckwarden:v1",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v7",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "relh-awm-deckwarden:v11",
+          "is_filler": false
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_832eb28b-7d28-406e-9b57-faf2f742091e",
+      "episode_id": "5dbdf7f9-30fe-403d-9ad6-92d4b51c9df2",
+      "status": "completed",
+      "scores": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "ticks": 863,
+      "outcome": "winner_1",
+      "native_replay_verified": true,
+      "replay_sha256": "30f6bba6c955de1363c029f036c5c06d18c00e3574e31c1723e5a1f4d57e357d",
+      "participants": [
+        {
+          "policy": "relh-awm-deckwarden:v11",
+          "is_filler": false
+        },
+        {
+          "policy": "radogost:v52",
+          "is_filler": false
+        },
+        {
+          "policy": "richard-awm-deckwarden:v1",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v7",
+          "is_filler": false
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_23c63125-3b24-4708-8cb9-edb9526a11f3",
+      "episode_id": "bc34fbaa-6f4b-417e-9780-679dd3544a9c",
+      "status": "completed",
+      "scores": [
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "ticks": 681,
+      "outcome": "winner_3",
+      "native_replay_verified": true,
+      "replay_sha256": "3650b7e61f2b4a249f1f4cc5cd2dfc7fd3b10379cff7094c91b8a731b0becb46",
+      "participants": [
+        {
+          "policy": "richard-awm-deckwarden:v1",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        },
+        {
+          "policy": "relh-awm-deckwarden:v11",
+          "is_filler": false
+        },
+        {
+          "policy": "radogost:v52",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v7",
+          "is_filler": false
+        }
+      ]
+    },
+    {
+      "episode_request_id": "ereq_d51b3694-9826-453a-b435-e92563b3cac6",
+      "episode_id": "b8501c01-5825-44e8-8542-219616807af1",
+      "status": "completed",
+      "scores": [
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "ticks": 632,
+      "outcome": "winner_3",
+      "native_replay_verified": true,
+      "replay_sha256": "8a5d7e3a4b3e0f4d9c28577345bfd1d3f36dcebbf4b76d5f08e64ad84ddf04bd",
+      "participants": [
+        {
+          "policy": "radogost:v52",
+          "is_filler": false
+        },
+        {
+          "policy": "stilt:v7",
+          "is_filler": false
+        },
+        {
+          "policy": "relh-awm-deckwarden:v11",
+          "is_filler": false
+        },
+        {
+          "policy": "richard-awm-deckwarden:v1",
+          "is_filler": false
+        },
+        {
+          "policy": "greenshank:v15",
+          "is_filler": false
+        }
+      ]
+    }
+  ],
+  "hosted_smoke": [
+    {
+      "episode_request_id": "ereq_1a2993e7-4bae-418c-a8f7-e6a864f89628",
+      "episode_id": "a7328627-2d7f-42db-b4ee-4bd1de44ae27",
+      "results": {
+        "scores": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 241,
+        "seed": 2026,
+        "outcome": "winner_3",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_2a32a17b-b99d-4910-b848-2c3fb8305d19",
+      "episode_id": "92fb89d8-c9b6-4774-8ec7-1a067a76cd8a",
+      "results": {
+        "scores": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 241,
+        "seed": 2026,
+        "outcome": "winner_3",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_942bb831-1e2e-4dde-a4de-e1443763a4aa",
+      "episode_id": "d3d20455-e7c0-45c5-834d-64d9df5af6ba",
+      "results": {
+        "scores": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 241,
+        "seed": 2026,
+        "outcome": "winner_3",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_ba675216-d0d4-4b0c-9224-3b2332295a33",
+      "episode_id": "d681c4aa-a65b-4ac2-8395-ffaa599d794d",
+      "results": {
+        "scores": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 241,
+        "seed": 2026,
+        "outcome": "winner_3",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_c11e610d-3d8d-4978-a0c5-37b31e1fa080",
+      "episode_id": "4caf1259-3754-41e9-b1bf-6afa39dd1fad",
+      "results": {
+        "scores": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "ticks": 241,
+        "seed": 2026,
+        "outcome": "winner_3",
+        "banked_gold": [],
+        "returned": []
+      }
+    }
+  ],
+  "baseline_filler_version_id": "c7c828a7-53db-4250-9c3b-c09561b61c9b",
+  "baseline_source_sha256": "06a633389f74dfca9ef3575ed72733cde43cc700c9e8be770c8cccdd6d49c362",
+  "viewer_sha256": {
+    "js": "495a4b6901f1840936b167f56f19643df6db529143928887be9357335743addc",
+    "wasm": "dbfa42e5328e9cd1293d5624b87831247c38b2baa6229d59f081b6db22ba625e",
+    "data": "80dd68b3fe0110e17ae38820607b48f32e06a769876a53d20aa70a833eeaa4ff"
+  },
+  "browser_verification": {
+    "rendered": true,
+    "coworld_id": "cow_3a7139a8-3736-41f7-be44-f308f5c83253",
+    "episode_id": "a7328627-2d7f-42db-b4ee-4bd1de44ae27",
+    "default_loop_enabled": true,
+    "playback_speed": 16,
+    "automatic_restart_observed": true,
+    "total_ticks": 241,
+    "tick_before_restart": 227,
+    "tick_after_restart": 99,
+    "avatars_alive_after_restart": 4,
+    "method": "Loaded the deployed viewer without enabling repeat, selected 16x, observed the timeline wrap from tick 227 to tick 99 without seeking, and confirmed all four avatars were standing with living player panels.",
+    "watch_url": "https://softmax.com/archers-warriors-mages?e=a7328627-2d7f-42db-b4ee-4bd1de44ae27"
+  },
+  "watch_url": "https://softmax.com/archers-warriors-mages?e=10e52720-e24a-4710-bbfa-a9fee2cbc127",
+  "verified_at": "2026-10-05T17:20:11.147627+00:00"
+}

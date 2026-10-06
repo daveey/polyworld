@@ -9,6 +9,7 @@ block:
 for i = 1 to 250000
   total = total + 1
 next
+endTurn()
 end
 """, game.currentPlayer.int32)
   doAssert vm.runDecision(game) == BotEndedTurn
@@ -21,6 +22,7 @@ block:
   let vm = loadBot("""
 dim values(1000000)
 values(1000000) = 42
+endTurn()
 end
 """, game.currentPlayer.int32)
   doAssert vm.runtime.memoryBytes < 64'i64 * 1024 * 1024

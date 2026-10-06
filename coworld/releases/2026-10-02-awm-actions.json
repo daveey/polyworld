@@ -1,0 +1,348 @@
+{
+  "date": "2026-10-02",
+  "version": "2026.10.2.2",
+  "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+  "canonical": true,
+  "manifest_hash": "sha256:fcfdf28470619c3627dc9350cc6af10f3c4f62e9c75c9198c0ab7ab27fb1f7da",
+  "source_commit": "f645961a67d8aab717a0434588980ad2980b32b1",
+  "source_tree": "a0fd20ca160f78f73da1b1cf15b3d4cfe0fa2597",
+  "dependency_lock_sha256": "872447d9ba549499beb5483d7fd84bbb967eeb8152af1a65701db6cd65ec710a",
+  "max_instructions": 5000000,
+  "max_work_units": 5000000,
+  "max_memory_bytes": 67108864,
+  "changes": [
+    "Require each script to select its class before dealing cards.",
+    "Expose human-equivalent card, target, attack, discard and trigger actions to BASIC.",
+    "Remove engine-selected bot actions and update the reference policy to choose and execute its own actions.",
+    "Report class-setup errors through the per-player failure handoff while keeping health endpoints alive."
+  ],
+  "checks": [
+    "Nim checks and AWM gameplay/action/replay suites passed.",
+    "Two- and seven-player runtime, private logging, annotations, mailbox, health and WebSocket checks passed, including missing class selection.",
+    "All ten local and hosted certification checks passed.",
+    "Five hosted baseline smoke games completed with exactly one winner each.",
+    "Local and hosted replays matched every tick in the native client.",
+    "Deployed JavaScript, WASM and data hashes match the certified build."
+  ],
+  "hosted_smoke": [
+    {
+      "episode_request_id": "ereq_39faf07c-6165-4980-aee5-1e2cb7dfcb19",
+      "episode_id": "6037d52b-47ff-4d65-9a29-9a3b04725185",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_614f810b-7977-4a69-8619-bd9051dc40f8",
+      "episode_id": "c93fff2b-9ac1-4fb2-a16b-0e4a56596569",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_9553e845-a2ac-4a74-a40b-431946bc1a15",
+      "episode_id": "457fef1b-0f26-4249-9267-550b5113c4f1",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_a507dc75-3136-4fb1-9c14-755c8c8aa1b9",
+      "episode_id": "4def9d75-e422-429d-802d-6c1e1a607c12",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    },
+    {
+      "episode_request_id": "ereq_d781c61f-0949-4983-88ae-05107a6abeed",
+      "episode_id": "314e9b7e-f850-4702-be15-84b034483ce4",
+      "results": {
+        "scores": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "ticks": 336,
+        "seed": 2026,
+        "outcome": "winner_0",
+        "banked_gold": [],
+        "returned": []
+      }
+    }
+  ],
+  "viewer_sha256": {
+    "js": "fceb332b07567b21361c960ae46882e7b31b19d132958bf86b08361cedab0030",
+    "wasm": "b80af516e2fd4c46c5244871c06fbe5a66c9da2d1c3f8e8a6d766cf07c5cfb8f",
+    "data": "10d0cd2c5a9d778e70c691c1841325d2b11cf4f8f4b8299281c70cb5db76db43"
+  },
+  "watch_url": "https://d1kovwradqjymp.cloudfront.net/bundles/01153c73818cd912d02103daa98c5b065a881b8d8552e314a06ccd5c01916c6b/adb5413f1b944f5989be52271bdd95fe/index.html?v=2#replay=https%3A%2F%2Fd1kovwradqjymp.cloudfront.net%2Freplays%2Fd53a82ee-9a2c-44a5-847b-142796493e0b.replay",
+  "league": {
+    "id": "league_ad6dc809-4696-46f5-99a5-fc2b1c58d082",
+    "division_id": "div_4d48d8bd-0a9c-40a8-be80-d02cdbba132f",
+    "round_interval_minutes": 15,
+    "baseline_filler_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+    "baseline_source_sha256": "70e9edbaebaa0080f682df19eebd5a4c3d02ba8a1fdb946c0ccf4590a1cb2422"
+  },
+  "verification_round": {
+    "id": "round_dc9d8839-ef11-40f7-9c6e-d181d441f4b5",
+    "round_number": 99,
+    "status": "completed",
+    "games": 5,
+    "completed_games": 0,
+    "failed_games": 5,
+    "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+    "version": "2026.10.2.2",
+    "failure_type": "player_error"
+  },
+  "episode_inspection": [
+    {
+      "id": "ereq_284f786a-9c4d-45e7-bc57-d7aab9f04c79",
+      "episode_id": null,
+      "status": "failed",
+      "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+      "error_type": "player_error",
+      "error": "Policy loading failed for player slot 0",
+      "failed_policy_index": 0,
+      "failed_agent_index": 0,
+      "participants": [
+        {
+          "name": null,
+          "policy_version_id": "e0751a4d-9081-4895-93a0-ae8b3b41fc51",
+          "player_id": "ply_0f9ea7d3-fa48-4586-9df3-123e9ee21f1c"
+        },
+        {
+          "name": null,
+          "policy_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "594e903b-f5e3-461d-a13f-7e3a42225303",
+          "player_id": "ply_ac7e5318-5781-4ed6-8fc9-d9f66d6b1637"
+        },
+        {
+          "name": null,
+          "policy_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "d7374fb4-857c-44be-a58f-d2b9fc844af2",
+          "player_id": "ply_3d22435e-30a2-4f2a-b037-a5c249583788"
+        }
+      ]
+    },
+    {
+      "id": "ereq_99365486-d4da-4bec-8579-44c122f0bd6a",
+      "episode_id": null,
+      "status": "failed",
+      "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+      "error_type": "player_error",
+      "error": "Policy loading failed for player slot 0",
+      "failed_policy_index": 0,
+      "failed_agent_index": 0,
+      "participants": [
+        {
+          "name": null,
+          "policy_version_id": "e0751a4d-9081-4895-93a0-ae8b3b41fc51",
+          "player_id": "ply_0f9ea7d3-fa48-4586-9df3-123e9ee21f1c"
+        },
+        {
+          "name": null,
+          "policy_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "d7374fb4-857c-44be-a58f-d2b9fc844af2",
+          "player_id": "ply_3d22435e-30a2-4f2a-b037-a5c249583788"
+        },
+        {
+          "name": null,
+          "policy_version_id": "594e903b-f5e3-461d-a13f-7e3a42225303",
+          "player_id": "ply_ac7e5318-5781-4ed6-8fc9-d9f66d6b1637"
+        },
+        {
+          "name": null,
+          "policy_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        }
+      ]
+    },
+    {
+      "id": "ereq_4c8a3da3-c518-40a8-b0b3-d7f1cf112431",
+      "episode_id": null,
+      "status": "failed",
+      "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+      "error_type": "player_error",
+      "error": "Policy loading failed for player slot 0",
+      "failed_policy_index": 0,
+      "failed_agent_index": 0,
+      "participants": [
+        {
+          "name": null,
+          "policy_version_id": "e0751a4d-9081-4895-93a0-ae8b3b41fc51",
+          "player_id": "ply_0f9ea7d3-fa48-4586-9df3-123e9ee21f1c"
+        },
+        {
+          "name": null,
+          "policy_version_id": "d7374fb4-857c-44be-a58f-d2b9fc844af2",
+          "player_id": "ply_3d22435e-30a2-4f2a-b037-a5c249583788"
+        },
+        {
+          "name": null,
+          "policy_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "594e903b-f5e3-461d-a13f-7e3a42225303",
+          "player_id": "ply_ac7e5318-5781-4ed6-8fc9-d9f66d6b1637"
+        }
+      ]
+    },
+    {
+      "id": "ereq_0553d043-d0f3-4175-8134-8018c77d1702",
+      "episode_id": null,
+      "status": "failed",
+      "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+      "error_type": "player_error",
+      "error": "Policy loading failed for player slot 0",
+      "failed_policy_index": 0,
+      "failed_agent_index": 0,
+      "participants": [
+        {
+          "name": null,
+          "policy_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "594e903b-f5e3-461d-a13f-7e3a42225303",
+          "player_id": "ply_ac7e5318-5781-4ed6-8fc9-d9f66d6b1637"
+        },
+        {
+          "name": null,
+          "policy_version_id": "d7374fb4-857c-44be-a58f-d2b9fc844af2",
+          "player_id": "ply_3d22435e-30a2-4f2a-b037-a5c249583788"
+        },
+        {
+          "name": null,
+          "policy_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "e0751a4d-9081-4895-93a0-ae8b3b41fc51",
+          "player_id": "ply_0f9ea7d3-fa48-4586-9df3-123e9ee21f1c"
+        }
+      ]
+    },
+    {
+      "id": "ereq_42114ed2-5184-47a4-96de-0ce24db1fc04",
+      "episode_id": null,
+      "status": "failed",
+      "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+      "error_type": "player_error",
+      "error": "Policy loading failed for player slot 0",
+      "failed_policy_index": 0,
+      "failed_agent_index": 0,
+      "participants": [
+        {
+          "name": null,
+          "policy_version_id": "594e903b-f5e3-461d-a13f-7e3a42225303",
+          "player_id": "ply_ac7e5318-5781-4ed6-8fc9-d9f66d6b1637"
+        },
+        {
+          "name": null,
+          "policy_version_id": "d7374fb4-857c-44be-a58f-d2b9fc844af2",
+          "player_id": "ply_3d22435e-30a2-4f2a-b037-a5c249583788"
+        },
+        {
+          "name": null,
+          "policy_version_id": "e0751a4d-9081-4895-93a0-ae8b3b41fc51",
+          "player_id": "ply_0f9ea7d3-fa48-4586-9df3-123e9ee21f1c"
+        },
+        {
+          "name": null,
+          "policy_version_id": "c289efbb-211c-4c2d-92a1-c8a6b67cc4be",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        },
+        {
+          "name": null,
+          "policy_version_id": "725b12d4-cbec-402a-ade3-c7eb93d4973e",
+          "player_id": "ply_607f17a2-3acf-405b-91fe-d12ef1001c00"
+        }
+      ]
+    }
+  ],
+  "known_issues": [
+    "Existing ranked scripts without pickClass fail setup and must be resubmitted with explicit class selection and game actions."
+  ],
+  "initial_round": {
+    "round_number": 98,
+    "version": "2026.10.2.1",
+    "status": "failed",
+    "cause": "Legacy policy omitted pickClass; fixed setup failure reporting in 2026.10.2.2."
+  },
+  "verified_at": "2026-10-02T18:22:33.147738+00:00",
+  "browser_verification": {
+    "rendered": true,
+    "coworld_id": "cow_941ae5b3-5f73-4347-ad5c-000b00b50890",
+    "episode_id": "6037d52b-47ff-4d65-9a29-9a3b04725185",
+    "browser_errors": [],
+    "playback_speed": 16,
+    "final_tick": 336,
+    "total_ticks": 336,
+    "final_turn": 63,
+    "winner_player": 1,
+    "method": "Played the hosted baseline replay from tick 1 at 16x to match completion in the deployed browser viewer.",
+    "watch_url": "https://d1kovwradqjymp.cloudfront.net/bundles/01153c73818cd912d02103daa98c5b065a881b8d8552e314a06ccd5c01916c6b/adb5413f1b944f5989be52271bdd95fe/index.html?v=2#replay=https%3A%2F%2Fd1kovwradqjymp.cloudfront.net%2Freplays%2Fd53a82ee-9a2c-44a5-847b-142796493e0b.replay"
+  }
+}

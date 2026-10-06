@@ -4,7 +4,7 @@
 ## with a TableLayout; the rules stay in the core.
 import std/[math, options, random, strformat]
 import chroma, silky, vmath, windy
-import core/sim, scene/table, scene/heroes, core/bots, core/sessions,
+import core/sim, scene/table, scene/heroes, core/bots, core/replays,
   scene/cardrenderer, vfx/vfxrenderer
 
 type
@@ -91,7 +91,6 @@ type
     attackForward*: bool  ## Lunging out; else coming back.
     attackElapsed*: float32
     attackDamageApplied*: bool
-    attackFinishTurn*: bool  ## A bot's attacks end its turn.
     statusMessage*: string
     visualRng*: Rand
       ## Visual seeds never advance the game's RNG.
@@ -827,9 +826,9 @@ proc attackLungePoint*(play: TablePlay, layout: TableLayout,
       vec3(0, 0.3, 0)
 
 proc startAttack*(play: var TablePlay, game: GameState, layout: TableLayout,
-    attackers: seq[int], target: Choice, finishTurn = false) =
+    attackers: seq[int], target: Choice) =
   ## The attackers lunge at `target` one after another; each hits when its
-  ## lunge lands. A bot's attacks can end its turn.
+  ## lunge lands. Attacks never end a turn.
   play.attackActive = true
   play.attackSteps = attackers
   play.attackTarget = target
@@ -838,7 +837,6 @@ proc startAttack*(play: var TablePlay, game: GameState, layout: TableLayout,
   play.attackForward = true
   play.attackElapsed = 0
   play.attackDamageApplied = false
-  play.attackFinishTurn = finishTurn
 
 proc advanceAttack*(play: var TablePlay, game: var GameState,
     dt: float32): bool =
@@ -1418,8 +1416,7 @@ type
   BotClock* = object
     ## Paces bot decisions so the table can follow them.
     wait*: float32  ## Time left before the next bot decision.
-    plays*: int  ## Cards the current bot played this turn.
-    scriptFailed*: bool  ## The last turn change was a failing script passing.
+    scriptFailed*: bool  ## A script failed without changing the game.
 
 const BotThinkSeconds* = 1.2'f32
 
@@ -1429,30 +1426,6 @@ proc initBotClock*(): BotClock =
 proc botTurnStatus(bots: openArray[BotVm], player: int, name: string): string =
   if player < bots.len and bots[player] != nil: name & " is thinking..."
   else: "Your turn. Select a card to play."
-
-proc answerForBot(game: var GameState): bool =
-  ## The acting bot answers a waiting discard or trigger. If its answer is
-  ## refused, the match goes on anyway: it discards its first cards, or
-  ## declines the trigger's targets, or takes the first legal ones.
-  if game.applyBotAction(game.nextBotAction()):
-    return true
-  if game.waitingToss:
-    var first: seq[int]
-    for index in 0 ..< game.pendingToss.count:
-      first.add index
-    return game.resolvePendingToss(first)
-  if game.waitingTrigger:
-    let count = game.waitingTriggerRules().rules.targetCount()
-    var declined = newSeq[Choice](count)
-    for pick in declined.mitems:
-      pick = NoTarget
-    if game.resolvePendingTrigger(declined):
-      return true
-    var picks: seq[Choice]
-    for _ in 0 ..< count:
-      let choices = game.triggerChoices(picks)
-      picks.add(if choices.len > 0: choices[0] else: NoTarget)
-    return game.resolvePendingTrigger(picks)
 
 proc updateBots*(
     play: var TablePlay,
@@ -1464,99 +1437,47 @@ proc updateBots*(
     dt: float32,
     botName: proc(player: int): string = nil
 ): bool =
-  ## Plays the seats that have a bot, one decision at a time once the table
-  ## is still: answers their discards and triggers, plays their cards, and
-  ## at the end of their turn attacks the next living player's hero with
-  ## every ready minion. A waiting discard or trigger of the human's starts
-  ## their choice instead. A script that fails passes its turn. `botName`
-  ## names a seat in the status line (default: "Bot"). True on the frame a
-  ## bot's turn ended.
-  proc name(player: int): string =
-    if botName.isNil: "Bot" else: botName(player)
-  proc lowerName(player: int): string =
-    if botName.isNil: "the bot" else: botName(player)
-
-  if game.waitingToss and not play.tossPicking and
-      not play.pendingTargeting and play.presentationIdle(game) and
-      not play.attackActive and not game.gameOver:
-    let pending = game.pendingToss
+  ## Animates exactly the acting script's action, using human action rules.
+  ## Humans choose their own discards and trigger targets. Attacks never
+  ## end a turn. A failed script stops acting without selecting a fallback.
+  if game.gameOver:
+    return false
+  if play.presentationIdle(game) and not play.attackActive:
     if humanActs():
-      play.startTossPicking(game)
+      if game.waitingToss and not play.tossPicking:
+        play.startTossPicking(game)
+      elif game.waitingTrigger and not play.pendingTargeting:
+        play.startTriggerTargeting(game)
     else:
-      clock.wait -= dt
-      if clock.wait <= 0:
-        if game.answerForBot():
-          play.statusMessage =
-            &"{pending.source}: {lowerName(pending.player)} discards."
-        clock.wait = BotThinkSeconds
-
-  if game.waitingTrigger and
-      not game.waitingToss and not play.pendingTargeting and
-      play.presentationIdle(game) and not play.attackActive and
-      not game.gameOver:
-    let waiting = game.waitingTriggerRules()
-    if humanActs():
-      play.startTriggerTargeting(game)
-    else:
-      clock.wait -= dt
-      if clock.wait <= 0:
-        let before = game.copyGameState()
-        if game.answerForBot():
-          play.animateTransition(layout, before, game)
-          play.statusMessage = &"{waiting.card.name}'s trigger resolves."
-        clock.wait = BotThinkSeconds
-
-  if game.currentPlayer < bots.len and bots[game.currentPlayer] != nil and
-      not game.waitingChoice and
-      play.presentationIdle(game) and not play.attackActive and
-      not game.gameOver:
-    clock.wait -= dt
-    if clock.wait <= 0:
-      let current = game.currentPlayer
-      discard game.takeVisualEvents()
-      let before = game.copyGameState()
-      clock.scriptFailed = false
-      let decision = bots[current].runDecision(game)
-      case decision
-      of BotPlayedCard:
-        play.animateTransition(layout, before, game)
-        inc clock.plays
-        play.statusMessage = name(current) & " is playing..."
-      of BotEndedTurn:
-        let attackers = game.eligibleAttackers()
-        if attackers.len > 0:
-          play.startAttack(game, layout, attackers,
-            heroChoice(game.nextPlayer(game.currentPlayer)),
-            finishTurn = true)
-          play.statusMessage = name(current) & " is attacking..."
-        else:
-          game.finishTurn()
-          play.animateTransition(layout, before, game)
-          clock.plays = 0
-          play.statusMessage = bots.botTurnStatus(game.currentPlayer,
-            name(game.currentPlayer))
-          result = true
-      of BotFailed:
-        # A failing script passes the turn, so the match goes on.
-        stderr.writeLine name(current) & " script error: " &
-          bots[current].lastError
-        game.finishTurn()
-        clock.plays = 0
-        clock.scriptFailed = true
-        play.statusMessage = name(current) & " script error: turn passed."
-        result = true
-      clock.wait = BotThinkSeconds
-
-  if play.advanceAttack(game, dt):
-    if play.attackFinishTurn and not game.gameOver:
-      let before = game.copyGameState()
-      game.finishTurn()
-      play.animateTransition(layout, before, game)
-      clock.plays = 0
-      clock.wait = BotThinkSeconds
-      play.statusMessage = bots.botTurnStatus(game.currentPlayer,
-        name(game.currentPlayer))
-      result = true
+      let player = game.actingPlayer()
+      let vm = if player < bots.len: bots[player] else: nil
+      if vm != nil and not vm.failed:
+        clock.wait -= dt
+        if clock.wait <= 0:
+          let name = if botName.isNil: "Bot" else: botName(player)
+          let before = game.copyGameState()
+          clock.scriptFailed = false
+          let decision = vm.runDecision(game, apply = false)
+          case decision
+          of BotAttacked:
+            play.startAttack(game, layout, @[vm.action.attacker.int],
+              vm.action.choices[0].toChoice)
+            play.statusMessage = name & " is attacking..."
+          of BotPlayedCard, BotResolvedTrigger, BotTossed, BotEndedTurn:
+            if game.applyAction(vm.action):
+              play.animateTransition(layout, before, game)
+              play.statusMessage = name & " is playing..."
+              if decision == BotEndedTurn:
+                play.statusMessage = bots.botTurnStatus(game.currentPlayer,
+                  if botName.isNil: "Bot" else: botName(game.currentPlayer))
+                result = true
+          of BotFailed:
+            stderr.writeLine name & " script error: " & vm.lastError
+            vm.failed = true
+            clock.scriptFailed = true
+            play.statusMessage = name & " script error: " & vm.lastError
+          clock.wait = BotThinkSeconds
+  discard play.advanceAttack(game, dt)
 
 proc hoveredPile*(
     window: Window,

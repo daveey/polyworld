@@ -206,8 +206,8 @@ proc waitForCollection*() =
   ## Keeps health and contract stubs alive until the runner stops the process.
   joinThread(serverThread)
 
-proc rejectPlayer(slot: int, message: string) {.noreturn.} =
-  ## Reports package and compilation failures through the same seat boundary.
+proc rejectPlayer*(slot: int, message: string) {.noreturn.} =
+  ## Reports staged player failures through the owning seat boundary.
   playerError(slot, message)
   closePlayerOutputs()
   writePlayerStatus()

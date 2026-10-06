@@ -416,7 +416,7 @@ sub dodgeWarnings()
       if spell = 0 or spell = 2 or spell = 8 or spell = 12 then
         hostile = 0
       end if
-      if spell = 13 or spell = 14 or spell = 16 or spell = 20 then
+      if spell = 16 or spell = 20 then
         hostile = 0
       end if
       if spell = 32 or spell = 36 then
