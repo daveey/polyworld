@@ -535,13 +535,20 @@ proc infoFunctions(host: var Host, heroId: int32) =
   discard host.addQuery("spellInfo", 2, spellInfo, 4)
   discard host.addQuery("matchInfo", 1, matchInfo, 4)
 
+proc runningVm(index: int): HeroVm =
+  ## The seat's VM whose program is running: a learner seat's shadow expert
+  ## while it runs (fork), else the seat's own program.
+  result = activeGame.heroVms[index]
+  if shadowRunning and result != nil and result.neural != nil:
+    result = NeuralSeat(result.neural).shadow
+
 proc finishStructuredAction(heroId: int32, accepted: bool) =
   ## Refreshes opted-in own snapshots after accepted and rejected commands.
   let index = activeGame.world.heroIndex(heroId)
   if index >= 0:
-    let vm = activeGame.heroVms[index]
+    let vm = runningVm(index)
     if vm != nil and vm.structured:
-      activeGame.refreshOwnStructures(index)
+      activeGame.refreshOwnStructures(index, vm)
       vm.structureGlobal("lastAction.accepted").value = toValue(accepted)
 
 proc initHeroHost(
@@ -1025,9 +1032,9 @@ proc initHeroHost(
   let readTile: HostProc = proc(arguments: openArray[int32]): int32 =
     ## Fills the opted-in tile record using the existing fog-safe queries.
     let index = activeGame.world.heroIndex(heroId)
-    if index < 0 or not activeGame.heroVms[index].structured:
+    if index < 0 or not runningVm(index).structured:
       return 0
-    var runtime = activeGame.heroVms[index].runtime
+    var runtime = runningVm(index).runtime
     runtime.setGlobal("tile.x", arguments[0])
     runtime.setGlobal("tile.y", arguments[1])
     runtime.setGlobal("tile.layer", arguments[2])
@@ -1065,16 +1072,24 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
       discard compilePlayer("neural package rejected\n)", initHeroHost(0),
         heroVmLimits(), i)
     raise newException(BasicError, message)
+  # policy.bas is installed as loadBots installs a script: a structured one
+  # gets the structure prelude, widened limits and bound views, and the legacy
+  # self data (selfId, drafting, selfClass, ...) is published unless a
+  # structured policy never reads it.
   let
-    limits = if package.deferScript: deferVmLimits() else: neuralVmLimits()
+    structured = usesStructures(package.policy)
+    source = if structured: StructureSource & "\n" & package.policy
+             else: package.policy
+    baseLimits = if package.deferScript: deferVmLimits() else: neuralVmLimits()
+    limits = if structured: structureLimits(baseLimits) else: baseLimits
     heroId = game.world.heroes[i].id
   var schema = initHeroHost(0)
   schema.addNeuralSeatFunctions(0)
   let program =
     when defined(coworld):
-      compilePlayer(package.policy, schema, limits, i)
+      compilePlayer(source, schema, limits, i)
     else:
-      compile(package.policy, schema, limits)
+      compile(source, schema, limits)
   bindHeroData(program)
   var host = initHeroHost(heroId)
   host.addNeuralSeatFunctions(heroId)
@@ -1090,11 +1105,15 @@ proc installPackageSeat*(game: Game, i: int, bytes: string) =
   seat.maskStatic = package.maskStatic
   seat.resetEpisode(game.world.matchSeed, i)
   game.heroVms[i] = HeroVm(
+    structured: structured,
+    legacyHeroData: not structured or program.usesHeroData(),
     runtime: initRuntime(program, host, limits),
     limits: limits,
     ready: true,
     neural: seat
   )
+  game.heroVms[i].bindStructures(program, game.world, heroId)
+  game.structuredBots = game.structuredBots or structured
   when defined(coworld):
     game.heroVms[i].output = playerPrinter(i)
 
@@ -1232,7 +1251,7 @@ proc runHeroVm(game: Game, index: int, vm: HeroVm, primary: bool) =
         max(0'i32, hero.controls[RootControl].ends - game.world.tick))
       vm.runtime.setData(heroDataIds[DataSelfDeaths], hero.deaths)
       vm.runtime.setData(heroDataIds[DataSelfRespawnTicks], hero.respawnTicks())
-    game.refreshStructures(index)
+    game.refreshStructures(index, vm)
     discard vm.runtime.run(vm.output)
     inc vm.decisions
     if primary and vm.neural != nil and NeuralSeat(vm.neural).mode == NeuralOverride:
