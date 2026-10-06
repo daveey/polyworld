@@ -112,11 +112,13 @@ proc seatScore(env: Env, index: int): int64 =
     scaled = int64(hero.totalXp) * int64(TickRate * 60) - 200'i64 * ticks
   max(0'i64, scaled) div int64(TickRate * 60)
 
-proc compileSeat(env: Env, game: Game, index: int, source: string,
-    neural: bool, deferring = false): bool =
-  ## Compiles one seat's program; a failure leaves the seat idle.
+proc installVm(game: Game, index: int, source: string, neural: bool,
+    deferring = false): HeroVm =
+  ## Compiles and binds one seat program (or shadow expert) as bots.nim
+  ## installs it: structured scripts get the structure prelude, widened limits
+  ## and bound views; legacy self data is published unless a structured script
+  ## never reads it. Raises BasicError.
   let heroId = game.world.heroes[index].id
-  # Structured scripts get the structure prelude, widened limits and bound views, as bots.nim installs them.
   let structured = usesStructures(source)
   var limits = if deferring: deferVmLimits()
     elif neural: neuralVmLimits() else: heroVmLimits()
@@ -126,14 +128,19 @@ proc compileSeat(env: Env, game: Game, index: int, source: string,
   if neural:
     schema.addNeuralSeatFunctions(0)
     host.addNeuralSeatFunctions(heroId)
+  let program = compile(if structured: StructureSource & "\n" & source else: source, schema, limits)
+  bindHeroData(program)
+  result = HeroVm(structured: structured,
+    legacyHeroData: not structured or program.usesHeroData(),
+    runtime: initRuntime(program, host, limits), limits: limits, ready: true)
+  result.bindStructures(program, game.world, heroId)
+  game.structuredBots = game.structuredBots or structured
+
+proc compileSeat(env: Env, game: Game, index: int, source: string,
+    neural: bool, deferring = false): bool =
+  ## Compiles one seat's program; a failure leaves the seat idle.
   try:
-    let program = compile(if structured: StructureSource & "\n" & source else: source, schema, limits)
-    bindHeroData(program)
-    game.heroVms[index] = HeroVm(structured: structured,
-      legacyHeroData: not structured or program.usesHeroData(),
-      runtime: initRuntime(program, host, limits), limits: limits, ready: true)
-    game.heroVms[index].bindStructures(program, game.world, heroId)
-    game.structuredBots = game.structuredBots or structured
+    game.heroVms[index] = game.installVm(index, source, neural, deferring)
     result = true
   except BasicError as error:
     env.status[index] = SeatStatus(code: 2, message: error.msg)
@@ -396,12 +403,8 @@ proc resetEnv(env: Env, seed: int64): int =
         seat.resetEpisode(int32(seed), i)
         game.heroVms[i].neural = seat
         if env.shadows[i].len > 0 and not deferring:
-          let heroId = game.world.heroes[i].id
           try:
-            let program = compile(env.shadows[i], initHeroHost(0), heroVmLimits())
-            seat.shadow = HeroVm(runtime: initRuntime(program,
-              initHeroHost(heroId), heroVmLimits()), limits: heroVmLimits(),
-              ready: true)
+            seat.shadow = game.installVm(i, env.shadows[i], false)
           except BasicError as error:
             env.status[i] = SeatStatus(code: 2, message: "shadow: " & error.msg)
             result = -2

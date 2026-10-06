@@ -457,10 +457,10 @@ const OwnArrays = block:
         fields.add field
   fields
 
-proc refreshOwnStructures*(game: Game, index: int) =
+proc refreshOwnStructures*(game: Game, index: int, vm: HeroVm) =
   ## Refreshes live own state after a command without changing old host data.
+  ## `vm` is the seat's program or (fork) a learner seat's shadow expert.
   let
-    vm {.cursor.} = game.heroVms[index]
     world {.cursor.} = game.world
     hero {.cursor.} = world.heroes[index]
   if vm == nil or not vm.structured:
@@ -551,16 +551,20 @@ proc refreshStructureCounts*(game: Game) =
           else: building.knownAlive[team]):
         inc game.structureCounts[team][first]
 
-proc refreshStructures*(game: Game, index: int) =
+proc refreshOwnStructures*(game: Game, index: int) =
+  ## Refreshes the seat's own program after a command.
+  game.refreshOwnStructures(index, game.heroVms[index])
+
+proc refreshStructures*(game: Game, index: int, vm: HeroVm) =
   ## Publishes a bounded, visibility-filtered decision snapshot.
+  ## `vm` is the seat's program or (fork) a learner seat's shadow expert.
   let
-    vm {.cursor.} = game.heroVms[index]
     world {.cursor.} = game.world
     hero {.cursor.} = world.heroes[index]
   if vm == nil or not vm.structured:
     return
   vm.runtime.invalidateArrays()
-  game.refreshOwnStructures(index)
+  game.refreshOwnStructures(index, vm)
   template put(name: static[string], observation: untyped) =
     ## Writes one typed scalar field.
     if vm.structureFields[static(fieldIndex(GlobalNames, name))]:
