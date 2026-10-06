@@ -116,18 +116,24 @@ proc compileSeat(env: Env, game: Game, index: int, source: string,
     neural: bool, deferring = false): bool =
   ## Compiles one seat's program; a failure leaves the seat idle.
   let heroId = game.world.heroes[index].id
-  let limits = if deferring: deferVmLimits()
+  # Structured scripts get the structure prelude, widened limits and bound views, as bots.nim installs them.
+  let structured = usesStructures(source)
+  var limits = if deferring: deferVmLimits()
     elif neural: neuralVmLimits() else: heroVmLimits()
+  if structured: limits = structureLimits(limits)
   var schema = initHeroHost(0)
   var host = initHeroHost(heroId)
   if neural:
     schema.addNeuralSeatFunctions(0)
     host.addNeuralSeatFunctions(heroId)
   try:
-    let program = compile(source, schema, limits)
+    let program = compile(if structured: StructureSource & "\n" & source else: source, schema, limits)
     bindHeroData(program)
-    game.heroVms[index] = HeroVm(runtime: initRuntime(program, host, limits),
-      limits: limits, ready: true)
+    game.heroVms[index] = HeroVm(structured: structured,
+      legacyHeroData: not structured or program.usesHeroData(),
+      runtime: initRuntime(program, host, limits), limits: limits, ready: true)
+    game.heroVms[index].bindStructures(program, game.world, heroId)
+    game.structuredBots = game.structuredBots or structured
     result = true
   except BasicError as error:
     env.status[index] = SeatStatus(code: 2, message: error.msg)
@@ -873,8 +879,13 @@ proc checkCompile(source: string, neural: bool): (bool, string) =
   var schema = initHeroHost(0)
   if neural:
     schema.addNeuralSeatFunctions(0)
+  # Structured scripts (first line "' @gota-structures", e.g. upstream's base.bas since f866e2f) compile with the
+  # structure prelude and widened limits, exactly as bots.nim installs them.
+  let structured = usesStructures(source)
+  var limits = if neural: neuralVmLimits() else: heroVmLimits()
+  if structured: limits = structureLimits(limits)
   try:
-    discard compile(source, schema, if neural: neuralVmLimits() else: heroVmLimits())
+    discard compile(if structured: StructureSource & "\n" & source else: source, schema, limits)
     (true, "")
   except BasicError as error:
     (false, error.msg)
