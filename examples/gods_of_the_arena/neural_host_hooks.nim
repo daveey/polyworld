@@ -613,7 +613,8 @@ proc neuralVmLimits*(): Limits =
   ## (instructions, work units: fairness with .bas seats; the network runs on
   ## its own separate op budget) with room for the neural host functions.
   result = heroVmLimits()
-  result.maxHostFunctions = 160
+  # hero budget + 32 for the neural functions (was a fixed 160 = 128 + 32; upstream 05755ec raised the hero budget to 256)
+  result.maxHostFunctions = result.maxHostFunctions + 32
 
 proc deferVmLimits*(): Limits =
   ## Defer-script seats: the same limits as every neural seat.
