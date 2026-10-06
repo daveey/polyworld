@@ -518,7 +518,7 @@ proc initTowers(world: World, map: MapData) =
 
 const
   FootmanHp* = 60'i32
-  FootmanDamage* = 42'i32
+  FootmanDamage* = 28'i32
   FootmanMovePerTick* = 5_500'i32
   FootmanBodyRadius = 0.22'fx
   HeroBodyRadius = 0.28'fx

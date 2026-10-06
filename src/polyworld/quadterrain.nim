@@ -817,6 +817,11 @@ proc compileProgram(vertexSource, fragmentSource: string): GLuint =
   glAttachShader(result, vertexShader)
   glAttachShader(result, fragmentShader)
   glLinkProgram(result)
+  # The linked executable owns its code; release the compilation objects.
+  glDetachShader(result, vertexShader)
+  glDetachShader(result, fragmentShader)
+  glDeleteShader(vertexShader)
+  glDeleteShader(fragmentShader)
   var ok: GLint
   glGetProgramiv(result, GL_LINK_STATUS, ok.addr)
   if ok == 0:

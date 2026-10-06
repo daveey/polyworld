@@ -1,0 +1,107 @@
+{
+  "date": "2026-10-05",
+  "version": "2026.10.5.2",
+  "url": "https://softmax.com/gods-of-the-arena",
+  "coworld_id": "cow_2b5c3144-86cb-48d6-bdcd-5e6458111237",
+  "canonical": true,
+  "source_commit": "2d38a1da94542b71f3a4824fa2939241c3087612",
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "bassy_commit": "a02e6dd5889310b13d21725c891bde8d01539f08",
+  "replay_version": 67,
+  "buff_commit": "712b88371c82aeac9992a62e21166fcabd69ec67",
+  "buff_url": "https://metta-ai.github.io/polyworld-buff/GOTA/heros/#hero-progression",
+  "changes": [
+    "Rebalance all ten heroes across health, basic DPS, ability burst, mana and speed, with fixed hero-specific variations.",
+    "Increase Frontline health by 25 percent and delay Carry health and spell growth while preserving strong maximum-level stats.",
+    "Allow Druid healing spells to damage enemies and raise melee creep damage to 42.",
+    "Publish five progression chart tabs, updated hero and spell tables, creep benchmarks and the current OpenSkill guide.",
+    "Require exact gameplay replay version 67."
+  ],
+  "checks": [
+    "Full local CI suite, lockstep regressions and neural converter integration checks passed.",
+    "GitHub CI passed on Linux, Windows and macOS.",
+    "All ten local and hosted certification checks and all five hosted smoke games passed.",
+    "All 24 requested main-ladder games completed on this release with mixed teams and 240 verified integer scores.",
+    "A completed round replay reproduced every simulation hash on native and WASM.",
+    "Production JavaScript, WASM and data bytes exactly match the built artifacts.",
+    "The published Buff charts and deployed game rendered successfully."
+  ],
+  "ci_url": "https://github.com/Metta-AI/polyworld/actions/runs/37390961589",
+  "league_settings_preserved": [
+    {
+      "id": "league_080e6abb-597b-45e3-ab21-63321905fdd6",
+      "name": "NeuralHub at Diablo Valley College",
+      "unchanged_fields": [
+        "settings",
+        "commissioner_config",
+        "rounds_paused_at",
+        "disabled_at",
+        "filler_policy_version_ids"
+      ]
+    },
+    {
+      "id": "league_3c60897b-25cf-4b37-9d1a-8554c1198f28",
+      "name": "Gods of the Arena",
+      "unchanged_fields": [
+        "settings",
+        "commissioner_config",
+        "rounds_paused_at",
+        "disabled_at",
+        "filler_policy_version_ids"
+      ]
+    }
+  ],
+  "verification_round": {
+    "round_id": "round_2612a6d9-ea05-437b-a888-a57026f25a35",
+    "round_number": 1229,
+    "status": "completed",
+    "games": 24,
+    "completed_games": 24,
+    "failed_games": 0,
+    "failures": [],
+    "coworld_id": "cow_2b5c3144-86cb-48d6-bdcd-5e6458111237",
+    "version": "2026.10.5.2",
+    "integer_scores_verified": 240,
+    "scoring": "Emmett's Glory",
+    "mixed_team_games_verified": 24,
+    "outcomes": {
+      "time_limit": 23,
+      "BlueTeam": 1
+    },
+    "replay_version": 67,
+    "watch_url": "https://softmax.com/gods-of-the-arena?e=c27133fc-6130-4f2e-973b-e91f425ceb5b",
+    "verified_at": "2026-10-06T00:03:35.418730+00:00"
+  },
+  "replay_verification": {
+    "ticks": 28909,
+    "native": true,
+    "wasm": true,
+    "sha256": "f74dd6b5e54e11ba9ec00d366dcdf6aa5b0eb722cf22c7798a539f922d24a941",
+    "episode_id": "c66c1bf9-f83a-427a-8f06-6b106bb171b8"
+  },
+  "browser_verification": {
+    "coworld_id": "cow_2b5c3144-86cb-48d6-bdcd-5e6458111237",
+    "episode_id": "c66c1bf9-f83a-427a-8f06-6b106bb171b8",
+    "rendered": true,
+    "end_tick": 28909,
+    "browser_errors": [],
+    "method": "Used the production viewer controls to disable looping and seek from the beginning to tick 28909/28909. The final results card rendered, no replay error appeared, and browser warning and error logs were empty.",
+    "verified_at": "2026-10-06T00:04:26.315376+00:00"
+  },
+  "viewer_assets": {
+    "gota.wasm": {
+      "bytes": 6094025,
+      "sha256": "ad7fe6fd393f23a4b5828f52b2affa3dfffa9f033781f3a56faba8331f75d656"
+    },
+    "gota.data": {
+      "bytes": 33451159,
+      "sha256": "6a1d07f38179cd0ce3498dbaefb725c634d74a7705426ded9a119a83dd98e3f0"
+    },
+    "gota.js": {
+      "bytes": 347667,
+      "sha256": "3e4d12c58d70c6fb85dc7c4ae257a9a55ca432fa36ef9165776c88de05369838"
+    }
+  },
+  "manifest_hash": "sha256:99cccd6cdbf1e00af32129688eebb0e8348b0f75016b61abfdfbb7799fce9a70",
+  "verified_at": "2026-10-06T00:04:26.369034+00:00"
+}

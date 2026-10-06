@@ -579,20 +579,24 @@ proc tileCenter*(layerIndex, x, z: int): Vec3 =
     (layer.originZ + z).float32 - HalfGrid + 0.5
   )
 
-proc tileTop*(layerIndex, x, z: int): int32 =
+proc tileTop*(layer: QuadLayer; x, z: int): int32 =
+  ## Samples the supplied layer without installing it as global pathing state.
   ## Mean height of a tile's four top corners, in the same 1/8-tile integer
   ## steps that `Tile.tops` stores. Integer throughout, so a simulation can
   ## price a ramp step without ever touching `unpack` and its float32.
   ## Division floors toward negative infinity so the result is stable for
   ## tiles below y = 0 rather than biased toward zero.
   let
-    layer = layers[layerIndex]
     tops = layer.tiles[z * layer.width + x].tops
     total = int32(tops[0]) + int32(tops[1]) + int32(tops[2]) + int32(tops[3])
   if total >= 0:
     total div 4
   else:
     -((-total + 3) div 4)
+
+proc tileTop*(layerIndex, x, z: int): int32 =
+  ## Samples an installed layer with the same integer rounding.
+  layers[layerIndex].tileTop(x, z)
 
 proc pathPoint*(layerIndex, x, z: int): PathPoint =
   ## Returns one exact integer tile center for authoritative game setup.

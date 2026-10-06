@@ -230,8 +230,8 @@ mana pools, movement speed, and spell damage have been rebalanced too.
 
 Healing Bloom and Kindred Wisps retain ally healing and damage enemies.
 A full lane wave has six melee creeps and two casters, with 480 combined HP
-and 252 sustained DPS before movement or interruptions. Every creep deals
-42 damage per basic attack. Gameplay replay version is 67; this client
+and 168 sustained DPS before movement or interruptions. Every creep deals
+28 damage per basic attack. Gameplay replay version is 68; this client
 supports only that exact version.
 
 ## Ability progression
