@@ -13,7 +13,7 @@ import
   polyworld/profiles,
   polyworld/quadterrain,
   polyworld/shadows,
-  polyworld/terrainsurfaces,
+  polyworld/terrainsurfaces, polyworld/waters,
   polyworld/[chrome, inputs, rtscameras, selectionoutlines, shapes, viewers,
     visions, worldbars, worldtexts]
 
@@ -22,6 +22,7 @@ when defined(takeScreenshot):
 
 const
   DefaultCameraDistance = 17.0'f / 1.2'f
+  ProfileWarmupFrames {.intdefine.} = 0
   AtlasPath = TmpRoot & "/gota.atlas.png"
   MossyStoneSurface = SurfaceNames.len
   CourtyardSurface = MossyStoneSurface + 1
@@ -35,6 +36,26 @@ type
   GraphicsError = object of CatchableError
   GodAnimation = enum
     GodIdle, GodDeath, GodVictory
+  WorldCharacter = object
+    id: int32
+    pose: CharacterPose
+    living: bool
+    eyes: ptr DeathEyes
+
+proc drawWorldCharacters(
+  scene: CharacterScene,
+  characters: var seq[WorldCharacter],
+  count: int,
+  livingOnly = false
+) {.measure.} =
+  ## Reuses each pose for shadows, outlines, the camera, and water.
+  for i in 0 ..< count:
+    let character = addr characters[i]
+    if livingOnly and not character.living:
+      continue
+    if scene.shading == PbrCharacters:
+      character.eyes[].setDead(not character.living)
+    scene.drawCharacter(character.pose)
 
 proc renderPoint(position: WorldPoint): Vec3 =
   ## Converts authoritative integer coordinates at the rendering boundary.
@@ -93,7 +114,12 @@ var
 
 proc runGraphics*() =
   ## Runs the native or Emscripten graphical spectator.
-  startGameProfile()
+  when ProfileWarmupFrames > 0:
+    finishGameProfile()
+  else:
+    startGameProfile()
+  when ActiveTracePath.len > 0:
+    framePaceHz = 0
   profileBlock "atlas":
     let builder = newHudAtlas(4096)
     for class in HeroClass:
@@ -131,10 +157,12 @@ proc runGraphics*() =
   profileBlock "terrain":
     amplitude = 2.8'f
     seed = ArenaSeed
+    installWaters()
     initTerrain(
       GotaTreeStyle, GeneratedTerrain, NoRocks, ArenaTextures,
       settings = GotaTerrainAssets
     )
+    initWaters()
     terrainUnboostedMaterial = CourtyardSurface.float32
     let landscape = buildLandscape(
       layers[GroundLayer],
@@ -212,6 +240,9 @@ proc runGraphics*() =
     footmanEyes: array[Team, array[CreepKind, DeathEyes]]
     godEyes: array[Team, DeathEyes]
     heroEyes: array[HeroClass, DeathEyes]
+    worldCharacters: seq[WorldCharacter]
+    worldCharacterCount: int
+    directorSubjects: seq[Subject]
   profileBlock "models":
     let
       characterLibrary = readManifest(ChargenLibrary)
@@ -292,6 +323,8 @@ proc runGraphics*() =
     waypointShapes = initShapeRenderer()
     waypointText = initWorldBarRenderer()
     waypointLabels: seq[WorldText]
+    waypointGoals: seq[WorldPoint]
+    waypointRemaining, waypointRoute, pathPoints: seq[Vec3]
     selectionOutline = initSelectionOutline()
     occlusionOutline = initSelectionOutline(OccludedOutline)
     showOccludedCharacters = true
@@ -424,6 +457,10 @@ proc runGraphics*() =
       color = uint32(clamp(tint.x * 255, 0'f, 255'f)) shl 16 or
         uint32(clamp(tint.y * 255, 0'f, 255'f)) shl 8 or
         uint32(clamp(tint.z * 255, 0'f, 255'f))
+  var lakes: seq[WaterBody]
+  for i, layer in layers:
+    if layer.water:
+      lakes.add WaterBody(layer: i, params: DefaultWaterParams)
   drawSplash(sk, window, splash.name)
 
   type God = object
@@ -575,12 +612,16 @@ proc runGraphics*() =
     else:
       1'f
 
+  proc creepEyeState(unit: Footman): ptr DeathEyes =
+    ## Selects the shared eye nodes for a camp appearance or team creep.
+    if unit.camp > 0:
+      addr neutralEyes[unit.appearance]
+    else:
+      addr footmanEyes[unit.team][unit.kind]
+
   proc creepEyes(unit: Footman, dead: bool) =
     ## Switches every mob's face for living and corpse draws.
-    if unit.camp > 0:
-      neutralEyes[unit.appearance].setDead(dead)
-    else:
-      footmanEyes[unit.team][unit.kind].setDead(dead)
+    creepEyeState(unit)[].setDead(dead)
 
   proc creepRenderTime(footman: Footman): float32 =
     ## Fits authored attack impacts and death poses to simulation timing.
@@ -709,7 +750,7 @@ proc runGraphics*() =
       cameraRight,
       cameraUp: Vec3,
       dt: float32
-  ) =
+  ) {.measure.} =
     ## Builds and draws attached hero, tower, and footman resource bars.
     damageTrails.beginFrame()
     renderer.clear()
@@ -846,13 +887,15 @@ proc runGraphics*() =
           )]
         renderer.addResourceBars(anchor, FootmanWorldBarWidth, bars)
     damageTrails.finishFrame()
-    addPlayerNames()
-    renderer.draw(
-      viewProjection,
-      cameraRight,
-      cameraUp,
-      sk.atlasTextureId()
-    )
+    profileBlock "World bar names":
+      addPlayerNames()
+    profileBlock "World bar upload":
+      renderer.draw(
+        viewProjection,
+        cameraRight,
+        cameraUp,
+        sk.atlasTextureId()
+      )
 
   proc pickEntity(viewProjection: Mat4): int32 =
     ## Finds the closest visible mesh under the pointer by triangle hit.
@@ -1053,15 +1096,15 @@ proc runGraphics*() =
     let creep = footmanById(run.world, primaryId)
     if creep.id == 0 or creep.camp > 0 or not visibleInView(creep):
       return
-    let goals = creep.creepWaypoints()
-    while waypointLabels.len < goals.len:
+    creep.creepWaypoints(waypointGoals)
+    while waypointLabels.len < waypointGoals.len:
       waypointLabels.add layoutText(
         sk.atlas.fonts["WorldName"], sk.atlas.size,
         $(waypointLabels.len + 1), height = 0.65'f)
     waypointShapes.clear()
     waypointText.clear()
-    var remaining: seq[Vec3]
-    for i, goal in goals:
+    waypointRemaining.setLen(0)
+    for i, goal in waypointGoals:
       let
         point = renderPoint(goal) + vec3(0, 0.3'f, 0)
         color =
@@ -1071,24 +1114,28 @@ proc runGraphics*() =
       waypointShapes.addCircle(point, 0.45'f, color)
       waypointText.addText(waypointLabels[i], point + vec3(0, 0.6'f, 0), color)
       if i >= creep.waypointIndex:
-        remaining.add point
+        waypointRemaining.add point
       if i == creep.waypointIndex:
-        var ring: seq[Vec3]
+        var ring: array[65, Vec3]
         for step in 0 .. 64:
           let
             angle = step.float32 * (2.0'f * PI.float32 / 64.0'f)
             radius = WaypointRadius.float32 / WorldScale.float32
             x = point.x + cos(angle) * radius
             z = point.z + sin(angle) * radius
-          ring.add vec3(x, groundHeight(x, z) + groundOffset(x, z) + 0.3'f, z)
+          ring[step] = vec3(
+            x, groundHeight(x, z) + groundOffset(x, z) + 0.3'f, z)
         waypointShapes.addPolyline(ring, color, 0.06'f)
-    waypointShapes.addPolyline(remaining, teamHudColor(creep.team), 0.04'f)
-    var route = @[unitRenderPoint(creep.id, creep.position) + vec3(0, 0.35'f, 0)]
+    waypointShapes.addPolyline(
+      waypointRemaining, teamHudColor(creep.team), 0.04'f)
+    waypointRoute.setLen(0)
+    waypointRoute.add(
+      unitRenderPoint(creep.id, creep.position) + vec3(0, 0.35'f, 0))
     for i in creep.movePathIndex ..< creep.movePath.len:
       let tile = creep.movePath[i]
-      route.add tileCenter(int(tile.layer), int(tile.x), int(tile.z)) +
+      waypointRoute.add tileCenter(int(tile.layer), int(tile.x), int(tile.z)) +
         vec3(0, 0.35'f, 0)
-    waypointShapes.addPolyline(route, rgbx(116, 242, 226, 255), 0.09'f)
+    waypointShapes.addPolyline(waypointRoute, rgbx(116, 242, 226, 255), 0.09'f)
     waypointShapes.draw(viewProjection)
     waypointText.draw(viewProjection, right, up, sk.atlasTextureId())
 
@@ -1254,54 +1301,14 @@ proc runGraphics*() =
       viewProjection: Mat4
   ) =
     ## Draws one object's silhouette into the current outline mask.
-    for hero in run.world.heroes:
-      if hero.id != id:
+    for i in 0 ..< worldCharacterCount:
+      let character = addr worldCharacters[i]
+      if character.id != id:
         continue
-      let pose = heroRenderPose(hero)
-      heroEyes[hero.class].setDead(hero.hp <= 0 or hero.state == Dying)
+      if scene.shading == PbrCharacters:
+        character.eyes[].setDead(not character.living)
       beginCharacters(scene, window, view, projection, cameraEye)
-      drawCharacter(
-        scene,
-        heroModels[hero.class],
-        unitRenderPoint(hero.id, hero.position),
-        unitRenderFacing(hero.id, hero.facing),
-        pose.clip,
-        pose.time,
-        sizeFactor = hero.heroSizeFactor()
-      )
-      finishCharacters(scene)
-      return
-    for footman in run.world.footmen:
-      if footman.id != id:
-        continue
-      creepEyes(footman,
-        footman.hp <= 0 or footman.state == Dying
-      )
-      beginCharacters(scene, window, view, projection, cameraEye)
-      drawCharacter(
-        scene,
-        creepModel(footman),
-        unitRenderPoint(footman.id, footman.position),
-        unitRenderFacing(footman.id, footman.facing),
-        creepClip(footman),
-        creepRenderTime(footman),
-        sizeFactor = creepSize(footman)
-      )
-      finishCharacters(scene)
-      return
-    for i, god in gods:
-      if run.world.forts[i].id != id:
-        continue
-      godEyes[god.team].setDead(run.world.forts[i].hp <= 0)
-      beginCharacters(scene, window, view, projection, cameraEye)
-      drawCharacter(
-        scene,
-        godModels[god.team],
-        god.position,
-        god.facing,
-        godRenderClips[god.team][god.godClip],
-        god.animTime
-      )
+      scene.drawCharacter(character.pose)
       finishCharacters(scene)
       return
     for tower in run.world.buildings:
@@ -1366,9 +1373,9 @@ proc runGraphics*() =
     ## Refreshes real subjects and observes every simulated tick.
     if not actionCam.enabled:
       return
-    var subjects: seq[Subject]
+    directorSubjects.setLen(0)
     for hero in run.world.heroes:
-      subjects.add Subject(
+      directorSubjects.add Subject(
         id: hero.id, owner: int32(hero.slot),
         position: unitRenderPoint(hero.id, hero.position),
         height: 0.9, radius: 1.2, visible: visibleInView(hero.team, hero.position),
@@ -1378,9 +1385,9 @@ proc runGraphics*() =
         fighting: hero.state == Fighting, activity: hero.swingTicks,
         combatScore: 100
       )
-    let livingHeroes = prioritizeHeroes(run.world, subjects)
+    let livingHeroes = prioritizeHeroes(run.world, directorSubjects)
     for footman in run.world.footmen:
-      subjects.add Subject(
+      directorSubjects.add Subject(
         id: footman.id, owner: footman.faction,
         position: unitRenderPoint(footman.id, footman.position),
         height: 0.8, radius: 1, visible: visibleInView(footman),
@@ -1392,7 +1399,7 @@ proc runGraphics*() =
         combatScore: 70, combatOnly: livingHeroes
       )
     for tower in run.world.buildings:
-      subjects.add Subject(
+      directorSubjects.add Subject(
         id: tower.id, owner: int32(tower.team),
         position: renderPoint(tower.position), height: 2.5, radius: 3,
         visible: visibleInView(tower.team, tower.position), alive: tower.hp > 0,
@@ -1402,7 +1409,7 @@ proc runGraphics*() =
         combatOnly: true
       )
     for i, fort in run.world.forts:
-      subjects.add Subject(
+      directorSubjects.add Subject(
         id: fort.id, owner: int32(fort.team), position: gods[i].position,
         height: GodTargetHeight, radius: 4,
         visible: visibleInView(fort.team, fort.center),
@@ -1410,8 +1417,8 @@ proc runGraphics*() =
         damageOnly: true, combatScore: 165
       )
     if observeTick and not viewingSeeking:
-      actionCam.director.observe(subjects)
-    actionCam.director.refresh(subjects)
+      actionCam.director.observe(directorSubjects)
+    actionCam.director.refresh(directorSubjects)
 
   proc playerHeroFrame(): Vec3 =
     ## Returns the look-at that frames the human hero over the HUD.
@@ -1995,10 +2002,20 @@ proc runGraphics*() =
   var
     viewingClock: ViewingClock
     cameraSeekSerial = -1
+  when ProfileWarmupFrames > 0 and ActiveTracePath.len > 0:
+    var profileWarmup = 0
 
   holdSplash(sk, window, splash)
+  when defined(takeScreenshot) and ActiveTracePath.len > 0 and
+    ProfileWarmupFrames == 0:
+    # Exclude loading and the requested simulation seek from frame captures.
+    startTrace()
   window.onFrame = proc() =
-    profileBlock "frame":
+    when ProfileWarmupFrames > 0 and ActiveTracePath.len > 0:
+      if profileWarmup == ProfileWarmupFrames:
+        startGameProfile()
+      inc profileWarmup
+    profileBlock "game frame":
       let dt = frameDelta(lastFrameTime)
       viewingDt = viewingClock.viewingDelta(window)
       viewingSeeking = transport.targetTick >= 0 or transport.restoreTick >= 0
@@ -2092,36 +2109,45 @@ proc runGraphics*() =
           clockHour(float32(run.world.battleTick()) + renderAlpha, TickRate))
         setEnvironmentPalette(scene.toon)
 
-        proc drawWorldCharacters(livingOnly = false) =
-          ## Uses identical poses for shadows, occlusion masks, and the camera.
+        profileBlock "prepare character poses":
+          var count = 0
           for footman in run.world.footmen:
             if not visibleInView(footman):
               continue
-            if livingOnly and (footman.hp <= 0 or footman.state == Dying):
-              continue
             let
               model = creepModel(footman)
-              clip =
-                creepClip(footman)
-            creepEyes(footman,
-              footman.hp <= 0 or footman.state == Dying
-            )
-            drawCharacter(
-              scene, model, unitRenderPoint(footman.id, footman.position),
+              clip = creepClip(footman)
+              dead = footman.hp <= 0 or footman.state == Dying
+            creepEyes(footman, dead)
+            if count == worldCharacters.len:
+              worldCharacters.add WorldCharacter()
+            worldCharacters[count].id = footman.id
+            worldCharacters[count].living = not dead
+            worldCharacters[count].eyes = creepEyeState(footman)
+            scene.prepareCharacter(
+              worldCharacters[count].pose,
+              model,
+              unitRenderPoint(footman.id, footman.position),
               unitRenderFacing(footman.id, footman.facing),
               clip,
               creepRenderTime(footman),
               sizeFactor = creepSize(footman)
             )
+            inc count
           for hero in run.world.heroes:
             if not visibleInView(hero.team, hero.position):
               continue
-            if livingOnly and (hero.hp <= 0 or hero.state == Dying):
-              continue
-            let pose = heroRenderPose(hero)
-            heroEyes[hero.class].setDead(hero.hp <= 0 or hero.state == Dying)
-            drawCharacter(
-              scene,
+            let
+              pose = heroRenderPose(hero)
+              dead = hero.hp <= 0 or hero.state == Dying
+            heroEyes[hero.class].setDead(dead)
+            if count == worldCharacters.len:
+              worldCharacters.add WorldCharacter()
+            worldCharacters[count].id = hero.id
+            worldCharacters[count].living = not dead
+            worldCharacters[count].eyes = addr heroEyes[hero.class]
+            scene.prepareCharacter(
+              worldCharacters[count].pose,
               heroModels[hero.class],
               unitRenderPoint(hero.id, hero.position),
               unitRenderFacing(hero.id, hero.facing),
@@ -2129,92 +2155,167 @@ proc runGraphics*() =
               pose.time,
               sizeFactor = hero.heroSizeFactor()
             )
+            inc count
           for god in gods:
             if not visibleInView(
                 god.team, run.world.forts[god.team.ord].center):
               continue
-            if livingOnly and run.world.forts[god.team.ord].hp <= 0:
-              continue
             let
               model = godModels[god.team]
               clip = godRenderClips[god.team][god.godClip]
-            godEyes[god.team].setDead(run.world.forts[god.team.ord].hp <= 0)
+              dead = run.world.forts[god.team.ord].hp <= 0
+            godEyes[god.team].setDead(dead)
             var animTime = god.animTime
             if run.world.gameOver and
               (run.world.draw or god.team != run.world.winner):
                 animTime = min(animTime, clipDuration(model, clip))
-            drawCharacter(
-              scene, model, god.position, god.facing,
-              clip, animTime)
+            if count == worldCharacters.len:
+              worldCharacters.add WorldCharacter()
+            worldCharacters[count].id = run.world.forts[god.team.ord].id
+            worldCharacters[count].living = not dead
+            worldCharacters[count].eyes = addr godEyes[god.team]
+            scene.prepareCharacter(
+              worldCharacters[count].pose,
+              model,
+              god.position,
+              god.facing,
+              clip,
+              animTime
+            )
+            inc count
+          worldCharacterCount = count
 
-        sunDepthPasses(window.size):
-          drawTerrainSunDepth()
+        profileBlock "Shadow pass":
+          sunDepthPasses(window.size):
+            drawTerrainSunDepth()
+            for tower in run.world.buildings:
+              if tower.hp <= 0:
+                continue
+              towerPacks[tower.team].drawPropSunDepth(
+                buildingPropName(tower),
+                renderPoint(tower.position),
+                renderFacing(tower.facing),
+                buildingScale(tower)
+              )
+            scene.sunDepthPass = true
+            profileBlock "Shadow characters":
+              drawWorldCharacters(scene, worldCharacters, worldCharacterCount)
+            scene.sunDepthPass = false
+        profileBlock "Main pass":
+          when not defined(emscripten):
+            glEnable(GL_MULTISAMPLE)
+          glClearColor(0.05, 0.06, 0.09, 1.0)
+          glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
+          scene.toon.drawBackground()
+          updateTerrainVision()
+          if showTiles and (terrainEdgeWorld != run.world or
+              terrainEdgeRevision != run.world.navigationRevision):
+            updateTerrainEdges(navigationOpen)
+            terrainEdgeWorld = run.world
+            terrainEdgeRevision = run.world.navigationRevision
+          drawTerrain(viewProjection, showTiles)
           for tower in run.world.buildings:
-            if tower.hp <= 0:
+            if tower.hp <= 0 or not visibleInView(tower.team, tower.position):
               continue
-            towerPacks[tower.team].drawPropSunDepth(
+            towerPacks[tower.team].drawProp(
               buildingPropName(tower),
               renderPoint(tower.position),
               renderFacing(tower.facing),
-              buildingScale(tower)
+              buildingScale(tower),
+              viewProjection
             )
-          scene.sunDepthPass = true
-          drawWorldCharacters()
-          scene.sunDepthPass = false
-        when not defined(emscripten):
-          glEnable(GL_MULTISAMPLE)
-        glClearColor(0.05, 0.06, 0.09, 1.0)
-        glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
-        scene.toon.drawBackground()
-        updateTerrainVision()
-        if showTiles and (terrainEdgeWorld != run.world or
-            terrainEdgeRevision != run.world.navigationRevision):
-          updateTerrainEdges(navigationOpen)
-          terrainEdgeWorld = run.world
-          terrainEdgeRevision = run.world.navigationRevision
-        drawTerrain(viewProjection, showTiles)
-        for tower in run.world.buildings:
-          if tower.hp <= 0 or not visibleInView(tower.team, tower.position):
-            continue
-          towerPacks[tower.team].drawProp(
-            buildingPropName(tower),
-            renderPoint(tower.position),
-            renderFacing(tower.facing),
-            buildingScale(tower),
-            viewProjection
+
+          if showOccludedCharacters:
+            profileBlock "Character outline pass":
+              occlusionOutline.beginMask(window.size)
+              beginCharacters(scene, window, view, projection, cameraEye)
+              drawWorldCharacters(
+                scene,
+                worldCharacters,
+                worldCharacterCount,
+                livingOnly = true
+              )
+              finishCharacters(scene)
+              # Only opaque scenery is in the window depth buffer here.
+              occlusionOutline.drawOutline(OccludedOutlineColor)
+
+          profileBlock "Main characters":
+            beginCharacters(scene, window, view, projection, cameraEye)
+            drawWorldCharacters(scene, worldCharacters, worldCharacterCount)
+            finishCharacters(scene)
+
+        # The arena's lakes, each with its own reflection. The water mirrors the sky,
+        # terrain, towers and characters; particles, spells and markers stay out of it.
+        if lakes.len > 0:
+          captureScene(window.size)
+        for lake in lakes:
+          if lake.layer notin 0 ..< waterLayerRanges.len or
+            waterLayerRanges[lake.layer].len == 0:
+              continue
+          let reflected = lake.params.reflecting()
+          if reflected:
+            profileBlock "Water mirror pass":
+              let
+                mirrored = reflectedCamera(
+                  cameraEye,
+                  view,
+                  projection,
+                  waterLayerSurfaces[lake.layer] + lake.params.lift
+                )
+                mirroredViewProjection = mirrored.projection * mirrored.view
+              beginReflection(window.size)
+              drawWaterSky(
+                mirroredViewProjection,
+                mirrored.eye,
+                scene.toon.skyColor,
+                scene.toon.horizonColor,
+                scene.toon.groundColor
+              )
+              drawTerrain(mirroredViewProjection, false)
+              for tower in run.world.buildings:
+                if tower.hp <= 0 or
+                  not visibleInView(tower.team, tower.position):
+                    continue
+                towerPacks[tower.team].drawProp(
+                  buildingPropName(tower),
+                  renderPoint(tower.position),
+                  renderFacing(tower.facing),
+                  buildingScale(tower),
+                  mirroredViewProjection
+                )
+              profileBlock "Water mirror characters":
+                beginCharacters(
+                  scene,
+                  window,
+                  mirrored.view,
+                  mirrored.projection,
+                  mirrored.eye
+                )
+                drawWorldCharacters(scene, worldCharacters, worldCharacterCount)
+                finishCharacters(scene)
+              glBindFramebuffer(GL_FRAMEBUFFER, 0)
+              glViewport(0, 0, window.size.x, window.size.y)
+          drawWaterBody(
+            lake,
+            viewProjection,
+            cameraEye,
+            window.size,
+            sunDirection,
+            scene.toon.highlightColor,
+            ivec4(0, 0, window.size.x, window.size.y),
+            reflected
           )
-
-        if showOccludedCharacters:
-          occlusionOutline.beginMask(window.size)
-          beginCharacters(scene, window, view, projection, cameraEye)
-          drawWorldCharacters(livingOnly = true)
-          finishCharacters(scene)
-          # Only opaque scenery is in the window depth buffer at this point.
-          occlusionOutline.drawOutline(OccludedOutlineColor)
-
-        beginCharacters(scene, window, view, projection, cameraEye)
-        drawWorldCharacters()
-        finishCharacters(scene)
-
-        let waterTime =
-          (run.world.tick.float32 + renderAlpha) / TickRate.float32
-        drawWater(
-          viewProjection,
-          cameraEye,
-          offset = vec2(waterTime * 0.25'f, 0),
-          opacity = 0.5'f,
-          highlightOpacity = 0.0'f
-        )
-        particles.drawParticles(
-          viewProjection,
-          barCameraRight,
-          barCameraUp,
-          cameraForward
-        )
-        spellEffects.drawSpells(
-          run.world, viewProjection, animationAlpha, viewMode
-        )
-        clickMarks.drawClickMarks(viewProjection)
+        profileBlock "World effects":
+          particles.drawParticles(
+            viewProjection,
+            barCameraRight,
+            barCameraUp,
+            cameraForward
+          )
+          spellEffects.drawSpells(
+            run.world, viewProjection, animationAlpha, viewMode
+          )
+          clickMarks.drawClickMarks(viewProjection)
         worldShapes.clear()
         for hero in run.world.heroes:
           if hero.portalEnds <= run.world.tick or hero.hp <= 0:
@@ -2260,14 +2361,14 @@ proc runGraphics*() =
                 rgbx(210, 72, 64, 255)
               else:
                 rgbx(64, 120, 220, 255)
-            var points: seq[Vec3]
+            pathPoints.setLen(0)
             let now = unitRenderPoint(hero.id, hero.position)
-            points.add vec3(now.x, now.y + 0.2'f32, now.z)
+            pathPoints.add vec3(now.x, now.y + 0.2'f, now.z)
             for i in hero.movePathIndex ..< hero.movePath.len:
               let p = renderPoint(hero.movePath[i])
-              points.add vec3(p.x, p.y + 0.2'f32, p.z)
-            if points.len >= 2:
-              worldShapes.addPolyline(points, color)
+              pathPoints.add vec3(p.x, p.y + 0.2'f, p.z)
+            if pathPoints.len >= 2:
+              worldShapes.addPolyline(pathPoints, color)
         worldShapes.draw(viewProjection)
         if not cleanScreenshot:
           drawWorldUnitBars(
@@ -2305,7 +2406,7 @@ proc runGraphics*() =
           )
           sk.endUi()
           drawStatsOverlay(sk, window)
-      when defined(takeScreenshot):
+      when defined(takeScreenshot) and ActiveTracePath.len == 0:
         captureScreenshot(
           window,
           screenshotFrame,

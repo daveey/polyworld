@@ -290,10 +290,14 @@ proc drawIcon(
 proc clicked(
     window: Window,
     sk: Silky,
-    panel: GameUiPanel
+    panel: GameUiPanel,
+    keyboardAliases: bool
 ): bool =
   ## Returns whether this frame pressed a transport button.
-  window.mousePressed(MouseLeft) and panel.contains(sk.mousePos)
+  let pressed =
+    if keyboardAliases: window.mousePressed(MouseLeft)
+    else: window.buttonPressed[MouseLeft]
+  pressed and panel.contains(sk.mousePos)
 
 proc drawTransport*(
     player: var Player,
@@ -302,7 +306,8 @@ proc drawTransport*(
     panel: GameUiPanel,
     actionCam: var ActionCam,
     followSelection: var bool,
-    statsToggle: ptr bool = nil
+    statsToggle: ptr bool = nil,
+    keyboardAliases = true
 ) =
   ## Draws the shared play/replay bar and applies clicks.
   sk.drawRibbon(panel)
@@ -322,21 +327,21 @@ proc drawTransport*(
   sk.drawIcon(stepFwdBtn, "next_frame")
   sk.drawIcon(skipEnd, "skip_to_end")
   sk.drawIcon(loopBtn, "loop", player.repeating)
-  if window.clicked(sk, skipStart):
+  if window.clicked(sk, skipStart, keyboardAliases):
     player.skipToStart()
-  elif window.clicked(sk, stepBackBtn):
+  elif window.clicked(sk, stepBackBtn, keyboardAliases):
     player.stepBack()
-  elif window.clicked(sk, playBtn):
+  elif window.clicked(sk, playBtn, keyboardAliases):
     player.togglePlay()
-  elif window.clicked(sk, stepFwdBtn):
+  elif window.clicked(sk, stepFwdBtn, keyboardAliases):
     player.stepForward()
-  elif window.clicked(sk, skipEnd):
+  elif window.clicked(sk, skipEnd, keyboardAliases):
     player.skipToEnd()
-  elif window.clicked(sk, loopBtn):
+  elif window.clicked(sk, loopBtn, keyboardAliases):
     player.repeating = not player.repeating
   for i, button in speeds:
     sk.drawIcon(button, SpeedIcons[i], player.speedIndex == i)
-    if window.clicked(sk, button):
+    if window.clicked(sk, button, keyboardAliases):
       player.setSpeed(i)
   let
     scrubOrigin = slots.scrub.origin
@@ -356,8 +361,11 @@ proc drawTransport*(
     endTick.float32,
     rgbx(151, 82, 199, 255)
   )
+  let scrubDown =
+    if keyboardAliases: window.mouseDown(MouseLeft)
+    else: window.buttonDown[MouseLeft]
   if scrubSize.x > 0 and
-    window.mouseDown(MouseLeft) and
+    scrubDown and
     slots.scrubHit.contains(sk.mousePos):
       let ratio = clamp(
         (sk.mousePos.x - scrubOrigin.x) / scrubSize.x,
@@ -369,14 +377,14 @@ proc drawTransport*(
     let automatic = actionCam.subjectMode and actionCam.enabled and
       (actionCam.director.overview or actionCam.director.finalResults)
     sk.drawIcon(slots.stats, "stats", statsToggle[] or automatic)
-    if window.clicked(sk, slots.stats):
+    if window.clicked(sk, slots.stats, keyboardAliases):
       if automatic and not statsToggle[]:
         actionCam.director.dismissOverview()
       else:
         statsToggle[] = not statsToggle[]
   let actionBtn = slots.camera
   sk.drawIcon(actionBtn, "action_cam", actionCam.enabled)
-  if window.clicked(sk, actionBtn):
+  if window.clicked(sk, actionBtn, keyboardAliases):
     actionCam.toggle(followSelection)
   hudScratch.setLen(0)
   hudScratch.add "Tick "

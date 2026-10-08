@@ -202,7 +202,7 @@ const
       damagePerLevel: 12,
       baseMovePerTick: 5_610,
       movePerLevel: 174,
-      attackRange: 330_000,
+      attackRange: 360_000,
       attackTicks: 30,
       abilities: [
         DragonSight, VerdantArrow, RicochetDisc, StormEagle
@@ -230,7 +230,7 @@ const
       name: "Druid Warden",
       role: "Durable support",
       attackStyle: MagicAttack,
-      baseHitPoints: 306,
+      baseHitPoints: 350,
       hitPointsPerLevel: 20,
       baseMana: 167,
       maxLevelMana: 427,
@@ -284,7 +284,7 @@ const
       name: "Crossbowman",
       role: "Heavy ranged carry",
       attackStyle: RangedAttack,
-      baseHitPoints: 232,
+      baseHitPoints: 225,
       hitPointsPerLevel: 96,
       healthGrowth: DelayedGrowth,
       baseMana: 49,
@@ -293,7 +293,7 @@ const
       damagePerLevel: 12,
       baseMovePerTick: 5_390,
       movePerLevel: 168,
-      attackRange: 390_000,
+      attackRange: 360_000,
       attackTicks: 30,
       abilities: [
         FinalMeasure, SiegeScarab, LodestoneSurge, ClockworkCharge
@@ -321,7 +321,7 @@ const
       name: "Warlock",
       role: "Utility summoner",
       attackStyle: MagicAttack,
-      baseHitPoints: 294,
+      baseHitPoints: 338,
       hitPointsPerLevel: 20,
       baseMana: 194,
       maxLevelMana: 504,
@@ -364,7 +364,8 @@ const
       slot: PrimaryAbility,
       name: "Firebrand Sword", icon: "firebrand_sword",
       kind: Strike, cooldownTicks: 96, manaCost: 20,
-      range: 90_000, damage: 41
+      range: 120_000, damage: 37,
+      control: StunControl, controlTicks: TickRate div 2
     ),
     InfernoAegis: AbilitySpec(
       slot: SecondaryAbility,
@@ -375,7 +376,7 @@ const
       slot: UltimateAbility,
       name: "Blazing Blade", icon: "blazing_blade",
       kind: Strike, cooldownTicks: 480, manaCost: 70,
-      range: 110_000, damage: 204,
+      range: 180_000, damage: 204,
       control: StunControl, controlTicks: TickRate
     ),
     DragonSight: AbilitySpec(
@@ -436,13 +437,13 @@ const
     ),
     HealingBloom: AbilitySpec(
       slot: PrimaryAbility,
-      name: "Healing Bloom", icon: "healing_bloom",
-      kind: Heal, cooldownTicks: 168, manaCost: 30, heal: 76, damage: 37
+      name: "Thorn Bloom", icon: "healing_bloom",
+      kind: Heal, cooldownTicks: 168, manaCost: 30, heal: 150, damage: 37
     ),
     KindredWisps: AbilitySpec(
       slot: SecondaryAbility,
-      name: "Kindred Wisps", icon: "kindred_wisps",
-      kind: Heal, cooldownTicks: 288, manaCost: 45, heal: 80, damage: 88
+      name: "Kindred Renewal", icon: "kindred_wisps",
+      kind: Heal, cooldownTicks: 288, manaCost: 45, heal: 160, damage: 88
     ),
     GolemSeed: AbilitySpec(
       slot: UltimateAbility,
@@ -466,7 +467,8 @@ const
       slot: SecondaryAbility,
       name: "Gale Slash", icon: "gale_slash",
       kind: Strike, cooldownTicks: 168, manaCost: 28,
-      range: 120_000, damage: 67
+      range: 180_000, damage: 60,
+      control: RootControl, controlTicks: TickRate div 2
     ),
     ShadowComet: AbilitySpec(
       slot: UltimateAbility,
@@ -483,7 +485,8 @@ const
       slot: PrimaryAbility,
       name: "Afterlight Sickle", icon: "afterlight_sickle",
       kind: Strike, cooldownTicks: 108, manaCost: 18,
-      range: 90_000, damage: 41
+      range: 120_000, damage: 37,
+      control: RootControl, controlTicks: TickRate div 2
     ),
     WitheringIdol: AbilitySpec(
       slot: SecondaryAbility,
@@ -501,29 +504,29 @@ const
       slot: PassiveAbility,
       name: "Final Measure", icon: "final_measure",
       kind: Strike, cooldownTicks: 216,
-      range: 420_000, damage: 10,
-      damageRanks: [10, 21, 36, 52]
+      range: 420_000, damage: 9,
+      damageRanks: [9, 19, 36, 52]
     ),
     SiegeScarab: AbilitySpec(
       slot: PrimaryAbility,
       name: "Siege Scarab", icon: "siege_scarab",
       kind: Strike, cooldownTicks: 120, manaCost: 22,
-      range: 400_000, damage: 26,
-      damageRanks: [26, 52, 91, 130]
+      range: 400_000, damage: 23,
+      damageRanks: [23, 47, 91, 130]
     ),
     LodestoneSurge: AbilitySpec(
       slot: SecondaryAbility,
       name: "Lodestone Surge", icon: "lodestone_surge",
       kind: Strike, cooldownTicks: 240, manaCost: 40,
-      range: 360_000, damage: 35,
-      damageRanks: [35, 70, 122, 175]
+      range: 360_000, damage: 31,
+      damageRanks: [31, 63, 122, 175]
     ),
     ClockworkCharge: AbilitySpec(
       slot: UltimateAbility,
       name: "Clockwork Charge", icon: "clockwork_charge",
       kind: Strike, cooldownTicks: 552, manaCost: 70,
-      range: 450_000, damage: 118,
-      damageRanks: [118, 267, 470, 0]
+      range: 450_000, damage: 106,
+      damageRanks: [106, 240, 470, 0]
     ),
     FrostSigil: AbilitySpec(
       slot: PassiveAbility,
@@ -541,8 +544,8 @@ const
       slot: SecondaryAbility,
       name: "Bone Marionette", icon: "bone_marionette",
       kind: Strike, cooldownTicks: 216, manaCost: 48,
-      range: 300_000, damage: 54,
-      control: RootControl, controlTicks: 25
+      range: 300_000, damage: 49,
+      control: RootControl, controlTicks: 36
     ),
     BoundVoid: AbilitySpec(
       slot: UltimateAbility,
@@ -557,15 +560,15 @@ const
     ),
     MothHex: AbilitySpec(
       slot: PrimaryAbility,
-      name: "Moth Hex", icon: "moth_hex",
-      kind: Strike, cooldownTicks: 96, manaCost: 24,
-      range: 280_000, damage: 35
+      name: "Mending Hex", icon: "moth_hex",
+      kind: Heal, cooldownTicks: 96, manaCost: 24,
+      range: 360_000, damage: 35, heal: 220
     ),
     DreadTotem: AbilitySpec(
       slot: SecondaryAbility,
-      name: "Dread Totem", icon: "dread_totem",
-      kind: Strike, cooldownTicks: 216, manaCost: 42,
-      range: 240_000, damage: 84,
+      name: "Dread Pact", icon: "dread_totem",
+      kind: Heal, cooldownTicks: 216, manaCost: 42,
+      range: 360_000, damage: 84, heal: 240,
       control: SilenceControl, controlTicks: 2 * TickRate
     ),
     VoidPortal: AbilitySpec(
@@ -589,7 +592,8 @@ const
       slot: SecondaryAbility,
       name: "Winged Boot", icon: "winged_boot",
       kind: Strike, cooldownTicks: 192, manaCost: 12,
-      range: 150_000, damage: 39
+      range: 210_000, damage: 35,
+      control: RootControl, controlTicks: TickRate * 3 div 4
     ),
     VolcanicEruption: AbilitySpec(
       slot: UltimateAbility,
@@ -749,6 +753,14 @@ proc abilitySpec*(ability: Ability): AbilitySpec =
   else:
     discard
   case ability
+  of FirebrandSword, AfterlightSickle:
+    result.casting = MeleeCast
+    result.projectileSpeed = 0
+  of MothHex, DreadTotem:
+    result.casting = ProjectileCast
+    result.projectileSpeed = 45_000
+    if ability == DreadTotem:
+      result.castTicks = 18
   of BlazingBlade, GaleSlash:
     result.casting = AreaCast
     result.fromCaster = true
@@ -790,12 +802,12 @@ proc abilitySpec*(ability: Ability): AbilitySpec =
     result.area.radius = if ability == ArcaneMeteor: 180_000 else: 120_000
     result.castTicks =
       case ability
-      of ArcaneMeteor: 54
-      of MeteorStrike: 36
-      else: 48
+      of ArcaneMeteor: 36
+      of MeteorStrike: 24
+      else: 24
   of HealingBloom, KindredWisps:
     result.casting = AreaCast
-    result.range = 240_000
+    result.range = 360_000
     result.area.radius = if ability == HealingBloom: 120_000 else: 150_000
     result.effect =
       if ability == HealingBloom:
@@ -804,7 +816,7 @@ proc abilitySpec*(ability: Ability): AbilitySpec =
         SphereShape
     result.castTicks = 12
   of RicochetDisc, GolemSeed, WitheringIdol, BoneMarionette,
-    BoundVoid, DreadTotem, VoidPortal:
+    BoundVoid, VoidPortal:
       result.casting = AreaCast
       result.area.radius = 120_000
       result.castTicks = 24
@@ -821,11 +833,6 @@ proc abilitySpec*(ability: Ability): AbilitySpec =
         result.effect = TorusShape
         result.area.shape = RingFootprint
         result.area.innerRadius = 40_000
-      of DreadTotem:
-        result.effect = BoxShape
-        result.area.shape = LineFootprint
-        result.area.width = 75_000
-        result.castTicks = 18
       of VoidPortal:
         result.effect = HelixShape
         result.area.shape = RingFootprint
@@ -882,9 +889,15 @@ proc abilitySpec*(ability: Ability, rank: int32): AbilitySpec =
     result.charges = 0
     result.controlTicks = 0
 
+const AbilityIconKeys = block:
+  var keys: array[Ability, string]
+  for ability in Ability:
+    keys[ability] = "ability_" & ability.abilitySpec.icon
+  keys
+
 proc abilityIconKey*(ability: Ability): string =
-  ## Returns the atlas name packed from one ability art file.
-  "ability_" & ability.abilitySpec.icon
+  ## Returns the atlas name without constructing it during drawing.
+  AbilityIconKeys[ability]
 
 proc itemSpec*(item: Item): ItemSpec =
   ## Returns the immutable shop tuning for one item.
@@ -897,11 +910,16 @@ proc itemFromId*(id: int32): Item =
   else:
     Item(id)
 
+const ItemIconKeys = block:
+  var keys: array[Item, string]
+  for item in Item:
+    if item != NoItem:
+      keys[item] = "item_" & $item
+  keys
+
 proc itemIconKey*(item: Item): string =
-  ## Returns the atlas name packed from one item art file.
-  if item == NoItem:
-    return ""
-  "item_" & $item
+  ## Returns the atlas name without constructing it during drawing.
+  ItemIconKeys[item]
 
 proc heroMaxHp*(class: HeroClass, level: int): int32 =
   ## Returns class hit points using its declared deterministic growth curve.

@@ -249,6 +249,7 @@ proc testParts() =
   for preset in manifest.presets:
     manifest.applyPreset(selection, preset)
     nodes.applySelection(manifest, selection)
+  manifest.selectPart(selection, "Headgear", "None")
   manifest.selectPart(selection, "Ears", "Elf")
   nodes.applySelection(manifest, selection)
   doAssert nodes["Ears_Elf_Left"].visible
@@ -514,11 +515,11 @@ proc testClothing() =
       if "/gota_" notin item.id:
         inc baseCount
     if category.key == "Chest":
-      doAssert baseCount == 9
+      doAssert baseCount == 10
     if category.key == "Leg":
-      doAssert baseCount == 5
+      doAssert baseCount == 6
     if category.key == "Foot":
-      doAssert baseCount == 5
+      doAssert baseCount == 6
   for category in manifest.categories:
     if category.key != "Leg":
       continue
@@ -674,7 +675,7 @@ proc testGarments() =
               doAssert ids[j].int < node.skin.joints.len
           doAssert abs(total - 1) < 0.00001
   doAssert count == 9
-  doAssert clothes.len == 6
+  doAssert clothes.len == 7
   var preset = Preset()
   for i, cloth in clothes:
     preset.parts.add PresetPart(
@@ -709,6 +710,78 @@ proc testGarments() =
   except ChargenError:
     rejected = true
   doAssert rejected
+
+proc testAstronaut() =
+  ## Checks white dye surfaces, fixed details, rigging, and helmet removal.
+  let
+    manifest = readManifest(AssetDir)
+    model = readCharacter(AssetDir, manifest)
+    nodes = partNodes(model.root)
+    player = newClipPlayer(model.root)
+  var
+    preset: Preset
+    found = false
+    fabrics: seq[Material]
+    fixed: seq[(Material, Color)]
+    clothes = initClothMaterials(nodes, manifest)
+    selection = manifest.defaultSelection()
+  for candidate in manifest.presets:
+    if candidate.name == "Astronaut":
+      preset = candidate
+      found = true
+  doAssert found
+  for category in manifest.categories:
+    for item in category.items:
+      if not item.id.contains("astronaut_"):
+        continue
+      for shade in item.clothShades:
+        let material = nodes[shade.node].mesh.primitives[shade.primitive].material
+        doAssert material.baseColorFactor == color(1, 1, 1, 1)
+        fabrics.add material
+      for name in item.nodes:
+        let node = nodes[name]
+        doAssert node.skin != nil
+        for primitive in node.mesh.primitives:
+          if primitive.material notin fabrics:
+            fixed.add (primitive.material, primitive.material.baseColorFactor)
+          for i, weights in primitive.jointWeights:
+            var total = 0.0'f
+            for j in 0 ..< 4:
+              doAssert weights[j] >= 0
+              total += weights[j]
+              if weights[j] > 0 and category.key == "Headgear":
+                let joint = primitive.jointIds[i][j].int
+                doAssert node.skin.joints[joint].name == "Head"
+            doAssert abs(total - 1) < 0.00001
+  doAssert fabrics.len == 3
+  manifest.applyPreset(selection, preset)
+  nodes.applySelection(manifest, selection)
+  doAssert not nodes["Head"].visible
+  doAssert not nodes["Hand.Left"].visible
+  doAssert not nodes["Foot.Left"].visible
+  for tint in [[0'f, 0'f, 0'f], [1'f, 0.25'f, 0'f], [0'f, 0.4'f, 1'f]]:
+    var colored = preset
+    for part in colored.parts.mitems:
+      if part.category in ["Headgear", "Chest", "Leg"]:
+        part.rgb = @[tint[0], tint[1], tint[2]]
+    clothes.applyClothPreset(colored)
+    for material in fabrics:
+      doAssert material.baseColorFactor == color(tint[0], tint[1], tint[2], 1)
+    for (material, original) in fixed:
+      doAssert material.baseColorFactor == original
+  clothes.applyClothPreset(preset)
+  for material in fabrics:
+    doAssert material.baseColorFactor == color(1, 1, 1, 1)
+  for clip in ["Idle_Loop", "Walk_Loop", "Crouch_Fwd_Loop"]:
+    player.play(clip, 0)
+    player.seek(0.35)
+    for name, node in nodes:
+      if name.startsWith("Astronaut_"):
+        doAssert node.visible
+  manifest.selectPart(selection, "Headgear", "None")
+  nodes.applySelection(manifest, selection)
+  doAssert nodes["Head"].visible
+  doAssert not nodes["Astronaut_Helmet"].visible
 
 proc testGnomes() =
   ## Checks shared features, independent colors, and exact lineup pose copying.
@@ -1201,6 +1274,7 @@ else:
   testBelts()
   testHats()
   testGarments()
+  testAstronaut()
   testGnomes()
   testGota()
   testGods()

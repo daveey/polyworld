@@ -390,7 +390,8 @@ proc prepareCharacter*(
     model.setCharacterPose(clip, animTime)
     pose.toon.prepareToonPose(
       model.file.root,
-      model.characterTransform(position, facing, sizeFactor)
+      model.characterTransform(position, facing, sizeFactor),
+      model.unlitParts
     )
 
 proc drawCharacter*(
@@ -409,8 +410,6 @@ proc drawCharacter*(
     scene.toon.drawSunDepth(model.file.root, pose.toon.addr)
   else:
     scene.toon.unlitNodes.clear()
-    for name in model.unlitParts:
-      scene.toon.unlitNodes.incl name
     scene.toon.tint = tint
     scene.toon.draw(model.file.root, pose.toon.addr)
 

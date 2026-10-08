@@ -1,0 +1,106 @@
+{
+  "date": "2026-10-06",
+  "version": "2026.10.6.1",
+  "url": "https://softmax.com/gods-of-the-arena",
+  "coworld_id": "cow_162aa34f-f447-4c5d-8db3-480ec83e98f4",
+  "canonical": true,
+  "source_commit": "5287c437fe5e4ae7a1fc56df3fa40f6821a7d5fd",
+  "asset_commit": "f78d18d8eeb899ed3aa7a304944be448aec34dcf",
+  "replay_version": 68,
+  "buff_commit": "0db550d",
+  "buff_url": "https://metta-ai.github.io/polyworld-buff/GOTA/heros/#hero-progression",
+  "changes": [
+    "Reduce melee and ranged lane-creep basic damage from 42 to 28.",
+    "Reduce full-wave sustained DPS from 252 to 168.",
+    "Require exact gameplay replay version 68 and regenerate demo replays.",
+    "Update hosted documentation and Buff creep statistics and benchmarks."
+  ],
+  "checks": [
+    "Nim check, focused creep combat checks and full local CI passed.",
+    "Two independent demo recordings were byte-identical and playback verified.",
+    "GitHub CI passed on Linux, Windows and macOS.",
+    "All ten local certification checks, hosted certification and five hosted smoke games passed.",
+    "All 24 requested main-ladder games completed with mixed teams and 240 verified integer scores.",
+    "A completed round replay reproduced all simulation hashes on native and WASM.",
+    "Production JavaScript, WASM and data bytes exactly match the built artifacts.",
+    "The Buff benchmark rendered at 168 DPS and the published reference matches local bytes."
+  ],
+  "ci_url": "https://github.com/Metta-AI/polyworld/actions/runs/37512664633",
+  "league_settings_preserved": [
+    {
+      "id": "league_080e6abb-597b-45e3-ab21-63321905fdd6",
+      "name": "NeuralHub at Diablo Valley College",
+      "unchanged_fields": [
+        "settings",
+        "commissioner_config",
+        "rounds_paused_at",
+        "disabled_at",
+        "filler_policy_version_ids"
+      ]
+    },
+    {
+      "id": "league_3c60897b-25cf-4b37-9d1a-8554c1198f28",
+      "name": "Gods of the Arena",
+      "unchanged_fields": [
+        "settings",
+        "commissioner_config",
+        "rounds_paused_at",
+        "disabled_at",
+        "filler_policy_version_ids"
+      ]
+    }
+  ],
+  "verification_round": {
+    "round_id": "round_b759bcbe-0f6e-4536-9598-b139b31260e7",
+    "round_number": 1264,
+    "status": "completed",
+    "games": 24,
+    "completed_games": 24,
+    "failed_games": 0,
+    "failures": [],
+    "coworld_id": "cow_162aa34f-f447-4c5d-8db3-480ec83e98f4",
+    "version": "2026.10.6.1",
+    "integer_scores_verified": 240,
+    "scoring": "Emmett's Glory",
+    "mixed_team_games_verified": 24,
+    "outcomes": {
+      "time_limit": 23,
+      "RedTeam": 1
+    },
+    "replay_version": 68,
+    "watch_url": "https://softmax.com/gods-of-the-arena?e=73421cb1-9b12-4955-adf4-db3b998848a0",
+    "verified_at": "2026-10-06T18:48:02.366241+00:00"
+  },
+  "replay_verification": {
+    "ticks": 28909,
+    "native": true,
+    "wasm": true,
+    "sha256": "f9bd381eae6c8e5f1aea950f34c1be952360f28ad31ac47b134df199cc11a2d2",
+    "episode_id": "688f5db0-0a2f-446d-882b-6a0382048ed9"
+  },
+  "browser_verification": {
+    "coworld_id": "cow_162aa34f-f447-4c5d-8db3-480ec83e98f4",
+    "episode_id": "688f5db0-0a2f-446d-882b-6a0382048ed9",
+    "rendered": true,
+    "end_tick": 28909,
+    "browser_errors": [],
+    "method": "Used deployed viewer controls to disable looping, rewind and seek to the final tick. Results rendered without a replay error.",
+    "verified_at": "2026-10-06T18:47:16.023788+00:00"
+  },
+  "viewer_assets": {
+    "gota.wasm": {
+      "bytes": 6093514,
+      "sha256": "117386be09412f5744c57db95993250d6441feff18f8c0be5c0fb51c6026e085"
+    },
+    "gota.data": {
+      "bytes": 33451159,
+      "sha256": "6a1d07f38179cd0ce3498dbaefb725c634d74a7705426ded9a119a83dd98e3f0"
+    },
+    "gota.js": {
+      "bytes": 347874,
+      "sha256": "49e30ad11db5ab1f99d07a4b3413c8b4d17e75974051d9a287d1235f727194a2"
+    }
+  },
+  "manifest_hash": "sha256:3680c5728297fdb899fc76d8cb4e019135f0d35da86359c0d8be99f12def0227",
+  "verified_at": "2026-10-06T18:48:16.914167+00:00"
+}

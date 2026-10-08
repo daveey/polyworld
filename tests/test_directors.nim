@@ -419,3 +419,23 @@ block:
     doAssert slots.panel.inside(viewport.size)
     doAssert slots.maxScroll == 0
     doAssert slots.panel.size.x * statsScale(scale) <= width
+
+when defined(nimTypeNames):
+  echo "Testing director observations reuse frame storage"
+  block:
+    var
+      director = initDirector()
+      subjects = @[subject(1), subject(2, 3)]
+    for i in 0 ..< 20:
+      subjects[0].hp = if i mod 2 == 0: 80 else: 100
+      director.observe(subjects)
+      director.refresh(subjects)
+      director.step(0.1)
+    let before = getMemCounters()
+    for i in 0 ..< 100:
+      subjects[0].hp = if i mod 2 == 0: 80 else: 100
+      director.observe(subjects)
+      director.refresh(subjects)
+      director.step(0.1)
+    let after = getMemCounters()
+    doAssert after[0] == before[0], "Director frames must reuse storage."

@@ -11,6 +11,7 @@ import test_gota_abilities
 import determinism
 import
   test_cli,
+  test_crewrift,
   test_annotations,
   test_policy_hosts,
   test_tapes,

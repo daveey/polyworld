@@ -99,8 +99,9 @@ proc sampleSunShadow(shadowPos: Vec3): float32 =
   ## quantized sun steps. The result already folds in the shadow strength.
   result = 1.0'f
   if shadowsOn > 0.5'f:
-    let lit = mix(
-      sunLitFraction0(shadowPos), sunLitFraction1(shadowPos), shadowStep)
+    var lit = sunLitFraction0(shadowPos)
+    if shadowStep > 0:
+      lit = mix(lit, sunLitFraction1(shadowPos), shadowStep)
     result = 1.0'f - (1.0'f - lit) * shadowStrength
 
 proc ambientVisibility(position: Vec3): float32 =
@@ -505,6 +506,15 @@ proc terrainFrag(
   fragColor = vec4(color.x, color.y, color.z, 1.0)
 
 ## Water shader: transparent blue with a Blinn-Phong specular highlight.
+
+var waterShaderOverride*: tuple[vertex, fragment: string]
+  ## A game's own water shader (GLSL vertex and fragment sources), used instead of the
+  ## default when set before initTerrain (polyworld/waters sets it). It must read vertPos
+  ## and may read normal; drawWater still sets mvp, cameraPos and the visibility uniforms.
+
+var waterPremultipliedAlpha* = false
+  ## Whether the water shader outputs premultiplied colour, so light it adds (a reflected
+  ## sun) can exceed what straight alpha blending would allow.
 
 var
   cameraPos: Uniform[Vec3]
@@ -1980,6 +1990,11 @@ var
   autumnTrees* = false    # leafy trees may also wear red and yellow
   seed* = 1988            # seeds the per-tile tree rng in bakeTreeTiles
   layerVertexRanges*: seq[Slice[int]]
+  waterLayerRanges*: seq[Slice[int]]
+    ## Per layer, its vertices in the water mesh (empty for land layers); pass one to
+    ## drawWater to draw that water alone.
+  waterLayerSurfaces*: seq[float32]
+    ## Per layer, the height of its water's surface (its highest top; 0 for land layers).
     ## Filled by bakeTerrain: which baked vertices belong to which layer, so
     ## callers can draw a subset without re-emitting anything.
 
@@ -3474,11 +3489,13 @@ proc emitWaterLayer(layer: QuadLayer) =
       waterMesh.add normal.y
       waterMesh.add normal.z
   let w = layer.width
+  var surface = float32.low
   for z in 0 ..< layer.depth:
     for x in 0 ..< w:
       let t = layer.tiles[z * w + x]
       if not t.exists:
         continue
+      surface = max(surface, t.tops.unpack[0])
       let
         x0 = (layer.originX + x).float32 - HalfGrid
         x1 = x0 + 1
@@ -3552,6 +3569,7 @@ proc emitWaterLayer(layer: QuadLayer) =
           vec3(x0, bottom, z0),
           vec3(0, 0, -1)
         )
+  waterLayerSurfaces[^1] = if surface == float32.low: 0'f32 else: surface
 
 ## Public API
 
@@ -3732,10 +3750,14 @@ proc initTerrain*(
   glBindTexture(GL_TEXTURE_2D, 0)
   showAllTerrain()
 
-  waterProgram = compileProgram(
-    toShader(waterVert, OpenGlShaderTarget, shaderVertex),
-    toShader(waterFrag, OpenGlShaderTarget, shaderFragment)
-  )
+  waterProgram =
+    if waterShaderOverride.vertex.len > 0:
+      compileProgram(waterShaderOverride.vertex, waterShaderOverride.fragment)
+    else:
+      compileProgram(
+        toShader(waterVert, OpenGlShaderTarget, shaderVertex),
+        toShader(waterFrag, OpenGlShaderTarget, shaderFragment)
+      )
   waterMvpLocation = glGetUniformLocation(waterProgram, "mvp")
   waterEnv = envLocations(waterProgram)
   waterCameraLocation = glGetUniformLocation(waterProgram, "cameraPos")
@@ -3999,12 +4021,13 @@ proc initTerrain*(
       nil
     )
     let normalLocation = glGetAttribLocation(waterProgram, "normal")
-    doAssert normalLocation >= 0
-    glEnableVertexAttribArray(normalLocation.GLuint)
-    glVertexAttribPointer(
-      normalLocation.GLuint, 3, cGL_FLOAT, GL_FALSE, stride,
-      cast[pointer](3 * sizeof(float32))
-    )
+    # An override shader may ignore the normal, and GLSL drops unused attributes.
+    if normalLocation >= 0:
+      glEnableVertexAttribArray(normalLocation.GLuint)
+      glVertexAttribPointer(
+        normalLocation.GLuint, 3, cGL_FLOAT, GL_FALSE, stride,
+        cast[pointer](3 * sizeof(float32))
+      )
 
   # Sun depth pass vertex arrays: the same vertex buffers, but only the
   # position attribute (plus uv and layer for the tree cutout).
@@ -4118,6 +4141,8 @@ proc bakeTerrain*(
       offset = -1
   waterMesh.setLen(0)
   layerVertexRanges.setLen(0)
+  waterLayerRanges.setLen(0)
+  waterLayerSurfaces.setLen(0)
   doAssert groundRelief.len == 0 or
     (layers.len > 0 and groundRelief.len == layers[0].tiles.len)
   let floorY = -amplitude - 6
@@ -4126,12 +4151,16 @@ proc bakeTerrain*(
   rebuildTerrainData()
   profileBlock "terrain geometry":
     for i in 0 ..< layers.len:
-      let first = mesh.len div TerrainVertexSize
+      let
+        first = mesh.len div TerrainVertexSize
+        firstWater = waterMesh.len div 6
+      waterLayerSurfaces.add 0
       if layers[i].water:
         emitWaterLayer(layers[i])
       else:
         emitLayer(i, layers[i], floorY, blockers)
       layerVertexRanges.add first ..< (mesh.len div TerrainVertexSize)
+      waterLayerRanges.add firstWater ..< (waterMesh.len div 6)
   rebuildTreeMesh()
   if waterVertexBuffer != 0 and waterMesh.len > 0:
     glBindBuffer(GL_ARRAY_BUFFER, waterVertexBuffer)
@@ -4342,16 +4371,24 @@ proc drawTerrain*(viewProjection: Mat4, showEdges = false,
       drawTexturedBatch(batch, mvp)
   glUseProgram(0)
 
+proc waterShaderProgram*(): GLuint =
+  ## The compiled water program, for setting an override shader's own uniforms.
+  waterProgram
+
 proc drawWater*(
     viewProjection: Mat4,
     cameraEye: Vec3,
     offset = vec2(0),
     opacity = 0.55'f,
-    highlightOpacity = 0.45'f
+    highlightOpacity = 0.45'f,
+    firstVertex = 0,
+    vertexCount = -1
 ) =
   ## Draws water with a world-space offset and base plus highlight opacity.
-  ## Call after all opaque drawing.
-  if waterMesh.len == 0:
+  ## Call after all opaque drawing. The default range is all water; waterLayerRanges
+  ## gives one layer's.
+  let count = if vertexCount < 0: waterMesh.len div 6 - firstVertex else: vertexCount
+  if count <= 0:
     return
   glDisable(GL_CULL_FACE)
   glUseProgram(waterProgram)
@@ -4374,10 +4411,10 @@ proc drawWater*(
   glBindTexture(GL_TEXTURE_2D, visibilityTexture)
   glUniform1i(waterVisibilityTexLocation, 1)
   glEnable(GL_BLEND)
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+  glBlendFunc(if waterPremultipliedAlpha: GL_ONE else: GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
   glDepthMask(GL_FALSE)
   glBindVertexArray(waterVertexArray)
-  glDrawArrays(GL_TRIANGLES, 0, (waterMesh.len div 6).GLsizei)
+  glDrawArrays(GL_TRIANGLES, firstVertex.GLint, count.GLsizei)
   glBindVertexArray(0)
   glDepthMask(GL_TRUE)
   glDisable(GL_BLEND)

@@ -194,8 +194,8 @@ block:
   doAssert not game.decide().hasAction(ActionAttackTarget)
 
 echo "Testing explicit allied healing and led area casts"
-for class in [VanguardKnight, DruidWarden]:
-  for distance in [1'i32, 4'i32, 5'i32]:
+for class in [VanguardKnight, DruidWarden, Warlock]:
+  for distance in [1'i32, 4'i32, 5'i32, 6'i32, 7'i32]:
     let
       game = policyGame()
       hero = game.world.heroes[0]
@@ -213,16 +213,22 @@ for class in [VanguardKnight, DruidWarden]:
     ally.hp = ally.maxHp
     ally.state = Marching
     discard game.decide()
-    ally.hp -= 100
+    ally.hp -= class.heroAbility(SecondaryAbility).abilitySpec.heal div 2 + 1
     hero.charges[SecondaryAbility] = 1
     let
       actions = game.decide()
-      inRange = distance == 1 or (class == DruidWarden and distance == 4)
+      inRange = distance == 1 or
+        (class in [DruidWarden, Warlock] and distance <= 6)
     doAssert actions.hasAction(ActionCastTarget) == inRange
     if inRange:
       let spell = game.world.casts[^1]
       doAssert spell.ability == class.heroAbility(SecondaryAbility)
-      doAssert spell.spellContains(spell.ability.abilitySpec.area, ally.position)
+      if spell.ability.abilitySpec.casting == ProjectileCast:
+        doAssert spell.targetId == ally.id
+      else:
+        doAssert spell.spellContains(
+          spell.ability.abilitySpec.area, ally.position
+        )
 
 block:
   let

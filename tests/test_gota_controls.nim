@@ -42,10 +42,14 @@ proc step(game: Game, ticks = 1'i32) =
 echo "Testing crowd control damage, fixed durations, and hostile impacts"
 for team in Team:
   for (class, slot, effect, duration, damage) in [
+    (VanguardKnight, PrimaryAbility, StunControl, TickRate div 2, 37'i32),
     (VanguardKnight, UltimateAbility, StunControl, TickRate, 204'i32),
+    (DeathKnight, PrimaryAbility, RootControl, TickRate div 2, 37'i32),
+    (DemonHunter, SecondaryAbility, RootControl, TickRate div 2, 60'i32),
+    (Berserker, SecondaryAbility, RootControl, TickRate * 3 div 4, 35'i32),
     (Warlock, SecondaryAbility, SilenceControl, 2 * TickRate, 84'i32),
     (DruidWarden, UltimateAbility, RootControl, 2 * TickRate, 49'i32),
-    (Lich, SecondaryAbility, RootControl, 25'i32, 54'i32)
+    (Lich, SecondaryAbility, RootControl, TickRate * 3 div 2, 49'i32)
   ]:
     let
       game = controlGame(class, team)
@@ -71,7 +75,7 @@ for team in Team:
     doAssert world.applyCastTarget(caster.id, slot.ord.int32, enemy.id),
       $class & " " & $team & " " & $caster.lastActionError &
       " " & $caster.position & " " & $enemy.position
-    game.step(spec.castTicks)
+    game.step(max(spec.castTicks, world.casts[^1].impact - world.tick))
     doAssert enemy.hp == 10_000 - damage
     doAssert ally.hp == 10_000
     doAssert enemy.controls[effect].ends == world.tick + duration
@@ -89,7 +93,9 @@ for team in Team:
       doAssert found
 
 echo "Testing spell impacts also control creeps"
-for (class, slot) in [(VanguardKnight, UltimateAbility),
+for (class, slot) in [(VanguardKnight, PrimaryAbility),
+    (VanguardKnight, UltimateAbility), (DeathKnight, PrimaryAbility),
+    (DemonHunter, SecondaryAbility), (Berserker, SecondaryAbility),
     (Warlock, SecondaryAbility), (DruidWarden, UltimateAbility),
     (Lich, SecondaryAbility)]:
   let
@@ -108,7 +114,7 @@ for (class, slot) in [(VanguardKnight, UltimateAbility),
   world.footmen.add creep
   game.step()
   doAssert world.applyCastTarget(caster.id, slot.ord.int32, creep.id)
-  game.step(spec.castTicks)
+  game.step(max(spec.castTicks, world.casts[^1].impact - world.tick))
   doAssert world.footmen[0].hp == 10_000 - spec.damage
   doAssert world.footmen[0].controls[spec.control].ends ==
     world.tick + spec.controlTicks

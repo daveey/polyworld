@@ -48,7 +48,7 @@ block:
 
 echo "Testing spell ranks clamp to the declared slot limit"
 block:
-  doAssert FirebrandSword.abilitySpec(4).damage == 102
+  doAssert FirebrandSword.abilitySpec(4).damage == 92
   doAssert FirebrandSword.abilitySpec(int32.high) ==
     FirebrandSword.abilitySpec(4)
   doAssert BlazingBlade.abilitySpec(3).damage == 408
@@ -132,7 +132,7 @@ block:
       doAssert ability.abilitySpec(rank).damage >
         ability.abilitySpec(rank - 1).damage
   doAssert RicochetDisc.abilitySpec(1).damage == 35
-  doAssert LodestoneSurge.abilitySpec(1).damage == 35
+  doAssert LodestoneSurge.abilitySpec(1).damage == 31
   doAssert StormEagle.abilitySpec(1).damage < 120
   doAssert ClockworkCharge.abilitySpec(1).damage < 120
 

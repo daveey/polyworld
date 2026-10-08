@@ -40,7 +40,7 @@ type
   Director* = object
     subjects*: seq[Subject]
     events*: seq[DirectorEvent]
-    observed: Table[int32, Subject]
+    observed, nextObserved: Table[int32, Subject]
     visits: seq[Visit]
     time*, shotStarted*, lastCut*: float32
     lastMajor*, lastMeaningful*, sceneUntil*: float32
@@ -106,11 +106,11 @@ proc noteEvent*(director: var Director, subject: Subject,
 
 proc observe*(director: var Director, subjects: seq[Subject]) =
   ## Collects changes after each tick, independently of render frequency.
-  var observed: Table[int32, Subject]
+  director.nextObserved.clear()
   for subject in subjects:
     if subject.id == 0:
       continue
-    observed[subject.id] = subject
+    director.nextObserved[subject.id] = subject
     if subject.id notin director.observed:
       if director.observed.len > 0 and subject.alive:
         director.noteEvent(subject, ProgressEvent, 38)
@@ -141,13 +141,15 @@ proc observe*(director: var Director, subjects: seq[Subject]) =
       if subject.floor != old.floor:
         director.noteEvent(subject, FloorEvent, 48)
   for id, old in director.observed:
-    if id notin observed and old.alive and old.visible:
+    if id notin director.nextObserved and old.alive and old.visible:
       director.noteEvent(old, DeathEvent, max(old.combatScore + 25, 90), 2)
-  director.observed = move(observed)
+  swap(director.observed, director.nextObserved)
 
 proc refresh*(director: var Director, subjects: seq[Subject]) =
   ## Replaces rendered bounds without manufacturing simulation events.
-  director.subjects = subjects
+  director.subjects.setLen(subjects.len)
+  for i, subject in subjects:
+    director.subjects[i] = subject
 
 proc valid(subject: Subject): bool =
   ## Accepts only visible, living objects with real entity identities.

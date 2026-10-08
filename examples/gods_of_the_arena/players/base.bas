@@ -551,7 +551,7 @@ sub castAbilities()
       if abilities(spellSlot).cooldownTicks = 0 and self.mana >= cost then
         castId = 0
         if healing > 0 and healMissing >= healing \ 2 then
-          if self.class = DruidWarden and spellSlot > 0 then
+          if (self.class = DruidWarden or self.class = Warlock) and spellSlot > 0 then
             castId = healId
           elseif self.class = VanguardKnight and spellSlot = 2 then
             ' Aegis heals around us, even when only an ally is wounded.
@@ -668,18 +668,22 @@ if initialized = 0 then
   ' Keep tactical lead times here; read current ranges from the host below.
   castDelay(2) = 24
   castDelay(3) = 24
-  healRange = 4
+  healRange = 0
   for spellSlot = 0 to 3
     castGround(spellSlot) = spellSlot >= 2
     castMinimum(spellSlot) = 0
+    if abilities(spellSlot).heal > 0 and abilities(spellSlot).range > healRange then
+      healRange = abilities(spellSlot).range
+    end if
   next spellSlot
   if self.class = VanguardKnight then
-    healRange = 7 / 3
     castDelay(2) = 12
     castDelay(3) = 6
   elseif self.class = Arcanist then
-    castDelay(2) = 48
-    castDelay(3) = 72
+    castDelay(2) = 24
+    castDelay(3) = 36
+  elseif self.class = DruidWarden then
+    castDelay(2) = 12
   elseif self.class = DemonHunter then
     castDelay(2) = 6
     castGround(3) = 0
@@ -692,10 +696,12 @@ if initialized = 0 then
   elseif self.class = Lich then
     castGround(3) = 0
   elseif self.class = Warlock then
+    castDelay(2) = 18
+    castGround(2) = 0
     castGround(3) = 0
   elseif self.class = Berserker then
     castDelay(2) = 12
-    castDelay(3) = 48
+    castDelay(3) = 24
   end if
 end if
 

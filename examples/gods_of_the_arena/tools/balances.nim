@@ -101,7 +101,7 @@ const Rules*: array[10, Rule] = [
     weakness: Lever(anchor: "name: \"Lich\"",
     field: "hitPointsPerLevel", reason: "Fragile control mage")),
   Rule(strength: Lever(anchor: "DreadTotem: AbilitySpec(",
-    field: "damage", increase: true, reason: "Area spell pressure"),
+    field: "heal", increase: true, reason: "Direct ally healing"),
     weakness: Lever(anchor: "name: \"Warlock\"",
     field: "baseDamage", reason: "Weak basic attacks")),
   Rule(strength: Lever(anchor: "name: \"Berserker\"",

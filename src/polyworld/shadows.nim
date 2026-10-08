@@ -14,7 +14,8 @@
 ## renders two maps, one at each neighbouring step; receivers sample both
 ## and cross-fade by the smooth clock, so shadows dissolve from one sun
 ## position to the next instead of shimmering. Lighting, palette, and
-## strengths all use the smooth hour directly.
+## strengths all use the smooth hour directly. A fixed light needs only
+## the first map because it has no cross-fade.
 ##
 ## This module owns the depth framebuffers, the light matrices, the sun
 ## path, and the depth-only shader programs. The mesh modules build their
@@ -337,7 +338,7 @@ proc sunCutoutProgramId*(): GLuint =
 
 proc beginSunDepthPass*(step: int) =
   ## Binds one step's shadow framebuffer and clears it. Prefer the
-  ## sunDepthPasses template, which brackets both steps.
+  ## sunDepthPasses template, which brackets the active steps.
   glBindFramebuffer(GL_FRAMEBUFFER, sunFramebuffers[step])
   when not defined(emscripten):
     glDisable(GL_MULTISAMPLE)
@@ -376,15 +377,15 @@ proc endSunDepthPass*(windowSize: IVec2) =
   glViewport(0, 0, windowSize.x.GLsizei, windowSize.y.GLsizei)
 
 template sunDepthPasses*(windowSize: IVec2, body: untyped) =
-  ## Runs the caster draws in `body` once per shadow step, so both maps of
-  ## the cross-fade see the same frame. `sunPassIndex` is 0 for the first
-  ## pass and 1 for the second, for loops that must mutate state only once.
+  ## Draws one map without a cross-fade, otherwise both neighboring maps.
+  ## The injected sunPassIndex is 0 for the first map and 1 for the second.
   ## Restores the window target and MSAA setting even if a draw fails.
   if sunShadowsActive():
     when not defined(emscripten):
       let multisampleEnabled = glIsEnabled(GL_MULTISAMPLE)
     try:
-      for sunPassIndex {.inject.} in 0 .. 1:
+      let lastShadowStep = (sunShadowBlend > 0).ord
+      for sunPassIndex {.inject.} in 0 .. lastShadowStep:
         beginSunDepthPass(sunPassIndex)
         body
     finally:

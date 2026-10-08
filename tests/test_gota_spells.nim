@@ -46,7 +46,11 @@ proc target(game: Game, index: int, offset: int32, ally = false): Hero =
   result.state = Marching
   result.hp = 10_000
   result.maxHp = 20_000
-  result.team = if ally: game.world.heroes[0].team else: BlueTeam
+  result.team =
+    if ally:
+      game.world.heroes[0].team
+    else:
+      Team(1 - game.world.heroes[0].team.ord)
   var point = game.world.heroes[0].position
   point.z += offset
   result.place(point)
@@ -145,6 +149,46 @@ block:
   flushPlayerCommands(game)
   doAssert game.world.casts.len == 1
   doAssert game.world.casts[0].position == ally.position
+
+echo "Testing support spells heal allies and damage enemies on both teams"
+for team in Team:
+  for class in [DruidWarden, Warlock]:
+    for slot in [PrimaryAbility, SecondaryAbility]:
+      for rank in [1'i32, 4'i32]:
+        for aimedAtAlly in [false, true]:
+          let
+            game = spellGame(class)
+            world = game.world
+            caster = world.heroes[0]
+          caster.team = team
+          caster.place(WorldPoint())
+          caster.abilityLevels[slot] = rank
+          let
+            ally = game.target(1, 5 * WorldScale, true)
+            neighbor = game.target(2, 5 * WorldScale, true)
+            enemy = game.target(5, 5 * WorldScale)
+            spec = class.heroAbility(slot).abilitySpec(rank)
+            targetId = if aimedAtAlly: ally.id else: enemy.id
+          game.step()
+          doAssert world.applyCastTarget(caster.id, slot.ord.int32, targetId)
+          game.step(int(world.casts[^1].impact - world.tick))
+          if class == DruidWarden:
+            doAssert ally.hp == 10_000 + spec.heal
+            doAssert neighbor.hp == 10_000 + spec.heal
+            doAssert enemy.hp == 10_000 - spec.damage
+          elif aimedAtAlly:
+            doAssert ally.hp == 10_000 + spec.heal
+            doAssert neighbor.hp == 10_000
+            doAssert enemy.hp == 10_000
+          else:
+            doAssert ally.hp == 10_000
+            doAssert neighbor.hp == 10_000
+            doAssert enemy.hp == 10_000 - spec.damage
+          doAssert ally.controls == default(typeof(ally.controls))
+          doAssert neighbor.controls == default(typeof(neighbor.controls))
+          if class == Warlock and slot == SecondaryAbility:
+            let silence = enemy.controls[SilenceControl].ends > world.tick
+            doAssert silence == not aimedAtAlly
 
 echo "Testing missing or dead targets leave ranged abilities armed"
 block:
@@ -488,7 +532,7 @@ for (class, slot) in [
     doAssert patient.hp == hp
     for tick in 0 ..< int(spec.castTicks):
       game.tickWorld(nil)
-    doAssert patient.hp == hp + spec.heal, $ability
+    doAssert patient.hp == min(patient.maxHp, hp + spec.heal), $ability
 
 echo "Testing heroes never use abilities or items without an explicit command"
 for class in HeroClass:

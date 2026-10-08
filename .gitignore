@@ -50,3 +50,10 @@ coworld/**/__pycache__/
 
 # Python conversion helpers.
 __pycache__/
+
+# Crewrift art belongs in the sibling art repository.
+examples/crewrift/**/*.glb
+examples/crewrift/**/*.blend*
+examples/crewrift/*_shot.png
+examples/crewrift/emscripten/
+examples/crewrift/profiles/

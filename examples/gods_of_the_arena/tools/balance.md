@@ -62,12 +62,12 @@ weakness levers are separate; the tool does not homogenize hero attributes.
 | Vanguard Knight | HP per level | Slower movement |
 | Ranger | Faster movement | Less HP per level |
 | Arcanist | Arcane Meteor damage | Less HP per level |
-| Druid Warden | Healing Bloom healing | Less basic damage |
+| Druid Warden | Thorn Bloom healing | Less basic damage |
 | Demon Hunter | Gale Slash damage | Less base HP |
 | Death Knight | Sanguine Chalice healing | Slower movement |
 | Crossbowman | Basic damage | Slower reload |
 | Lich | Bone Marionette root duration | Less HP per level |
-| Warlock | Dread Totem damage | Less basic damage |
+| Warlock | Dread Pact healing | Less basic damage |
 | Berserker | Basic damage | Less base mana |
 
 `report.html` is a static report, updated after every batch. `results.json`

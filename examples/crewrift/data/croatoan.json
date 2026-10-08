@@ -1,0 +1,550 @@
+{
+  "name": "croatoan",
+  "width": 1235,
+  "height": 659,
+  "home": {
+    "x": 137,
+    "y": 342
+  },
+  "button": {
+    "x": 123,
+    "y": 325,
+    "w": 28,
+    "h": 34
+  },
+  "tasks": [
+    {
+      "name": "Task near Bridge",
+      "x": 196,
+      "y": 265,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Bridge",
+      "x": 170,
+      "y": 265,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Bridge",
+      "x": 196,
+      "y": 415,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Bridge",
+      "x": 226,
+      "y": 355,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Bridge",
+      "x": 87,
+      "y": 336,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Shuttle Bay",
+      "x": 298,
+      "y": 564,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Science Bay",
+      "x": 451,
+      "y": 539,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Science Bay",
+      "x": 437,
+      "y": 514,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Science Bay",
+      "x": 494,
+      "y": 539,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Science Bay",
+      "x": 510,
+      "y": 525,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Hydroponics",
+      "x": 378,
+      "y": 338,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Hydroponics",
+      "x": 431,
+      "y": 318,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Hydroponics",
+      "x": 420,
+      "y": 362,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Storage Deck",
+      "x": 541,
+      "y": 304,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Observatory",
+      "x": 299,
+      "y": 135,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Observatory",
+      "x": 355,
+      "y": 152,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Storage Deck",
+      "x": 541,
+      "y": 373,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Storage Deck",
+      "x": 641,
+      "y": 373,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Storage Deck",
+      "x": 641,
+      "y": 304,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Engineering",
+      "x": 552,
+      "y": 113,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Engineering",
+      "x": 552,
+      "y": 156,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Engineering",
+      "x": 614,
+      "y": 156,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Data Storage",
+      "x": 745,
+      "y": 154,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Data Storage",
+      "x": 702,
+      "y": 154,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Engineering",
+      "x": 614,
+      "y": 111,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Med Bay",
+      "x": 680,
+      "y": 472,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Med Bay",
+      "x": 680,
+      "y": 521,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Med Bay",
+      "x": 724,
+      "y": 521,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Engineering Nook",
+      "x": 877,
+      "y": 530,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Port Engine",
+      "x": 964,
+      "y": 472,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Port Engine",
+      "x": 964,
+      "y": 427,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Reactor",
+      "x": 912,
+      "y": 265,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Starboard Engine",
+      "x": 964,
+      "y": 170,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Starboard Engine",
+      "x": 964,
+      "y": 145,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Starboard Engine",
+      "x": 955,
+      "y": 127,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Reactor",
+      "x": 978,
+      "y": 268,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Reactor",
+      "x": 978,
+      "y": 338,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Reactor",
+      "x": 912,
+      "y": 338,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Med Bay",
+      "x": 728,
+      "y": 473,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Shuttle Bay",
+      "x": 284,
+      "y": 487,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    },
+    {
+      "name": "Task near Bridge",
+      "x": 170,
+      "y": 415,
+      "w": 14,
+      "h": 14,
+      "resourceName": "task"
+    }
+  ],
+  "vents": [
+    {
+      "name": "vent4",
+      "x": 733,
+      "y": 334,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent4",
+      "group": "4",
+      "groupIndex": 1
+    },
+    {
+      "name": "vent4",
+      "x": 922,
+      "y": 479,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent4",
+      "group": "4",
+      "groupIndex": 2
+    },
+    {
+      "name": "vent4",
+      "x": 922,
+      "y": 111,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent4",
+      "group": "4",
+      "groupIndex": 3
+    },
+    {
+      "name": "vent3",
+      "x": 494,
+      "y": 334,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent3",
+      "group": "3",
+      "groupIndex": 1
+    },
+    {
+      "name": "vent3",
+      "x": 222,
+      "y": 338,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent3",
+      "group": "3",
+      "groupIndex": 2
+    },
+    {
+      "name": "vent2",
+      "x": 545,
+      "y": 378,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent2",
+      "group": "2",
+      "groupIndex": 1
+    },
+    {
+      "name": "vent2",
+      "x": 503,
+      "y": 514,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent2",
+      "group": "2",
+      "groupIndex": 2
+    },
+    {
+      "name": "vent2",
+      "x": 347,
+      "y": 564,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent2",
+      "group": "2",
+      "groupIndex": 3
+    },
+    {
+      "name": "vent1",
+      "x": 545,
+      "y": 282,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent1",
+      "group": "1",
+      "groupIndex": 1
+    },
+    {
+      "name": "vent1",
+      "x": 316,
+      "y": 108,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent1",
+      "group": "1",
+      "groupIndex": 2
+    },
+    {
+      "name": "vent1",
+      "x": 607,
+      "y": 111,
+      "w": 14,
+      "h": 14,
+      "resourceName": "vent1",
+      "group": "1",
+      "groupIndex": 3
+    }
+  ],
+  "rooms": [
+    {
+      "name": "Bridge",
+      "x": 10,
+      "y": 217,
+      "w": 254,
+      "h": 251
+    },
+    {
+      "name": "Hydroponics",
+      "x": 347,
+      "y": 292,
+      "w": 134,
+      "h": 113
+    },
+    {
+      "name": "Observatory",
+      "x": 268,
+      "y": 82,
+      "w": 134,
+      "h": 126
+    },
+    {
+      "name": "Shuttle Bay",
+      "x": 249,
+      "y": 468,
+      "w": 134,
+      "h": 124
+    },
+    {
+      "name": "Science Bay",
+      "x": 407,
+      "y": 473,
+      "w": 148,
+      "h": 118
+    },
+    {
+      "name": "Med Bay",
+      "x": 641,
+      "y": 431,
+      "w": 134,
+      "h": 140
+    },
+    {
+      "name": "Engineering Nook",
+      "x": 861,
+      "y": 537,
+      "w": 54,
+      "h": 36
+    },
+    {
+      "name": "Storage Deck",
+      "x": 517,
+      "y": 268,
+      "w": 170,
+      "h": 150
+    },
+    {
+      "name": "Reactor",
+      "x": 884,
+      "y": 244,
+      "w": 136,
+      "h": 134
+    },
+    {
+      "name": "Starboard Engine",
+      "x": 900,
+      "y": 87,
+      "w": 128,
+      "h": 130
+    },
+    {
+      "name": "Port Engine",
+      "x": 900,
+      "y": 405,
+      "w": 128,
+      "h": 123
+    },
+    {
+      "name": "Data Storage",
+      "x": 681,
+      "y": 118,
+      "w": 103,
+      "h": 95
+    },
+    {
+      "name": "Engineering",
+      "x": 518,
+      "y": 71,
+      "w": 137,
+      "h": 130
+    }
+  ]
+}

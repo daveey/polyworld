@@ -98,3 +98,30 @@ block:
     doAssert covered, "Characters must cast shadows."
   doAssert glGetError() == GL_NO_ERROR
   echo "Prepared and immediate character shadow passes match"
+
+  proc drawPasses(time: float32) =
+    ## Warms and exercises shared poses across shadow and color draws.
+    scene.prepareCharacter(first, model, vec3(-0.4, 0, 0), 0.3, clip, time)
+    scene.prepareCharacter(second, secondModel, vec3(0.4, 0, 0), -0.5,
+      clip, time)
+    scene.sunDepthPass = true
+    beginSunDepthPass(0)
+    scene.drawCharacter(first)
+    scene.drawCharacter(second)
+    endSunDepthPass(window.size)
+    scene.sunDepthPass = false
+    for pass in 0 ..< 3:
+      clearFrame(window.size)
+      scene.drawCharacter(first)
+      scene.drawCharacter(second)
+
+  for i in 0 ..< 3:
+    drawPasses(i.float32 / 100)
+  when defined(nimTypeNames):
+    let before = getMemCounters()
+    for i in 0 ..< 100:
+      drawPasses(i.float32 / 100)
+    let after = getMemCounters()
+    doAssert after[0] == before[0], "Character passes must reuse storage."
+    echo "Character preparation and four draw passes allocate zero"
+  doAssert glGetError() == GL_NO_ERROR

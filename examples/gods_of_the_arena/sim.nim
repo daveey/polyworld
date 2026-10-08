@@ -403,12 +403,11 @@ const
   TowerImpactTicks* = TickRate div 2
   TowerSiegeRange* = 105_000'i32
 
-proc config*(game: Game): GotaConfig =
-  ## Reads the match configuration owned by the live or loaded replay.
+proc config*(game: Game): lent GotaConfig =
+  ## Borrows the match configuration owned by the live or loaded replay.
   if game.recorder != nil:
-    game.recorder.data.config
-  else:
-    game.replayData.config
+    return game.recorder.data.config
+  game.replayData.config
 
 proc worldPoint(point: PathPoint): WorldPoint =
   ## Converts one exact 1/32-tile path point into integer world units.
@@ -1944,10 +1943,19 @@ proc advanceWaypoints*(footman: var Footman) =
       within(footman.position, footman.currentWaypoint, WaypointRadius):
     inc footman.waypointIndex
 
+proc creepWaypointCount*(footman: Footman): int =
+  ## Counts lane goals without building their ordered positions.
+  laneWorldPaths[footman.lane].len
+
+proc creepWaypoints*(footman: Footman, points: var seq[WorldPoint]) =
+  ## Reuses the viewer's buffer for goals in this creep's marching order.
+  points.setLen(laneWorldPaths[footman.lane].len)
+  for i in 0 ..< points.len:
+    points[i] = footman.waypointAt(i)
+
 proc creepWaypoints*(footman: Footman): seq[WorldPoint] =
   ## Returns the lane goals in this creep's marching order for the viewer.
-  for i in 0 ..< laneWorldPaths[footman.lane].len:
-    result.add footman.waypointAt(i)
+  footman.creepWaypoints(result)
 
 proc liveHeroSetup(total: int): seq[ReplayHero] =
   ## Assigns the ten live bot slots evenly across both teams.

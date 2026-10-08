@@ -220,18 +220,24 @@ resumes drafting, including the countdown. Drafting has a separate budget
 of up to 100 simulation seconds for ten players. The configured `maxTicks`
 and CLI duration flags limit battle time only, starting after the last pick.
 
-## Hero balance, October 5, 2026
+## Hero balance, October 7, 2026
 
 Frontlines have the most health. Fighters have the next health tier.
 Mages and supports have flatter health growth. Carries start fragile, with
 accelerating health and spell damage growth, but retain their late power.
-Hero-specific differences stay close to each role's targets. Basic attacks,
-mana pools, movement speed, and spell damage have been rebalanced too.
+Fighters have stronger early pursuit and short roots to pressure carries.
+Frontlines protect allies with short control effects. Mages punish clustered
+teams, and protected supports sustain allies during prolonged fights.
+These are intended counterplay opportunities, not guaranteed matchup results.
+Open Draft still allows any composition and duplicate heroes.
 
-Healing Bloom and Kindred Wisps retain ally healing and damage enemies.
+Ranger and Crossbowman both attack from six tiles. Crossbowman's first two
+spell ranks deal roughly 10% less damage, while its final ranks stay unchanged.
+Supports start with more health but still gain only 20 HP per level.
+Druid Warden heals groups; Warlock provides stronger healing to one hero.
 A full lane wave has six melee creeps and two casters, with 480 combined HP
 and 168 sustained DPS before movement or interruptions. Every creep deals
-28 damage per basic attack. Gameplay replay version is 68; this client
+28 damage per basic attack. Gameplay replay version is 69; this client
 supports only that exact version.
 
 ## Ability progression
@@ -244,6 +250,7 @@ an already learned ability. Slots 0, 1, 2, and 3 correspond to Q, W, E, and R.
 Q, W, and E have four ranks requiring hero levels 1, 3, 5, and 7.
 R has three ranks requiring hero levels 6, 12, and 18. Each additional rank
 adds 50% of the rank-1 damage, healing, or mana restoration, rounded down.
+Carry spell damage instead follows explicit per-rank curves with later growth.
 Mana costs, range, charge capacity, and timing stay the same. An upgrade
 preserves spent charges and running cooldowns. Pending spells retain the
 rank they had when cast. Respawning preserves learned ranks and banked
@@ -257,10 +264,24 @@ slot 0 and ultimates. Items require `useItem` or `useItemAt`. Custom policies
 can bank points, choose another upgrade order, and reserve any ability. At
 level 20, fully ranking all four abilities leaves five banked points.
 
-Healing Bloom and Kindred Wisps heal allied heroes and damage enemies in
-the same area. Either spell can target an ally, an enemy, or the ground.
-Their healing classification does not imply zero damage. The spell-warning
-`support` flag is 1 only for effects that deal no damage.
+Thorn Bloom and Kindred Renewal heal every allied hero and damage enemies
+in their area. Either spell can target an ally, an enemy, or the ground.
+Warlock's Mending Hex and Dread Pact heal one selected allied hero, including
+self, or damage one selected enemy. Dread Pact silences hostile targets only.
+All four spells reach six tiles. Healing is capped at maximum HP.
+
+| Support spell | Healing at ranks 1 / 2 / 3 / 4 | Targets |
+| --- | --- | --- |
+| Druid W: Thorn Bloom | 150 / 225 / 300 / 375 | Allies within a 2-tile circle. |
+| Druid E: Kindred Renewal | 160 / 240 / 320 / 400 | Allies within a 2.5-tile circle. |
+| Warlock W: Mending Hex | 220 / 330 / 440 / 550 | One selected allied hero. |
+| Warlock E: Dread Pact | 240 / 360 / 480 / 600 | One selected allied hero. |
+
+Warlock's ground projectiles remain offensive. Use `castTarget` with an
+allied hero's ID to heal. Druid's area casts can heal multiple allies while
+hurting nearby enemies. The healing classification does not imply zero damage.
+The spell-warning `support` flag is 1 only for effects that deal no damage.
+Healing requires an explicit policy command, just like every other ability.
 
 | BASIC function | Meaning |
 | --- | --- |
@@ -458,15 +479,18 @@ end if
 
 | Hero | Ability | Effect | Rank-one damage |
 | --- | --- | --- | --- |
-| Vanguard | R: Blazing Blade | Stun for 1 second | 72 |
-| Warlock | E: Dread Totem | Silence for 2 seconds | 70 |
-| Druid | R: Golem Seed | Root for 2 seconds | 68 |
-| Lich | E: Bone Marionette | Root for 1 second | 53 |
+| Vanguard | W: Firebrand Sword | Stun for 0.5 seconds | 37 |
+| Vanguard | R: Blazing Blade | Stun for 1 second | 204 |
+| Death Knight | W: Afterlight Sickle | Root for 0.5 seconds | 37 |
+| Demon Hunter | E: Gale Slash | Root for 0.5 seconds | 60 |
+| Berserker | E: Winged Boot | Root for 0.75 seconds | 35 |
+| Warlock | E: Dread Pact | Silence for 2 seconds | 84 |
+| Druid | R: Golem Seed | Root for 2 seconds | 49 |
+| Lich | E: Bone Marionette | Root for 1.5 seconds | 49 |
 
-These abilities trade about 20% of their damage for control. Durations stay
-fixed at every rank. Effects apply on impact to enemy heroes and creeps;
-buildings and gods are immune. A stun stops movement, basic attacks,
-abilities, and items, and cancels a pending basic swing. Silence prevents
+Control durations stay fixed at every rank. Effects apply on impact to enemy
+heroes and creeps; buildings and gods are immune. A stun stops movement,
+basic attacks, abilities, and items, and cancels a pending basic swing. Silence prevents
 all four abilities but allows movement, basic attacks, and items. Root
 prevents movement and teleporting, while allowing in-range attacks,
 abilities, and other items. Stun and root interrupt teleport channels.
